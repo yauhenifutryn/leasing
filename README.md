@@ -32,6 +32,15 @@ leasing-ai/
 └─ Makefile
 ```
 
+## Getting Started
+
+```bash
+git clone git@github.com:yauhenifutryn/leasing.git
+cd leasing
+```
+
+All commands below assume you are inside this project directory.
+
 ## Environment & Tooling
 
 Install required system packages, set up a Python virtual environment, and install Python dependencies.
@@ -107,10 +116,11 @@ make kb                # build final knowledge base entries (JSON + YAML)
 
 ## Quick Start
 
-1. Populate `audio/` with your `.wav/.mp3/.m4a/.flac` files (start with ~20 for smoke testing).
-2. Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`, `HUGGINGFACE_TOKEN` (optional), and preferred `OPENAI_MODEL`.
-3. Follow the setup commands above to install dependencies.
-4. Run the pipeline via the Makefile targets in order. Inspect outputs in the respective directories before proceeding to the next stage.
+1. Clone the repo and `cd` into it (see above).
+2. Populate `audio/` with your `.wav/.mp3/.m4a/.flac` files (start with ~20 for smoke testing).
+3. Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`, `HUGGINGFACE_TOKEN` (optional), and preferred `OPENAI_MODEL`.
+4. Follow the setup commands above to create/activate `.venv` and install dependencies from `requirements.txt`.
+5. Run the pipeline via the Makefile targets in order. Inspect outputs in the respective directories before proceeding to the next stage.
 
 ## Accuracy Review UI
 
@@ -136,3 +146,8 @@ The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой запи
 - `make check` verifies that `ffmpeg` and API keys are available.
 - Inspect intermediate outputs (`transcripts_*`, `insights_*`) for anomalies before running downstream stages.
 - Adjust heuristics, prompts, and clustering thresholds as you observe real data.
+
+## Staying Up to Date
+
+- I’ll keep pushing fixes/enhancements to `main` in this GitHub repo.
+- On your machine, run `git pull` inside the project folder to pick up the latest changes before starting a new processing run.
