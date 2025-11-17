@@ -1,0 +1,41 @@
+PY=python
+SRC=scripts
+
+check:
+	$(PY) $(SRC)/00_setup_checks.py
+
+# 1) Transcribe (WhisperX) – recommended path
+transcribe:
+	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_raw
+
+# 1b) Transcribe (Whisper CLI) – quick fallback
+transcribe-cli:
+	bash $(SRC)/11_transcribe_whisper_cli.sh audio transcripts_raw
+
+# 2) Clean + diarize (map SPEAKER_00/01 to client/agent)
+clean:
+	$(PY) $(SRC)/20_clean_and_diarize.py --in transcripts_raw --out transcripts_clean
+
+# 3) Per-call analysis (JSON per call)
+analyze-calls:
+	$(PY) $(SRC)/30_analyze_per_call.py --in transcripts_clean --out insights_per_call --batch-size 10
+
+# 3b) Flat Q&A export for NLU pipelines
+nlu-export:
+	$(PY) $(SRC)/35_export_nlu_pairs.py --in insights_per_call --out nlu_output/nlu_pairs.jsonl
+
+# 4) Batch rollups (dedupe within batches)
+rollup:
+	$(PY) $(SRC)/31_analyze_batch_rollup.py --in insights_per_call --out insights_batches
+
+# 5) Global aggregation (merge batch rollups)
+aggregate:
+	$(PY) $(SRC)/32_global_aggregation.py --in insights_batches --out insights_global
+
+# 6) Embedding-based dedup (merge near-duplicate Qs)
+dedup:
+	$(PY) $(SRC)/40_deduplicate_embeddings.py --in insights_global --out insights_global
+
+# 7) Build Knowledge Base (FAQ + playbooks)
+kb:
+	$(PY) $(SRC)/50_build_kb.py --in insights_global --out knowledge_base

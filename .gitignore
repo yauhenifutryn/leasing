@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+.venv_dedup/
+env/
+venv/
+
+# OS / tooling noise
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+
+# Generated audio + transcripts + outputs
+audio/
+scratch_audio/
+transcripts_raw/
+transcripts_clean/
+insights_per_call/
+insights_batches/
+insights_global/
+knowledge_base/
+nlu_output/
+
+# Archives
+*.zip
