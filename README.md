@@ -32,6 +32,8 @@ leasing-ai/
 └─ Makefile
 ```
 
+> Note: data-heavy folders (`audio/`, `transcripts_raw/`, `transcripts_clean/`, `insights_*`, `knowledge_base/`, `nlu_output/`, etc.) are `.gitignore`d. They’ll be created automatically when their respective scripts run. The only directory you need to prepare manually is `audio/` so you can drop source recordings before running `make transcribe`.
+
 ## Getting Started
 
 ```bash
