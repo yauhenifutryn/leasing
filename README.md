@@ -67,15 +67,20 @@ sudo apt-get update && sudo apt-get install -y ffmpeg
 python -m venv .venv
 source .venv/bin/activate               # Windows: .\.venv\Scripts\activate
 
-# Optional GPU accelerated Torch (choose the right URL for your CUDA version)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Upgrade build tooling
+pip install --upgrade pip wheel setuptools==65.6.3
 
-# Project dependencies
+# Project dependencies (WhisperX/pyannote via tarballs, CUDA 11.8 wheels)
 pip install -r requirements.txt
 ```
 
+Notes on Torch/CUDA:
+- `requirements.txt` pins `torch/torchaudio/torchvision` to 2.0.0/2.0.1/0.15.1 with `+cu118` wheels (CUDA 11.8), which match WhisperX 3.1.1 expectations.
+- If your GPUs require a different CUDA runtime, adjust the `--extra-index-url` and torch* versions accordingly.
+
 ### Notes
 
+- WhisperX and pyannote.audio are installed from release tarballs (no `git clone` during `pip install`), avoiding build-backend warnings and git HTTPS issues.
 - WhisperX provides accurate timestamps and optional diarization. Whisper CLI is included as a fallback.
 - To enable diarization with WhisperX, create a free Hugging Face token (pyannote models) and place it in `.env` (see `.env.example`).
 - Set `OPENAI_MODEL` (pipeline scripts) and `REVIEW_OPENAI_MODEL` (Streamlit UI, default `gpt-5-mini`) to the chat-completions models you plan to use, e.g., `gpt-5` for `make analyze-calls` and `gpt-5-mini` for the review app.
