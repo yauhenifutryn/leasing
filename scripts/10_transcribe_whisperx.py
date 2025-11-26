@@ -187,6 +187,8 @@ def main() -> None:
             }
             write_json(out_path, result)
         except Exception as exc:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
             print(f"[ERROR] {audio_path.name}: {exc}")
 
 
