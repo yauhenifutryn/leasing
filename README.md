@@ -158,3 +158,57 @@ The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой запи
 
 - I’ll keep pushing fixes/enhancements to `main` in this GitHub repo.
 - On your machine, run `git pull` inside the project folder to pick up the latest changes before starting a new processing run.
+
+## Серверный запуск (GPU, Rus)
+
+1) Выбор GPU  
+   - Рекомендуемый вариант: **A100 40 GB**. Скорость: ~9 мин 20 с на 20 аудио ~10 мин. Цена: ~**$0.6/час** на vast.ai.  
+   - Альтернатива: **4090** (дешевле, но менее стабильна под длительной нагрузкой).  
+   - Не брать **5090/Blackwell** — требует свежих драйверов, часто не работает “из коробки”.
+
+2) Подготовка окружения на сервере  
+   ```bash
+   cd /workspace
+   rm -rf leasing
+   git clone https://github.com/yauhenifutryn/leasing.git   # auth: SSH key или personal access token
+   cd leasing
+
+   conda create -y -n lease python=3.10
+   conda activate lease
+   make install   # ставит PyTorch cu121 для A100 + прочее
+   ```
+
+3) Папка с аудио  
+   ```bash
+   mkdir -p /workspace/leasing/audio
+   ```
+   Пример загрузки с Mac (нужен доступ по SSH к серверу; подставьте свой порт/хост):
+   ```bash
+   rsync -avz --partial --progress -e "ssh -p <PORT>" \
+     audio/ root@<HOST>:/workspace/leasing/audio/
+   ```
+
+4) Запуск транскрипции на сервере  
+   ```bash
+   cd /workspace/leasing
+   conda activate lease
+   make transcribe-gpu
+   ```
+   Результаты: `/workspace/leasing/transcripts_raw/`.
+
+5) Скачать результаты на локальный компьютер (Mac → Downloads)  
+   ```bash
+   rsync -avz --progress -e "ssh -p <PORT>" \
+     root@<HOST>:/workspace/leasing/transcripts_raw/ \
+     ~/Downloads/transcripts_raw/
+   ```
+
+6) “Пассивный” запуск (чтобы не упало при обрыве SSH) — tmux  
+   ```bash
+   tmux new -s work          # создать сессию
+   make transcribe-gpu       # запустить внутри
+   # отсоединиться: Ctrl+b, затем d
+   tmux attach -t work       # вернуться позже
+   tmux ls                   # список сессий
+   tmux kill-session -t work # убить сессию при необходимости
+   ```
