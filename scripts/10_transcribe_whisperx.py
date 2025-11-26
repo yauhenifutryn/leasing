@@ -123,7 +123,7 @@ def main() -> None:
         compute_type=args.compute_type,
         language=args.language,
         vad_model="silero_vad",
-        vad_device="cpu",
+        vad_options={"device": "cpu"},
     )
 
     align_model = None
