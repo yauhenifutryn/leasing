@@ -2,10 +2,12 @@ PY=python
 SRC=scripts
 
 install:
+	# 1. Install PyTorch Nightly FIRST (RTX 5090 / sm_120 support)
+	$(PY) -m pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+	# 2. Install other dependencies (will use the installed torch)
 	$(PY) -m pip install -r requirements.txt
+	# 3. Install WhisperX (no deps to avoid downgrading torch)
 	$(PY) -m pip install "git+https://github.com/m-bain/whisperx.git" --no-deps
-	# Force reinstall PyTorch Nightly to ensure RTX 5090 (sm_120) support
-	$(PY) -m pip install --pre --upgrade --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
 
 check:
 	$(PY) $(SRC)/00_setup_checks.py
