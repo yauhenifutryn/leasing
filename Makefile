@@ -4,6 +4,8 @@ SRC=scripts
 install:
 	$(PY) -m pip install -r requirements.txt
 	$(PY) -m pip install "git+https://github.com/m-bain/whisperx.git" --no-deps
+	# Force reinstall PyTorch Nightly to ensure RTX 5090 (sm_120) support
+	$(PY) -m pip install --pre --upgrade --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
 
 check:
 	$(PY) $(SRC)/00_setup_checks.py
