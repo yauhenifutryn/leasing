@@ -14,16 +14,17 @@ from utils import list_audio, write_json, should_skip
 
 AGENT_HINTS = (
     "компания микролизинг",
+    "анна",
     "чем могу помочь",
     "благодарим вас",
-    "оставайтесь на линии",
+    "оставаясь на линии",
 )
 
 CLIENT_HINTS = (
-    "у меня вопрос",
-    "хотим приобрести",
-    "интересует",
-    "подскажите",
+    "здравствуйте, анна",
+    "хочу открыть",
+    "вопрос",
+    "могу",
 )
 
 
@@ -122,13 +123,7 @@ def main() -> None:
         device=args.device,
         compute_type=args.compute_type,
         language=args.language,
-        vad_model=None,           # отключаем VAD, чтобы избежать несовместимых пайплайнов
-        vad_options=None,
     )
-    # жёстко выключаем VAD, чтобы избежать 'str' object is not callable
-    model.vad_model = None
-    if hasattr(model, "vad_options"):
-        model.vad_options = None
 
     align_model = None
     metadata = None

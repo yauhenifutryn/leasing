@@ -4,11 +4,15 @@ SRC=scripts
 check:
 	$(PY) $(SRC)/00_setup_checks.py
 
-# 1) Transcribe (WhisperX) – recommended path
-transcribe:
-	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_raw
+# 1a) Transcribe (WhisperX) – Local/CPU (for testing)
+transcribe-cpu:
+	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_raw --device cpu --compute-type int8
 
-# 1b) Transcribe (Whisper CLI) – quick fallback
+# 1b) Transcribe (WhisperX) – Server/GPU (Production)
+transcribe-gpu:
+	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_raw --device cuda --compute-type float16 --batch-size 16
+
+# 1c) Transcribe (Whisper CLI) – quick fallback
 transcribe-cli:
 	bash $(SRC)/11_transcribe_whisper_cli.sh audio transcripts_raw
 
