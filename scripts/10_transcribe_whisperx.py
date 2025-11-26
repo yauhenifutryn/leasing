@@ -122,8 +122,8 @@ def main() -> None:
         device=args.device,
         compute_type=args.compute_type,
         language=args.language,
-        vad_model="silero_vad",
-        vad_options={"device": "cpu"},
+        vad_model=None,           # отключаем VAD, чтобы избежать несовместимых пайплайнов
+        vad_options=None,
     )
 
     align_model = None
