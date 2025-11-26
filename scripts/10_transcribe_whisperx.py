@@ -125,6 +125,10 @@ def main() -> None:
         vad_model=None,           # отключаем VAD, чтобы избежать несовместимых пайплайнов
         vad_options=None,
     )
+    # жёстко выключаем VAD, чтобы избежать 'str' object is not callable
+    model.vad_model = None
+    if hasattr(model, "vad_options"):
+        model.vad_options = None
 
     align_model = None
     metadata = None
