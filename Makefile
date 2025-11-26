@@ -1,6 +1,10 @@
 PY=python
 SRC=scripts
 
+install:
+	$(PY) -m pip install -r requirements.txt
+	$(PY) -m pip install "git+https://github.com/m-bain/whisperx.git" --no-deps
+
 check:
 	$(PY) $(SRC)/00_setup_checks.py
 
