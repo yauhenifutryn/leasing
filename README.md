@@ -85,6 +85,8 @@ Notes on Torch/CUDA:
 - To enable diarization with WhisperX, create a free Hugging Face token (pyannote models) and place it in `.env` (see `.env.example`).
 - Set `OPENAI_MODEL` (pipeline scripts) and `REVIEW_OPENAI_MODEL` (Streamlit UI, default `gpt-5-mini`) to the chat-completions models you plan to use, e.g., `gpt-5` for `make analyze-calls` and `gpt-5-mini` for the review app.
 - Ensure you comply with client privacy requirements before exporting any data.
+- На сервере используйте только одно окружение `conda` (`lease`); не смешивайте с `.venv`.
+- VAD (silero) отключён по умолчанию (`vad_model=None`) для стабильности; диаризацию pyannote можно включать флагом `--disable-diarization`/токеном HF при необходимости.
 
 ## Makefile Targets
 
@@ -202,6 +204,13 @@ The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой запи
      root@<HOST>:/workspace/leasing/transcripts_raw/ \
      ~/Downloads/transcripts_raw/
    ```
+
+   Если нужен HF токен для диаризации, перед запуском экспортируйте его:
+   ```bash
+   export HUGGINGFACE_TOKEN="hf_..."  # или свой токен; примите условия модели https://huggingface.co/pyannote/speaker-diarization-3.1
+   ```
+
+   Важно: на сервере используйте только окружение `conda activate lease` (не активируйте `.venv`), VAD отключён в коде.
 
 6) “Пассивный” запуск (чтобы не упало при обрыве SSH) — tmux  
    ```bash
