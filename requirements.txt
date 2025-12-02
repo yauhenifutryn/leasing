@@ -9,7 +9,7 @@ pandas==2.2.3
 orjson
 python-dotenv
 tqdm
-huggingface-hub==0.36.0
+huggingface-hub==0.24.5
 transformers==4.37.2
 tokenizers==0.15.2
 # Other dependencies from original requirements that might still be needed
