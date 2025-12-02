@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IN_DIR="${1:-audio}"
-OUT_DIR="${2:-transcripts_raw}"
+OUT_DIR="${2:-transcripts_clean}"
 mkdir -p "$OUT_DIR"
 
 # Requires: pip install openai-whisper  (or brew install whisper via faster-whisper taps)

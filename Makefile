@@ -12,23 +12,22 @@ install:
 check:
 	$(PY) $(SRC)/00_setup_checks.py
 
+# default: use GPU pipeline if available
+transcribe: transcribe-gpu
+
 # 1a) Transcribe (WhisperX) – Local/CPU (for testing)
 transcribe-cpu:
-	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_raw --device cpu --compute-type int8
+	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_clean --device cpu --compute-type int8
 
 # 1b) Transcribe (WhisperX) – Server/GPU (Production)
 transcribe-gpu:
-	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_raw --device cuda --compute-type float16 --batch-size 16
+	$(PY) $(SRC)/10_transcribe_whisperx.py --in audio --out transcripts_clean --device cuda --compute-type float16 --batch-size 16
 
 # 1c) Transcribe (Whisper CLI) – quick fallback
 transcribe-cli:
-	bash $(SRC)/11_transcribe_whisper_cli.sh audio transcripts_raw
+	bash $(SRC)/11_transcribe_whisper_cli.sh audio transcripts_clean
 
-# 2) Clean + diarize (map SPEAKER_00/01 to client/agent)
-clean:
-	$(PY) $(SRC)/20_clean_and_diarize.py --in transcripts_raw --out transcripts_clean
-
-# 3) Per-call analysis (JSON per call)
+# 2) Per-call analysis (JSON per call)
 analyze-calls:
 	$(PY) $(SRC)/30_analyze_per_call.py --in transcripts_clean --out insights_per_call --batch-size 10
 

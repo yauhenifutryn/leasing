@@ -5,8 +5,7 @@
 ```
 leasing-ai/
 ├─ audio/                         # put .wav/.mp3 here (20 test files first)
-├─ transcripts_raw/               # raw Whisper(X) JSON + SRT/VTT
-├─ transcripts_clean/             # speaker-attributed JSON (client/agent)
+├─ transcripts_clean/             # WhisperX JSON (ready for analysis)
 ├─ insights_per_call/             # JSON with intents, issues, outcomes per call
 ├─ nlu_output/                    # flat Q&A records for NLU / KHUB ingestion
 ├─ insights_batches/              # “batch” summaries (10–20 calls per file)
@@ -32,7 +31,7 @@ leasing-ai/
 └─ Makefile
 ```
 
-> Note: data-heavy folders (`audio/`, `transcripts_raw/`, `transcripts_clean/`, `insights_*`, `knowledge_base/`, `nlu_output/`, etc.) are `.gitignore`d. They’ll be created automatically when their respective scripts run. The only directory you need to prepare manually is `audio/` so you can drop source recordings before running `make transcribe`.
+> Note: data-heavy folders (`audio/`, `transcripts_clean/`, `insights_*`, `knowledge_base/`, `nlu_output/`, etc.) are `.gitignore`d. They’ll be created automatically when their respective scripts run. The only directory you need to prepare manually is `audio/` so you can drop source recordings before running `make transcribe`.
 
 ## Getting Started
 
@@ -92,9 +91,10 @@ Notes on Torch/CUDA:
 
 ```Makefile
 make check             # run setup checks (ffmpeg, API keys)
-make transcribe        # WhisperX transcription pipeline (recommended)
-make transcribe-cli    # Whisper CLI fallback
-make clean             # clean + diarize transcripts
+make transcribe        # GPU default: WhisperX -> clean/diarize (transcripts_clean)
+make transcribe-gpu    # explicit GPU run (same as `make transcribe`)
+make transcribe-cpu    # CPU fallback (slow)
+make transcribe-cli    # Whisper CLI fallback (CPU)
 make analyze-calls     # per-call analysis using OpenAI
 make nlu-export        # flat Q&A export (JSONL) for NLU systems
 make rollup            # batch-level rollups (deduplicated)
@@ -105,9 +105,8 @@ make kb                # build final knowledge base entries (JSON + YAML)
 
 ## Pipeline Overview
 
-1. **Transcription** – WhisperX (`scripts/10_transcribe_whisperx.py`) produces raw transcripts with timestamps. Optional diarization via Pyannote.
-2. **Cleaning & Diarization** – `scripts/20_clean_and_diarize.py` normalizes text and applies heuristics or diarization to map speakers to roles.
-3. **Per-Call Analysis** – `scripts/30_analyze_per_call.py` sends structured prompts to OpenAI for intent, resolution, and QA extraction.
+1. **Transcription** – `make transcribe` (GPU default) or `make transcribe-cpu` runs WhisperX (`scripts/10_transcribe_whisperx.py`) and writes directly to `transcripts_clean/` (ready for analysis).
+2. **Per-Call Analysis** – `scripts/30_analyze_per_call.py` sends structured prompts to OpenAI for intent, resolution, and QA extraction.
 3b. **Flat Q&A Export (optional)** – `scripts/35_export_nlu_pairs.py` flattens every question/answer pair into `nlu_output/nlu_pairs.jsonl` with hashtags for NLU/KHUB ingestion.
 4. **Batch Rollups** – `scripts/31_analyze_batch_rollup.py` summarizes groups of calls to avoid duplicates.
 5. **Global Aggregation** – `scripts/32_global_aggregation.py` produces consolidated views of intents and FAQ clusters.
@@ -196,13 +195,13 @@ The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой запи
    conda activate lease
    make transcribe-gpu
    ```
-   Результаты: `/workspace/leasing/transcripts_raw/`.
+   Результаты: `/workspace/leasing/transcripts_clean/`.
 
 5) Скачать результаты на локальный компьютер (Mac → Downloads)  
    ```bash
    rsync -avz --progress -e "ssh -p <PORT>" \
-     root@<HOST>:/workspace/leasing/transcripts_raw/ \
-     ~/Downloads/transcripts_raw/
+     root@<HOST>:/workspace/leasing/transcripts_clean/ \
+     ~/Downloads/transcripts_clean/
    ```
 
    Если нужен HF токен для диаризации, перед запуском экспортируйте его:
