@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--in", dest="in_dir", required=True)
     parser.add_argument("--out", dest="out_dir", required=True)
     parser.add_argument("--prompt", default="prompts/per_call_analysis_ru.md")
-    parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-5.1"))
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()

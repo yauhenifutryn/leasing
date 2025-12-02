@@ -83,7 +83,7 @@ Notes on Torch/CUDA:
 - WhisperX and pyannote.audio are installed from release tarballs (no `git clone` during `pip install`), avoiding build-backend warnings and git HTTPS issues.
 - WhisperX provides accurate timestamps and optional diarization. Whisper CLI is included as a fallback.
 - To enable diarization with WhisperX, create a free Hugging Face token (pyannote models) and place it in `.env` (see `.env.example`).
-- Set `OPENAI_MODEL` (pipeline scripts) and `REVIEW_OPENAI_MODEL` (Streamlit UI, default `gpt-5-mini`) to the chat-completions models you plan to use, e.g., `gpt-5` for `make analyze-calls` and `gpt-5-mini` for the review app.
+- Set `OPENAI_MODEL` (pipeline scripts) and `REVIEW_OPENAI_MODEL` (Streamlit UI, default `gpt-5.1`) to the chat-completions models you plan to use, e.g., `gpt-5.1` for `make analyze-calls` and the review app.
 - Ensure you comply with client privacy requirements before exporting any data.
 - На сервере используйте только одно окружение `conda` (`lease`); не смешивайте с `.venv`.
 - VAD (silero) отключён по умолчанию (`vad_model=None`) для стабильности; диаризацию pyannote можно включать флагом `--disable-diarization`/токеном HF при необходимости.
