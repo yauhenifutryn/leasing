@@ -2,8 +2,8 @@ PY=python
 SRC=scripts
 
 install:
-	# 1. Install PyTorch Nightly FIRST (RTX 5090 / sm_120 support)
-	$(PY) -m pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+	# 1. Install PyTorch (CUDA 12.1) first — stable wheels for A100/4090
+	$(PY) -m pip install --upgrade torch==2.3.1+cu121 torchvision==0.18.1+cu121 torchaudio==2.3.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 	# 2. Install other dependencies (will use the installed torch)
 	$(PY) -m pip install -r requirements.txt
 	# 3. Install WhisperX (no deps to avoid downgrading torch)
