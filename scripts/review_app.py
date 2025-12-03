@@ -650,10 +650,26 @@ def main() -> None:
         try:
             components.html(
                 f"""
-<elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>
+<style>
+  #convai-wrapper {{
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+    width: 380px;
+    max-width: 90vw;
+  }}
+  #convai-wrapper elevenlabs-convai {{
+    width: 100%;
+    display: block;
+  }}
+</style>
+<div id="convai-wrapper">
+  <elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>
+</div>
 <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 """,
-                height=160,
+                height=200,
             )
         except Exception as exc:  # noqa: BLE001
             st.info(f"Виджет ElevenLabs не загружен: {exc}")
