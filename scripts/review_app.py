@@ -646,10 +646,11 @@ def main() -> None:
     )
 
     if ELEVEN_WIDGET_ENABLED and ELEVEN_CONVAI_AGENT_ID:
-        widget_js = """
+        agent_id = ELEVEN_CONVAI_AGENT_ID
+        widget_js = f"""
 <script>
 (() => {{
-  const AGENT_ID = "{agent}";
+  const AGENT_ID = "{agent_id}";
   const ensureWidget = () => {{
     if (!document.getElementById('convai-script')) {{
       const s = document.createElement('script');
@@ -673,13 +674,13 @@ def main() -> None:
       wrapper.style.pointerEvents = 'auto';
       document.body.appendChild(wrapper);
     }}
-    wrapper.innerHTML = `<elevenlabs-convai agent-id="${{AGENT_ID}}" style="width:100%;height:100%;display:block;"></elevenlabs-convai>`;
-  }};
-  ensureWidget();
-  window._convai_keepalive = window._convai_keepalive || setInterval(ensureWidget, 2000);
-})();
+    wrapper.innerHTML = '<elevenlabs-convai agent-id="' + AGENT_ID + '" style="width:100%;height:100%;display:block;"></elevenlabs-convai>';
+    }};
+    ensureWidget();
+    window._convai_keepalive = window._convai_keepalive || setInterval(ensureWidget, 2000);
+}})();
 </script>
-""".format(agent=ELEVEN_CONVAI_AGENT_ID)
+"""
         st.markdown(widget_js, unsafe_allow_html=True)
 
     kb_entries = load_kb()
