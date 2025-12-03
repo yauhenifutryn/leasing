@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from json import JSONDecodeError
 from openai import OpenAI
@@ -22,6 +23,7 @@ OPENAI_MODEL = os.getenv("REVIEW_OPENAI_MODEL", "gpt-5.1")
 OPENAI_READY = bool(os.getenv("OPENAI_API_KEY"))
 MAX_REWRITES = 20
 DETECTION_BATCH_SIZE = 8
+ELEVEN_CONVAI_AGENT_ID = os.getenv("ELEVEN_CONVAI_AGENT_ID", "agent_6901kbht9aadfe69wts0nvpfdbst")
 
 _openai_client: OpenAI | None = None
 
@@ -642,6 +644,15 @@ def main() -> None:
         "Если ответ неверный, укажите корректную формулировку и комментарий — система обновит KB, "
         "источник в `insights_global` и связанные Q&A в `nlu_output/nlu_pairs.jsonl`."
     )
+
+    if ELEVEN_CONVAI_AGENT_ID:
+        components.html(
+            f"""
+<elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>
+<script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+""",
+            height=140,
+        )
 
     kb_entries = load_kb()
     cluster_map = load_clusters()
