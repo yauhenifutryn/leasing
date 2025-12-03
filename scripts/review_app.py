@@ -652,20 +652,27 @@ def main() -> None:
                 f"""
 <script>
   (() => {{
-    const existing = document.getElementById('convai-floating');
-    if (existing) existing.remove();
-    const wrapper = document.createElement('div');
-    wrapper.id = 'convai-floating';
-    wrapper.style.position = 'fixed';
-    wrapper.style.bottom = '24px';
-    wrapper.style.right = '24px';
-    wrapper.style.zIndex = '99999';
-    wrapper.style.width = '420px';
-    wrapper.style.maxWidth = '95vw';
-    wrapper.style.height = '640px';
-    wrapper.style.pointerEvents = 'auto';
-    wrapper.innerHTML = `<elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>`;
-    document.body.appendChild(wrapper);
+    const insertWidget = () => {{
+      let wrapper = document.getElementById('convai-floating');
+      if (!wrapper) {{
+        wrapper = document.createElement('div');
+        wrapper.id = 'convai-floating';
+        wrapper.style.position = 'fixed';
+        wrapper.style.bottom = '24px';
+        wrapper.style.right = '24px';
+        wrapper.style.zIndex = '999999';
+        wrapper.style.width = '420px';
+        wrapper.style.maxWidth = '95vw';
+        wrapper.style.height = '640px';
+        wrapper.style.pointerEvents = 'auto';
+        wrapper.style.display = 'block';
+        document.body.appendChild(wrapper);
+      }}
+      wrapper.innerHTML = `<elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}" style="width:100%;height:100%;display:block;"></elevenlabs-convai>`;
+    }};
+
+    insertWidget();
+
     if (!document.getElementById('convai-script')) {{
       const s = document.createElement('script');
       s.id = 'convai-script';
@@ -673,11 +680,12 @@ def main() -> None:
       s.async = true;
       s.type = 'text/javascript';
       document.body.appendChild(s);
+      s.onload = insertWidget;
     }}
   }})();
 </script>
 """,
-                height=0,
+                height=10,
             )
         except Exception as exc:  # noqa: BLE001
             st.info(f"Виджет ElevenLabs не загружен: {exc}")
