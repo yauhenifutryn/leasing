@@ -24,6 +24,7 @@ OPENAI_READY = bool(os.getenv("OPENAI_API_KEY"))
 MAX_REWRITES = 20
 DETECTION_BATCH_SIZE = 8
 ELEVEN_CONVAI_AGENT_ID = os.getenv("ELEVEN_CONVAI_AGENT_ID", "agent_6901kbht9aadfe69wts0nvpfdbst")
+ELEVEN_WIDGET_ENABLED = os.getenv("ELEVEN_CONVAI_WIDGET", "1") not in {"0", "false", "False"}
 
 _openai_client: OpenAI | None = None
 
@@ -645,14 +646,17 @@ def main() -> None:
         "источник в `insights_global` и связанные Q&A в `nlu_output/nlu_pairs.jsonl`."
     )
 
-    if ELEVEN_CONVAI_AGENT_ID:
-        components.html(
-            f"""
+    if ELEVEN_WIDGET_ENABLED and ELEVEN_CONVAI_AGENT_ID:
+        try:
+            components.html(
+                f"""
 <elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>
 <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 """,
-            height=140,
-        )
+                height=160,
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.info(f"Виджет ElevenLabs не загружен: {exc}")
 
     kb_entries = load_kb()
     cluster_map = load_clusters()
