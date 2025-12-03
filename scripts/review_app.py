@@ -650,29 +650,34 @@ def main() -> None:
         try:
             components.html(
                 f"""
-<style>
-  #convai-wrapper {{
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 9999;
-    width: 420px;
-    max-width: min(420px, 95vw);
-    height: 640px;
-    pointer-events: auto;
-  }}
-  #convai-wrapper elevenlabs-convai {{
-    width: 100%;
-    height: 100%;
-    display: block;
-  }}
-</style>
-<div id="convai-wrapper">
-  <elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>
-</div>
-<script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+<script>
+  (() => {{
+    const existing = document.getElementById('convai-floating');
+    if (existing) existing.remove();
+    const wrapper = document.createElement('div');
+    wrapper.id = 'convai-floating';
+    wrapper.style.position = 'fixed';
+    wrapper.style.bottom = '24px';
+    wrapper.style.right = '24px';
+    wrapper.style.zIndex = '99999';
+    wrapper.style.width = '420px';
+    wrapper.style.maxWidth = '95vw';
+    wrapper.style.height = '640px';
+    wrapper.style.pointerEvents = 'auto';
+    wrapper.innerHTML = `<elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>`;
+    document.body.appendChild(wrapper);
+    if (!document.getElementById('convai-script')) {{
+      const s = document.createElement('script');
+      s.id = 'convai-script';
+      s.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
+      s.async = true;
+      s.type = 'text/javascript';
+      document.body.appendChild(s);
+    }}
+  }})();
+</script>
 """,
-                height=700,
+                height=0,
             )
         except Exception as exc:  # noqa: BLE001
             st.info(f"Виджет ElevenLabs не загружен: {exc}")
