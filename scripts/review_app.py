@@ -646,20 +646,12 @@ def main() -> None:
     )
 
     if ELEVEN_WIDGET_ENABLED and ELEVEN_CONVAI_AGENT_ID:
-        agent_id = ELEVEN_CONVAI_AGENT_ID
-        widget_js = f"""
+        widget_html = f"""
+<div id="convai-floating"></div>
 <script>
-(() => {{
-  const AGENT_ID = "{agent_id}";
+(function() {{
+  const AGENT_ID = "{ELEVEN_CONVAI_AGENT_ID}";
   const ensureWidget = () => {{
-    if (!document.getElementById('convai-script')) {{
-      const s = document.createElement('script');
-      s.id = 'convai-script';
-      s.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
-      s.async = true;
-      s.type = 'text/javascript';
-      document.body.appendChild(s);
-    }}
     let wrapper = document.getElementById('convai-floating');
     if (!wrapper) {{
       wrapper = document.createElement('div');
@@ -675,13 +667,23 @@ def main() -> None:
       document.body.appendChild(wrapper);
     }}
     wrapper.innerHTML = '<elevenlabs-convai agent-id="' + AGENT_ID + '" style="width:100%;height:100%;display:block;"></elevenlabs-convai>';
-    }};
+  }};
+  if (!document.getElementById('convai-script')) {{
+    const s = document.createElement('script');
+    s.id = 'convai-script';
+    s.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
+    s.async = true;
+    s.type = 'text/javascript';
+    s.onload = ensureWidget;
+    document.body.appendChild(s);
+  }} else {{
     ensureWidget();
-    window._convai_keepalive = window._convai_keepalive || setInterval(ensureWidget, 2000);
+  }}
+  window._convai_keepalive = window._convai_keepalive || setInterval(ensureWidget, 2000);
 }})();
 </script>
 """
-        st.markdown(widget_js, unsafe_allow_html=True)
+        components.html(widget_html, height=0, width=0)
 
     kb_entries = load_kb()
     cluster_map = load_clusters()
