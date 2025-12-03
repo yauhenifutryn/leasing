@@ -646,13 +646,11 @@ def main() -> None:
     )
 
     if ELEVEN_WIDGET_ENABLED and ELEVEN_CONVAI_AGENT_ID:
-        st.markdown(
-            f"""
+        widget_js = """
 <script>
 (() => {{
-  const AGENT_ID = "{ELEVEN_CONVAI_AGENT_ID}";
+  const AGENT_ID = "{agent}";
   const ensureWidget = () => {{
-    // ensure script is loaded
     if (!document.getElementById('convai-script')) {{
       const s = document.createElement('script');
       s.id = 'convai-script';
@@ -661,7 +659,6 @@ def main() -> None:
       s.type = 'text/javascript';
       document.body.appendChild(s);
     }}
-    // ensure wrapper exists and is fixed
     let wrapper = document.getElementById('convai-floating');
     if (!wrapper) {{
       wrapper = document.createElement('div');
@@ -679,13 +676,11 @@ def main() -> None:
     wrapper.innerHTML = `<elevenlabs-convai agent-id="${{AGENT_ID}}" style="width:100%;height:100%;display:block;"></elevenlabs-convai>`;
   }};
   ensureWidget();
-  // re-assert every 2s in case Streamlit rerenders
   window._convai_keepalive = window._convai_keepalive || setInterval(ensureWidget, 2000);
 })();
 </script>
-""",
-            unsafe_allow_html=True,
-        )
+""".format(agent=ELEVEN_CONVAI_AGENT_ID)
+        st.markdown(widget_js, unsafe_allow_html=True)
 
     kb_entries = load_kb()
     cluster_map = load_clusters()
