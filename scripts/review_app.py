@@ -645,46 +645,6 @@ def main() -> None:
         "источник в `insights_global` и связанные Q&A в `nlu_output/nlu_pairs.jsonl`."
     )
 
-    if ELEVEN_WIDGET_ENABLED and ELEVEN_CONVAI_AGENT_ID:
-        widget_html = f"""
-<div id="convai-floating"></div>
-<script>
-(function() {{
-  const AGENT_ID = "{ELEVEN_CONVAI_AGENT_ID}";
-  const ensureWidget = () => {{
-    let wrapper = document.getElementById('convai-floating');
-    if (!wrapper) {{
-      wrapper = document.createElement('div');
-      wrapper.id = 'convai-floating';
-      wrapper.style.position = 'fixed';
-      wrapper.style.bottom = '24px';
-      wrapper.style.right = '24px';
-      wrapper.style.zIndex = '999999';
-      wrapper.style.width = '420px';
-      wrapper.style.maxWidth = '95vw';
-      wrapper.style.height = '640px';
-      wrapper.style.pointerEvents = 'auto';
-      document.body.appendChild(wrapper);
-    }}
-    wrapper.innerHTML = '<elevenlabs-convai agent-id="' + AGENT_ID + '" style="width:100%;height:100%;display:block;"></elevenlabs-convai>';
-  }};
-  if (!document.getElementById('convai-script')) {{
-    const s = document.createElement('script');
-    s.id = 'convai-script';
-    s.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
-    s.async = true;
-    s.type = 'text/javascript';
-    s.onload = ensureWidget;
-    document.body.appendChild(s);
-  }} else {{
-    ensureWidget();
-  }}
-  window._convai_keepalive = window._convai_keepalive || setInterval(ensureWidget, 2000);
-}})();
-</script>
-"""
-        components.html(widget_html, height=0, width=0)
-
     kb_entries = load_kb()
     cluster_map = load_clusters()
     nlu_rows = load_nlu_rows()
