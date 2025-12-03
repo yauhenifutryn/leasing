@@ -648,28 +648,30 @@ def main() -> None:
 
     if ELEVEN_WIDGET_ENABLED and ELEVEN_CONVAI_AGENT_ID:
         try:
-            components.html(
+            st.markdown(
                 f"""
 <style>
-  #convai-wrapper {{
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 9999;
-    width: 380px;
-    max-width: 90vw;
-  }}
-  #convai-wrapper elevenlabs-convai {{
-    width: 100%;
-    display: block;
-  }}
+#convai-wrapper {{
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  width: 420px;
+  max-width: min(420px, 90vw);
+  pointer-events: auto;
+}}
+#convai-wrapper elevenlabs-convai {{
+  width: 100%;
+  min-height: 120px;
+  display: block;
+}}
 </style>
 <div id="convai-wrapper">
   <elevenlabs-convai agent-id="{ELEVEN_CONVAI_AGENT_ID}"></elevenlabs-convai>
 </div>
 <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 """,
-                height=200,
+                unsafe_allow_html=True,
             )
         except Exception as exc:  # noqa: BLE001
             st.info(f"Виджет ElevenLabs не загружен: {exc}")
