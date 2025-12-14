@@ -27,6 +27,15 @@ insights_batches/
 insights_global/
 knowledge_base/
 nlu_output/
+corrections/
+
+# Accidental artifact folders (should never be committed)
+\#/
+doesn’t/
+exist/
+if/
+only/
+yet/
 
 # Archives
 *.zip
