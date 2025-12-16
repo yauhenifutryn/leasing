@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Leasing Demo UI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div class="topbar">
+        <div class="brand">
+          <h1>Leasing · Demo Console</h1>
+          <p>Run pipeline steps, review logs, and explore business insights (local demo).</p>
+        </div>
+        <div class="actions">
+          <button class="btn good" id="btnNewSession">Start New Session</button>
+          <button class="btn ghost" id="btnSettings">Settings</button>
+          <button class="btn ghost" id="btnFeedback">Submit Feedback</button>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Session</h2>
+          <div class="split">
+            <div class="row">
+              <div class="badge" id="sessionBadge">
+                <span class="dot warn"></span>
+                <span id="sessionBadgeText">No session</span>
+              </div>
+              <button class="btn danger" id="btnStop" disabled>Stop</button>
+            </div>
+            <div class="kv">
+              <div class="item"><span class="k">Session ID</span><span class="v" id="sessionId">—</span></div>
+              <div class="item"><span class="k">Last Task</span><span class="v" id="lastTask">—</span></div>
+              <div class="item"><span class="k">Last Status</span><span class="v" id="lastStatus">—</span></div>
+            </div>
+            <div>
+              <div class="help">
+                Tip: <b>Transcribe</b> may be slow locally without GPU. It’s included for parity, but you’ll
+                typically run transcription on a server and bring back outputs.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Console</h2>
+          <div class="tabs">
+            <button class="tab active" data-tab="pipeline">Pipeline</button>
+            <button class="tab" data-tab="logs">Check Logs</button>
+            <button class="tab" data-tab="metrics">View Metrics</button>
+            <button class="tab" data-tab="json">JSON Viewer</button>
+          </div>
+
+          <div id="tab_pipeline">
+            <div class="split">
+              <div class="card" style="background:var(--card);">
+                <h2>Actions</h2>
+                <div class="actions">
+                  <button class="btn primary" data-task="check">Check</button>
+                  <button class="btn primary" data-task="analyze_calls">Analyze Calls</button>
+                  <button class="btn primary" data-task="nlu_export">NLU Export</button>
+                  <button class="btn primary" data-task="rollup">Rollup</button>
+                  <button class="btn primary" data-task="aggregate">Aggregate</button>
+                  <button class="btn primary" data-task="dedup">Dedup</button>
+                  <button class="btn primary" data-task="kb">Build KB</button>
+                  <button class="btn primary" data-task="kb_markdown">KB → Markdown</button>
+                  <button class="btn ghost" data-task="review_ui">Open Review UI (Streamlit)</button>
+                  <button class="btn ghost" data-task="transcribe">Transcribe</button>
+                </div>
+              </div>
+
+              <div class="card" style="background:var(--card);">
+                <h2>Live Log</h2>
+                <div class="log scroll-slim" id="liveLog">(no runs yet)</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="tab_logs" style="display:none;">
+            <div class="split">
+              <div class="row">
+                <div class="help">Recent runs (click to view log)</div>
+                <button class="btn ghost" id="btnRefreshRuns">Refresh</button>
+              </div>
+              <div id="runsList" class="kv"></div>
+              <div class="log scroll-slim" id="logView">(select a run)</div>
+            </div>
+          </div>
+
+          <div id="tab_metrics" style="display:none;">
+            <div class="split">
+              <div class="row">
+                <div class="help">Dashboards are computed from `insights_*` and `insights_global` when available.</div>
+                <button class="btn ghost" id="btnRefreshMetrics">Refresh</button>
+              </div>
+
+              <div class="grid" style="grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="card" style="background:var(--card);">
+                  <h2>Top Reasons</h2>
+                  <div class="chart" id="chartTopIntents"></div>
+                </div>
+                <div class="card" style="background:var(--card);">
+                  <h2>Resolution Rate</h2>
+                  <div class="chart" id="chartResolution"></div>
+                </div>
+              </div>
+
+              <div class="grid" style="grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="card" style="background:var(--card);">
+                  <h2>Agent Errors (Quality Flags)</h2>
+                  <div class="chart" id="chartQuality"></div>
+                </div>
+                <div class="card" style="background:var(--card);">
+                  <h2>Customer Satisfaction (Emotion)</h2>
+                  <div class="chart" id="chartEmotion"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="tab_json" style="display:none;">
+            <div class="split">
+              <div class="row">
+                <div style="flex:1;">
+                  <label class="muted">Source</label>
+                  <select class="input" id="jsonKind">
+                    <option value="insights_per_call">insights_per_call</option>
+                    <option value="insights_global">insights_global</option>
+                    <option value="knowledge_base">knowledge_base</option>
+                    <option value="nlu_output">nlu_output</option>
+                    <option value="transcripts_clean">transcripts_clean</option>
+                  </select>
+                </div>
+                <div style="flex:2;">
+                  <label class="muted">File</label>
+                  <select class="input" id="jsonFile"></select>
+                </div>
+                <div style="flex:0.7; align-self:flex-end;">
+                  <button class="btn ghost" id="btnLoadJson">Load</button>
+                </div>
+              </div>
+              <div class="log scroll-slim" id="jsonView">(pick a file)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="modal" style="display:none;"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+

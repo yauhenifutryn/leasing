@@ -54,3 +54,6 @@ kb:
 # 8) Export KB to Markdown for Retell
 kb-markdown:
 	$(PY) $(SRC)/55_export_kb_markdown.py --in knowledge_base/kb_faq_ru.json --out knowledge_base/kb_faq_ru.md
+
+# Alias for convenience
+markdown: kb-markdown

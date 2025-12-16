@@ -101,6 +101,8 @@ make rollup            # batch-level rollups (deduplicated)
 make aggregate         # global aggregation step
 make dedup             # embedding-based FAQ deduplication
 make kb                # build final knowledge base entries (JSON + YAML)
+make kb-markdown       # export KB JSON → Markdown (.md) for Retell KB
+make markdown          # alias for kb-markdown
 ```
 
 ## Pipeline Overview
@@ -220,3 +222,15 @@ The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой запи
    tmux ls                   # список сессий
    tmux kill-session -t work # убить сессию при необходимости
    ```
+
+## Demo UI (локально)
+
+Локальный демо‑интерфейс для запуска `make ...` шагов, просмотра логов, базовой визуализации метрик и просмотра JSON.
+
+```bash
+cd leasing
+source .venv/bin/activate
+python demo_ui/server.py
+```
+
+Открыть: `http://127.0.0.1:8787`
