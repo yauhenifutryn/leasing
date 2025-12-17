@@ -410,100 +410,6 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, "text/plain; charset=utf-8", b"Not found")
 
-
-def compute_metrics(max_files: int = 5000) -> dict[str, Any]:
-    per_call_dir = REPO_ROOT / "insights_per_call"
-    files = sorted(per_call_dir.glob("*.json")) if per_call_dir.exists() else []
-    files = files[:max_files]
-
-    def norm_status(s: Any) -> str:
-        val = str(s or "").strip().lower()
-        if val in {"resolved", "fully_resolved", "solved"}:
-            return "resolved"
-        if val in {"partially_resolved", "partial", "partially"}:
-            return "partial"
-        if val in {"unresolved", "not_resolved", "not resolved", "failed"}:
-            return "unresolved"
-        return "unknown"
-
-    resolution = {"resolved": 0, "partial": 0, "unresolved": 0, "unknown": 0}
-    emotions: dict[str, int] = {}
-    quality_flags: dict[str, int] = {}
-    unresolved_reasons: dict[str, int] = {}
-
-    for fp in files:
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        st = norm_status(data.get("resolution_status"))
-        resolution[st] = resolution.get(st, 0) + 1
-
-        emo = data.get("emotions") or {}
-        if isinstance(emo, dict):
-            client_emo = (emo.get("client") or "").strip().lower()
-            if client_emo:
-                emotions[client_emo] = emotions.get(client_emo, 0) + 1
-
-        qf = data.get("quality_flags") or []
-        if isinstance(qf, list):
-            for x in qf:
-                if isinstance(x, str) and x.strip():
-                    key = x.strip()
-                    quality_flags[key] = quality_flags.get(key, 0) + 1
-
-        if st in {"unresolved", "partial"}:
-            reason = ""
-            handoff = data.get("handoff")
-            if isinstance(handoff, str):
-                reason = handoff.strip()
-            elif isinstance(handoff, dict):
-                for k in ("reason", "type", "needed"):
-                    v = handoff.get(k)
-                    if isinstance(v, str) and v.strip():
-                        reason = v.strip()
-                        break
-            if not reason and isinstance(qf, list) and qf:
-                first = qf[0]
-                if isinstance(first, str) and first.strip():
-                    reason = first.strip()
-            if not reason:
-                mi = data.get("main_issue")
-                if isinstance(mi, str) and mi.strip():
-                    reason = mi.strip()
-            if reason:
-                unresolved_reasons[reason] = unresolved_reasons.get(reason, 0) + 1
-
-    top_reasons: list[dict[str, Any]] = []
-    top_path = REPO_ROOT / "insights_global" / "global_top_intents.json"
-    if top_path.exists():
-        try:
-            payload = json.loads(top_path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                for row in payload[:20]:
-                    if not isinstance(row, dict):
-                        continue
-                    label = row.get("intent") or row.get("label") or row.get("name")
-                    value = row.get("count") or row.get("value")
-                    if isinstance(label, str) and isinstance(value, int):
-                        top_reasons.append({"label": label, "value": value})
-        except Exception:
-            pass
-
-    def top_n(d: dict[str, int], n: int = 10) -> list[dict[str, Any]]:
-        items = sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
-        return [{"label": k, "value": v} for k, v in items]
-
-    return {
-        "total_calls": sum(resolution.values()),
-        "resolution": resolution,
-        "top_reasons": top_reasons,
-        "quality_flags_top": top_n(quality_flags, 10),
-        "emotions_top": top_n(emotions, 8),
-        "unresolved_reasons_top": top_n(unresolved_reasons, 10),
-        "note": f"Computed from {min(len(files), max_files)} per-call JSON files.",
-    }
-
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         try:
@@ -598,6 +504,100 @@ def compute_metrics(max_files: int = 5000) -> dict[str, Any]:
             return self._json(200, {"ok": True})
 
         return self._send(404, "text/plain; charset=utf-8", b"Not found")
+
+
+def compute_metrics(max_files: int = 5000) -> dict[str, Any]:
+    per_call_dir = REPO_ROOT / "insights_per_call"
+    files = sorted(per_call_dir.glob("*.json")) if per_call_dir.exists() else []
+    files = files[:max_files]
+
+    def norm_status(s: Any) -> str:
+        val = str(s or "").strip().lower()
+        if val in {"resolved", "fully_resolved", "solved"}:
+            return "resolved"
+        if val in {"partially_resolved", "partial", "partially"}:
+            return "partial"
+        if val in {"unresolved", "not_resolved", "not resolved", "failed"}:
+            return "unresolved"
+        return "unknown"
+
+    resolution = {"resolved": 0, "partial": 0, "unresolved": 0, "unknown": 0}
+    emotions: dict[str, int] = {}
+    quality_flags: dict[str, int] = {}
+    unresolved_reasons: dict[str, int] = {}
+
+    for fp in files:
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        st = norm_status(data.get("resolution_status"))
+        resolution[st] = resolution.get(st, 0) + 1
+
+        emo = data.get("emotions") or {}
+        if isinstance(emo, dict):
+            client_emo = (emo.get("client") or "").strip().lower()
+            if client_emo:
+                emotions[client_emo] = emotions.get(client_emo, 0) + 1
+
+        qf = data.get("quality_flags") or []
+        if isinstance(qf, list):
+            for x in qf:
+                if isinstance(x, str) and x.strip():
+                    key = x.strip()
+                    quality_flags[key] = quality_flags.get(key, 0) + 1
+
+        if st in {"unresolved", "partial"}:
+            reason = ""
+            handoff = data.get("handoff")
+            if isinstance(handoff, str):
+                reason = handoff.strip()
+            elif isinstance(handoff, dict):
+                for k in ("reason", "type", "needed"):
+                    v = handoff.get(k)
+                    if isinstance(v, str) and v.strip():
+                        reason = v.strip()
+                        break
+            if not reason and isinstance(qf, list) and qf:
+                first = qf[0]
+                if isinstance(first, str) and first.strip():
+                    reason = first.strip()
+            if not reason:
+                mi = data.get("main_issue")
+                if isinstance(mi, str) and mi.strip():
+                    reason = mi.strip()
+            if reason:
+                unresolved_reasons[reason] = unresolved_reasons.get(reason, 0) + 1
+
+    top_reasons: list[dict[str, Any]] = []
+    top_path = REPO_ROOT / "insights_global" / "global_top_intents.json"
+    if top_path.exists():
+        try:
+            payload = json.loads(top_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                for row in payload[:20]:
+                    if not isinstance(row, dict):
+                        continue
+                    label = row.get("intent") or row.get("label") or row.get("name")
+                    value = row.get("count") or row.get("value")
+                    if isinstance(label, str) and isinstance(value, int):
+                        top_reasons.append({"label": label, "value": value})
+        except Exception:
+            pass
+
+    def top_n(d: dict[str, int], n: int = 10) -> list[dict[str, Any]]:
+        items = sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
+        return [{"label": k, "value": v} for k, v in items]
+
+    return {
+        "total_calls": sum(resolution.values()),
+        "resolution": resolution,
+        "top_reasons": top_reasons,
+        "quality_flags_top": top_n(quality_flags, 10),
+        "emotions_top": top_n(emotions, 8),
+        "unresolved_reasons_top": top_n(unresolved_reasons, 10),
+        "note": f"Computed from {min(len(files), max_files)} per-call JSON files.",
+    }
 
 
 def main() -> None:
