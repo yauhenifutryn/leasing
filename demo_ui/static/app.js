@@ -6,6 +6,8 @@ const state = {
   runs: [],
   selectedRunId: null,
   logPoll: null,
+  audio: [],
+  audioSelected: new Set(),
 };
 
 async function api(path, opts = {}) {
@@ -68,11 +70,14 @@ async function startSession() {
     body: JSON.stringify({ name: "" }),
   });
   state.session = resp.session;
+  state.audioSelected = new Set();
   $("#sessionId").textContent = state.session.id.slice(0, 8);
   setBadge("ready", "Session active");
   $("#btnStop").disabled = true;
   $("#lastTask").textContent = "—";
   $("#lastStatus").textContent = "—";
+  $("#btnSetSessionAudio").disabled = true;
+  renderAudioList();
   await refreshRuns();
 }
 
@@ -165,6 +170,99 @@ function prettyJson(text) {
   }
 }
 
+function formatBytes(n) {
+  if (!Number.isFinite(n)) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const s = i === 0 ? String(Math.round(v)) : v.toFixed(1);
+  return `${s} ${units[i]}`;
+}
+
+async function refreshAudio() {
+  const resp = await api("/api/audio");
+  state.audio = resp.files || [];
+  renderAudioList();
+}
+
+function renderAudioList() {
+  const list = $("#audioList");
+  list.innerHTML = "";
+  if (!state.audio.length) {
+    list.innerHTML = `<div class="help" style="padding:8px;">No audio files in <code>audio/</code>.</div>`;
+    $("#btnSetSessionAudio").disabled = true;
+    return;
+  }
+  for (const f of state.audio) {
+    const row = document.createElement("div");
+    row.className = "item";
+    const checked = state.audioSelected.has(f.name);
+    row.innerHTML = `
+      <div class="left">
+        <input class="chk" type="checkbox" ${checked ? "checked" : ""} />
+        <div class="name" title="${f.name}">${f.name}</div>
+      </div>
+      <div class="meta">${formatBytes(f.size)}</div>
+    `;
+    row.querySelector("input").addEventListener("change", (e) => {
+      if (e.target.checked) state.audioSelected.add(f.name);
+      else state.audioSelected.delete(f.name);
+      $("#btnSetSessionAudio").disabled = state.audioSelected.size === 0;
+    });
+    list.appendChild(row);
+  }
+  $("#btnSetSessionAudio").disabled = state.audioSelected.size === 0;
+}
+
+async function setSessionAudio() {
+  if (!state.session) await startSession();
+  const files = Array.from(state.audioSelected);
+  await api("/api/session/audio", {
+    method: "POST",
+    body: JSON.stringify({ session_id: state.session.id, files }),
+  });
+  showModal("Audio selection saved", `<div class="help">Selected <b>${files.length}</b> file(s) for this session.</div>`);
+}
+
+async function uploadAudioFiles() {
+  const input = $("#audioUpload");
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+
+  const toB64 = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.onload = () => {
+        const bytes = new Uint8Array(reader.result);
+        let binary = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        resolve(btoa(binary));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+  $("#btnUploadAudio").disabled = true;
+  try {
+    const payload = [];
+    for (const f of files) {
+      payload.push({ name: f.name, data_base64: await toB64(f) });
+    }
+    await api("/api/audio/upload", { method: "POST", body: JSON.stringify({ files: payload }) });
+    input.value = "";
+    await refreshAudio();
+  } finally {
+    $("#btnUploadAudio").disabled = false;
+  }
+}
+
 async function refreshJsonFiles() {
   const kind = $("#jsonKind").value;
   const resp = await api(`/api/files?kind=${encodeURIComponent(kind)}`);
@@ -189,32 +287,62 @@ async function loadSelectedJson() {
 function svgBarChart({ title, data, maxBars = 8 }) {
   const items = [...data].slice(0, maxBars);
   const max = Math.max(1, ...items.map((d) => d.value));
-  const w = 1000;
-  const h = 260;
+  const w = 1100;
   const pad = 18;
-  const barH = 18;
-  const gap = 10;
-  const startY = 44;
-  const barAreaW = w - 2 * pad - 220;
-  const labelW = 210;
-  const rowsH = items.length * (barH + gap);
-  const viewH = Math.max(h, startY + rowsH + pad);
+  const gap = 12;
+  const startY = 54;
+  const labelW = 340;
+  const barAreaW = w - 2 * pad - labelW - 80;
+
+  const wrapLabel = (text, maxChars = 34) => {
+    const s = String(text || "").trim();
+    if (!s) return [""];
+    const words = s.split(/\s+/);
+    const lines = [];
+    let cur = "";
+    for (const word of words) {
+      const next = (cur ? `${cur} ${word}` : word).trim();
+      if (next.length > maxChars && cur) {
+        lines.push(cur);
+        cur = word;
+      } else {
+        cur = next;
+      }
+    }
+    if (cur) lines.push(cur);
+    if (lines.length <= 2) return lines;
+    const firstTwo = lines.slice(0, 2);
+    firstTwo[1] = firstTwo[1].replace(/\.*$/, "") + "…";
+    return firstTwo;
+  };
 
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  const bars = items
-    .map((d, i) => {
-      const y = startY + i * (barH + gap);
-      const bw = Math.round((d.value / max) * barAreaW);
-      return `
-        <text x="${pad}" y="${y + 13}" fill="rgba(242,244,248,0.78)" font-size="12" font-family="var(--sans)">${esc(d.label)}</text>
-        <rect x="${pad + labelW}" y="${y}" width="${bw}" height="${barH}" rx="8" fill="rgba(0,123,255,0.65)"></rect>
-        <text x="${pad + labelW + bw + 8}" y="${y + 13}" fill="rgba(242,244,248,0.9)" font-size="12" font-weight="800" font-family="var(--sans)">${d.value}</text>
-      `;
-    })
-    .join("");
+  let y = startY;
+  const rows = items.map((d) => {
+    const lines = wrapLabel(d.label, 34);
+    const rowH = Math.max(28, lines.length * 14 + 8);
+    const barH = 16;
+    const barY = y + Math.floor((rowH - barH) / 2);
+    const bw = Math.round((d.value / max) * barAreaW);
+    const texts = lines
+      .map((line, idx) => {
+        const ty = y + 14 + idx * 14;
+        return `<text x="${pad}" y="${ty}" fill="rgba(242,244,248,0.78)" font-size="12" font-family="var(--sans)">${esc(line)}</text>`;
+      })
+      .join("");
+    const out = `
+      <title>${esc(d.label)}</title>
+      ${texts}
+      <rect x="${pad + labelW}" y="${barY}" width="${bw}" height="${barH}" rx="8" fill="rgba(0,123,255,0.65)"></rect>
+      <text x="${pad + labelW + bw + 10}" y="${barY + 13}" fill="rgba(242,244,248,0.92)" font-size="12" font-weight="900" font-family="var(--sans)">${d.value}</text>
+    `;
+    y += rowH + gap;
+    return out;
+  });
 
+  const viewH = Math.max(360, y + pad);
   return `
-  <svg viewBox="0 0 ${w} ${viewH}" width="100%" height="100%" preserveAspectRatio="none">
+  <svg viewBox="0 0 ${w} ${viewH}" width="100%" height="${viewH}" preserveAspectRatio="xMinYMin meet">
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stop-color="#0a84ff" stop-opacity="0.9"/>
@@ -222,18 +350,18 @@ function svgBarChart({ title, data, maxBars = 8 }) {
       </linearGradient>
     </defs>
     <rect x="0" y="0" width="${w}" height="${viewH}" fill="rgba(255,255,255,0.01)"/>
-    <text x="${pad}" y="24" fill="rgba(242,244,248,0.92)" font-size="13" font-weight="900" font-family="var(--sans)">${esc(title)}</text>
-    ${bars.replaceAll('rgba(0,123,255,0.65)', 'url(#g)')}
+    <text x="${pad}" y="30" fill="rgba(242,244,248,0.92)" font-size="14" font-weight="900" font-family="var(--sans)">${esc(title)}</text>
+    ${rows.join("").replaceAll('rgba(0,123,255,0.65)', 'url(#g)')}
   </svg>`;
 }
 
 function svgDonut({ title, parts }) {
-  const w = 520;
-  const h = 260;
-  const cx = 130;
-  const cy = 140;
-  const r = 74;
-  const stroke = 18;
+  const w = 640;
+  const h = 360;
+  const cx = 170;
+  const cy = 200;
+  const r = 96;
+  const stroke = 22;
   const total = parts.reduce((a, b) => a + b.value, 0) || 1;
 
   let offset = 0;
@@ -254,10 +382,10 @@ function svgDonut({ title, parts }) {
 
   const legend = parts
     .map((p, i) => {
-      const y = 70 + i * 26;
+      const y = 92 + i * 30;
       return `
-        <circle cx="310" cy="${y}" r="6" fill="${p.color}"></circle>
-        <text x="324" y="${y + 4}" fill="rgba(242,244,248,0.86)" font-size="12" font-weight="800" font-family="var(--sans)">${p.label}: ${p.value}</text>
+        <circle cx="420" cy="${y}" r="7" fill="${p.color}"></circle>
+        <text x="436" y="${y + 4}" fill="rgba(242,244,248,0.86)" font-size="13" font-weight="900" font-family="var(--sans)">${p.label}: ${p.value}</text>
       `;
     })
     .join("");
@@ -267,105 +395,68 @@ function svgDonut({ title, parts }) {
     <text x="16" y="24" fill="rgba(242,244,248,0.92)" font-size="13" font-weight="900" font-family="var(--sans)">${title}</text>
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="transparent" stroke="rgba(255,255,255,0.08)" stroke-width="${stroke}"></circle>
     ${circles}
-    <text x="${cx}" y="${cy}" text-anchor="middle" fill="rgba(242,244,248,0.92)" font-size="22" font-weight="900" font-family="var(--sans)">${Math.round((parts[0]?.value || 0) / total * 100)}%</text>
-    <text x="${cx}" y="${cy + 22}" text-anchor="middle" fill="rgba(170,176,187,0.9)" font-size="11" font-family="var(--sans)">resolved</text>
+    <text x="${cx}" y="${cy}" text-anchor="middle" fill="rgba(242,244,248,0.92)" font-size="26" font-weight="900" font-family="var(--sans)">${Math.round((parts[0]?.value || 0) / total * 100)}%</text>
+    <text x="${cx}" y="${cy + 26}" text-anchor="middle" fill="rgba(170,176,187,0.9)" font-size="12" font-family="var(--sans)">resolved</text>
     ${legend}
   </svg>`;
 }
 
 async function computeMetrics() {
-  // Metrics are computed client-side from repo outputs via /api/file endpoints.
-  const intents = await safeLoadJson("insights_global", "global_top_intents.json");
-  const perCall = await safeListAndLoadMany("insights_per_call", 200);
+  const resp = await api("/api/metrics");
+  const metrics = resp.metrics || {};
 
-  const topIntents = Array.isArray(intents)
-    ? intents.slice(0, 8).map((i) => ({ label: i.intent, value: i.count || 0 }))
-    : [];
-
-  // Resolution rate
-  const resolutionCounts = { resolved: 0, partially_resolved: 0, unresolved: 0 };
-  const qualityCounts = new Map();
-  const emotionCounts = new Map();
-  for (const item of perCall) {
-    const status = item?.resolution_status;
-    if (status && status in resolutionCounts) resolutionCounts[status] += 1;
-    const flags = item?.quality_flags || [];
-    for (const f of flags) qualityCounts.set(f, (qualityCounts.get(f) || 0) + 1);
-    const emo = item?.emotions?.client;
-    if (emo) emotionCounts.set(emo, (emotionCounts.get(emo) || 0) + 1);
-  }
-
-  const qualityTop = Array.from(qualityCounts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([label, value]) => ({ label, value }));
-
-  const emoTop = Array.from(emotionCounts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([label, value]) => ({ label, value }));
+  const topIntents = metrics.top_reasons?.length ? metrics.top_reasons.slice(0, 10) : [{ label: "No data yet", value: 0 }];
 
   $("#chartTopIntents").innerHTML = svgBarChart({
     title: "Top reasons (global intents)",
-    data: topIntents.length ? topIntents : [{ label: "No data yet", value: 0 }],
+    data: topIntents,
+    maxBars: 10,
   });
 
-  const resolved = resolutionCounts.resolved;
-  const total = resolved + resolutionCounts.partially_resolved + resolutionCounts.unresolved;
+  const rc = metrics.resolution || { resolved: 0, partial: 0, unresolved: 0, unknown: 0 };
+  const resolved = rc.resolved || 0;
   $("#chartResolution").innerHTML = svgDonut({
     title: "Solved vs Unresolved",
     parts: [
       { label: "resolved", value: resolved, color: "rgba(0,200,83,0.9)" },
-      { label: "partial", value: resolutionCounts.partially_resolved, color: "rgba(255,179,0,0.85)" },
-      { label: "unresolved", value: resolutionCounts.unresolved, color: "rgba(211,47,47,0.9)" },
+      { label: "partial", value: rc.partial || 0, color: "rgba(255,179,0,0.85)" },
+      { label: "unresolved", value: rc.unresolved || 0, color: "rgba(211,47,47,0.9)" },
     ],
   });
 
+  const unresolvedTop = metrics.unresolved_reasons_top?.length
+    ? metrics.unresolved_reasons_top
+    : [{ label: "No data yet", value: 0 }];
+  $("#chartUnresolved").innerHTML = svgBarChart({
+    title: "Unresolved drivers (top)",
+    data: unresolvedTop,
+    maxBars: 8,
+  });
+
+  const qualityTop = metrics.quality_flags_top?.length ? metrics.quality_flags_top : [{ label: "No data yet", value: 0 }];
   $("#chartQuality").innerHTML = svgBarChart({
     title: "Quality flags (top)",
-    data: qualityTop.length ? qualityTop : [{ label: "No data yet", value: 0 }],
+    data: qualityTop,
   });
 
+  const emoTop = metrics.emotions_top?.length ? metrics.emotions_top : [{ label: "No data yet", value: 0 }];
   $("#chartEmotion").innerHTML = svgBarChart({
     title: "Client emotion (top)",
-    data: emoTop.length ? emoTop : [{ label: "No data yet", value: 0 }],
+    data: emoTop,
   });
-}
-
-async function safeLoadJson(kind, name) {
-  try {
-    const resp = await api(`/api/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`);
-    return JSON.parse(resp.text);
-  } catch {
-    return null;
-  }
-}
-
-async function safeListAndLoadMany(kind, limit = 200) {
-  try {
-    const resp = await api(`/api/files?kind=${encodeURIComponent(kind)}`);
-    const names = resp.files.slice(0, limit);
-    const out = [];
-    for (const n of names) {
-      try {
-        const f = await api(`/api/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(n)}`);
-        out.push(JSON.parse(f.text));
-      } catch {}
-    }
-    return out;
-  } catch {
-    return [];
-  }
 }
 
 async function showSettings() {
   const resp = await api("/api/env");
   const env = resp.env || {};
   const rows = Object.entries(env)
-    .map(([k, v]) => `<div class="item"><span class="k">${k}</span><span class="v">${v}</span></div>`)
+    .map(([k, v]) => {
+      const val = v === "" ? "<span class=\"muted\">(empty)</span>" : String(v);
+      return `<div class="item"><span class="k">${k}</span><span class="v">${val}</span></div>`;
+    })
     .join("");
   showModal("Settings", `
-    <div class="help">Values are read from environment variables. Set them in your shell or .env before running tasks.</div>
+    <div class="help">Loaded from <code>.env</code> (if present) and/or exported env vars. Tokens are never displayed.</div>
     <div class="kv" style="margin-top:12px;">${rows}</div>
   `);
 }
@@ -426,6 +517,9 @@ async function main() {
   $("#btnRefreshMetrics").addEventListener("click", () => computeMetrics().catch(alertError));
   $("#btnSettings").addEventListener("click", () => showSettings().catch(alertError));
   $("#btnFeedback").addEventListener("click", () => showFeedback().catch(alertError));
+  $("#btnRefreshAudio").addEventListener("click", () => refreshAudio().catch(alertError));
+  $("#btnUploadAudio").addEventListener("click", () => uploadAudioFiles().catch(alertError));
+  $("#btnSetSessionAudio").addEventListener("click", () => setSessionAudio().catch(alertError));
 
   $$("#tab_pipeline [data-task]").forEach((btn) => {
     btn.addEventListener("click", () => runTask(btn.dataset.task).catch(alertError));
@@ -438,6 +532,7 @@ async function main() {
   $("#btnLoadJson").addEventListener("click", () => loadSelectedJson().catch(alertError));
 
   await refreshJsonFiles();
+  await refreshAudio();
   await computeMetrics();
 }
 
@@ -447,4 +542,3 @@ function alertError(err) {
 }
 
 main().catch(alertError);
-

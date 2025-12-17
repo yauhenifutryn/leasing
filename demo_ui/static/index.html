@@ -21,27 +21,45 @@
       </div>
 
       <div class="grid">
-        <div class="card">
-          <h2>Session</h2>
-          <div class="split">
+        <div class="stack">
+          <div class="card">
+            <h2>Session</h2>
+            <div class="split">
+              <div class="row">
+                <div class="badge" id="sessionBadge">
+                  <span class="dot warn"></span>
+                  <span id="sessionBadgeText">No session</span>
+                </div>
+                <button class="btn danger" id="btnStop" disabled>Stop</button>
+              </div>
+              <div class="kv">
+                <div class="item"><span class="k">Session ID</span><span class="v" id="sessionId">—</span></div>
+                <div class="item"><span class="k">Last Task</span><span class="v" id="lastTask">—</span></div>
+                <div class="item"><span class="k">Last Status</span><span class="v" id="lastStatus">—</span></div>
+              </div>
+              <div>
+                <div class="help">
+                  Session groups runs/logs + выбранные аудио. Для демо без сервера можешь просто выбрать файлы из
+                  `audio/` или загрузить пару тестовых сюда.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Audio</h2>
             <div class="row">
-              <div class="badge" id="sessionBadge">
-                <span class="dot warn"></span>
-                <span id="sessionBadgeText">No session</span>
-              </div>
-              <button class="btn danger" id="btnStop" disabled>Stop</button>
+              <input class="input" id="audioUpload" type="file" multiple accept=".wav,.mp3,.m4a,.flac" />
+              <button class="btn good" id="btnUploadAudio">Upload</button>
             </div>
-            <div class="kv">
-              <div class="item"><span class="k">Session ID</span><span class="v" id="sessionId">—</span></div>
-              <div class="item"><span class="k">Last Task</span><span class="v" id="lastTask">—</span></div>
-              <div class="item"><span class="k">Last Status</span><span class="v" id="lastStatus">—</span></div>
+            <div class="row" style="margin-top:10px;">
+              <button class="btn ghost" id="btnRefreshAudio">Refresh</button>
+              <button class="btn primary" id="btnSetSessionAudio" disabled>Use Selected</button>
             </div>
-            <div>
-              <div class="help">
-                Tip: <b>Transcribe</b> may be slow locally without GPU. It’s included for parity, but you’ll
-                typically run transcription on a server and bring back outputs.
-              </div>
+            <div class="help" style="margin-top:8px;">
+              Select a few files for this session. (For now it’s just selection + future‑ready upload UI.)
             </div>
+            <div id="audioList" class="list scroll-slim" style="margin-top:10px; max-height:260px;"></div>
           </div>
         </div>
 
@@ -98,24 +116,37 @@
               </div>
 
               <div class="grid" style="grid-template-columns: 1fr 1fr; gap:12px;">
-                <div class="card" style="background:var(--card);">
-                  <h2>Top Reasons</h2>
-                  <div class="chart" id="chartTopIntents"></div>
+                <div class="card span2" style="background:var(--card);">
+                  <div class="row">
+                    <h2 style="margin:0;">Top Reasons</h2>
+                    <div class="help">Top intents (global) if available; otherwise derived from per‑call data.</div>
+                  </div>
+                  <div class="chart chart-tall" id="chartTopIntents"></div>
                 </div>
-                <div class="card" style="background:var(--card);">
-                  <h2>Resolution Rate</h2>
-                  <div class="chart" id="chartResolution"></div>
-                </div>
-              </div>
 
-              <div class="grid" style="grid-template-columns: 1fr 1fr; gap:12px;">
+                <div class="card" style="background:var(--card);">
+                  <div class="row">
+                    <h2 style="margin:0;">Resolution Rate</h2>
+                    <div class="help">Based on `resolution_status` in per‑call JSON.</div>
+                  </div>
+                  <div class="chart chart-tall" id="chartResolution"></div>
+                </div>
+
+                <div class="card" style="background:var(--card);">
+                  <div class="row">
+                    <h2 style="margin:0;">Why Not Resolved</h2>
+                    <div class="help">From `handoff` → fallback to flags/issue.</div>
+                  </div>
+                  <div class="chart chart-tall" id="chartUnresolved"></div>
+                </div>
+
                 <div class="card" style="background:var(--card);">
                   <h2>Agent Errors (Quality Flags)</h2>
-                  <div class="chart" id="chartQuality"></div>
+                  <div class="chart chart-tall" id="chartQuality"></div>
                 </div>
                 <div class="card" style="background:var(--card);">
                   <h2>Customer Satisfaction (Emotion)</h2>
-                  <div class="chart" id="chartEmotion"></div>
+                  <div class="chart chart-tall" id="chartEmotion"></div>
                 </div>
               </div>
             </div>
@@ -153,4 +184,3 @@
     <script src="/static/app.js"></script>
   </body>
 </html>
-

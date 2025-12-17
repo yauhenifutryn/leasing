@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import json
 import os
 import queue
@@ -8,7 +9,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +21,31 @@ from urllib.parse import parse_qs, urlparse
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATE_DIR = Path(__file__).resolve().parent / ".state"
+
+
+def load_dotenv_if_present(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line.removeprefix("export ").strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if not key:
+            continue
+        if key in os.environ:
+            continue
+        os.environ[key] = value
+
+
+# Load `.env` (gitignored) so demo UI works without manual `export ...`
+load_dotenv_if_present(REPO_ROOT / ".env")
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +73,8 @@ ALLOWED_READ_DIRS = {
     "transcripts_clean": REPO_ROOT / "transcripts_clean",
 }
 
+ALLOWED_AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac"}
+
 
 WHITELIST_TASKS: dict[str, list[str]] = {
     "check": ["make", "check"],
@@ -70,6 +98,7 @@ class Session:
     created_at: str
     name: str
     notes: str = ""
+    audio_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -101,7 +130,13 @@ class StateStore:
         if self.sessions_path.exists():
             payload = json.loads(self.sessions_path.read_text(encoding="utf-8"))
             for item in payload:
-                sess = Session(**item)
+                sess = Session(
+                    id=item.get("id", ""),
+                    created_at=item.get("created_at", now_iso()),
+                    name=item.get("name", "Session"),
+                    notes=item.get("notes", ""),
+                    audio_files=item.get("audio_files") or [],
+                )
                 self.sessions[sess.id] = sess
         if self.runs_path.exists():
             for line in self.runs_path.read_text(encoding="utf-8").splitlines():
@@ -126,6 +161,14 @@ class StateStore:
             self.sessions[sess.id] = sess
             self._persist_sessions()
             return sess
+
+    def set_session_audio(self, session_id: str, files: list[str]) -> None:
+        with self._lock:
+            sess = self.sessions.get(session_id)
+            if sess is None:
+                return
+            sess.audio_files = files
+            self._persist_sessions()
 
     def list_sessions(self) -> list[Session]:
         with self._lock:
@@ -305,14 +348,27 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/tasks":
             return self._json(200, {"tasks": sorted(WHITELIST_TASKS.keys())})
         if parsed.path == "/api/env":
-            keys = [
-                "OPENAI_MODEL",
-                "REVIEW_OPENAI_MODEL",
-                "OPENAI_API_KEY",
-                "HUGGINGFACE_TOKEN",
-            ]
-            env = {k: ("SET" if os.getenv(k) else "MISSING") for k in keys}
+            env = {
+                "OPENAI_MODEL": os.getenv("OPENAI_MODEL", ""),
+                "REVIEW_OPENAI_MODEL": os.getenv("REVIEW_OPENAI_MODEL", ""),
+                "OPENAI_API_KEY": "SET" if os.getenv("OPENAI_API_KEY") else "MISSING",
+                "HUGGINGFACE_TOKEN": "SET" if os.getenv("HUGGINGFACE_TOKEN") else "MISSING",
+            }
             return self._json(200, {"env": env})
+        if parsed.path == "/api/audio":
+            audio_dir = REPO_ROOT / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            files: list[dict[str, Any]] = []
+            for p in sorted(audio_dir.iterdir()):
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() not in ALLOWED_AUDIO_EXTS:
+                    continue
+                st = p.stat()
+                files.append({"name": p.name, "size": st.st_size, "mtime": int(st.st_mtime)})
+            return self._json(200, {"files": files})
+        if parsed.path == "/api/metrics":
+            return self._json(200, {"metrics": compute_metrics()})
         if parsed.path == "/api/log":
             qs = parse_qs(parsed.query)
             run_id = (qs.get("run_id") or [None])[0]
@@ -354,6 +410,100 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, "text/plain; charset=utf-8", b"Not found")
 
+
+def compute_metrics(max_files: int = 5000) -> dict[str, Any]:
+    per_call_dir = REPO_ROOT / "insights_per_call"
+    files = sorted(per_call_dir.glob("*.json")) if per_call_dir.exists() else []
+    files = files[:max_files]
+
+    def norm_status(s: Any) -> str:
+        val = str(s or "").strip().lower()
+        if val in {"resolved", "fully_resolved", "solved"}:
+            return "resolved"
+        if val in {"partially_resolved", "partial", "partially"}:
+            return "partial"
+        if val in {"unresolved", "not_resolved", "not resolved", "failed"}:
+            return "unresolved"
+        return "unknown"
+
+    resolution = {"resolved": 0, "partial": 0, "unresolved": 0, "unknown": 0}
+    emotions: dict[str, int] = {}
+    quality_flags: dict[str, int] = {}
+    unresolved_reasons: dict[str, int] = {}
+
+    for fp in files:
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        st = norm_status(data.get("resolution_status"))
+        resolution[st] = resolution.get(st, 0) + 1
+
+        emo = data.get("emotions") or {}
+        if isinstance(emo, dict):
+            client_emo = (emo.get("client") or "").strip().lower()
+            if client_emo:
+                emotions[client_emo] = emotions.get(client_emo, 0) + 1
+
+        qf = data.get("quality_flags") or []
+        if isinstance(qf, list):
+            for x in qf:
+                if isinstance(x, str) and x.strip():
+                    key = x.strip()
+                    quality_flags[key] = quality_flags.get(key, 0) + 1
+
+        if st in {"unresolved", "partial"}:
+            reason = ""
+            handoff = data.get("handoff")
+            if isinstance(handoff, str):
+                reason = handoff.strip()
+            elif isinstance(handoff, dict):
+                for k in ("reason", "type", "needed"):
+                    v = handoff.get(k)
+                    if isinstance(v, str) and v.strip():
+                        reason = v.strip()
+                        break
+            if not reason and isinstance(qf, list) and qf:
+                first = qf[0]
+                if isinstance(first, str) and first.strip():
+                    reason = first.strip()
+            if not reason:
+                mi = data.get("main_issue")
+                if isinstance(mi, str) and mi.strip():
+                    reason = mi.strip()
+            if reason:
+                unresolved_reasons[reason] = unresolved_reasons.get(reason, 0) + 1
+
+    top_reasons: list[dict[str, Any]] = []
+    top_path = REPO_ROOT / "insights_global" / "global_top_intents.json"
+    if top_path.exists():
+        try:
+            payload = json.loads(top_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                for row in payload[:20]:
+                    if not isinstance(row, dict):
+                        continue
+                    label = row.get("intent") or row.get("label") or row.get("name")
+                    value = row.get("count") or row.get("value")
+                    if isinstance(label, str) and isinstance(value, int):
+                        top_reasons.append({"label": label, "value": value})
+        except Exception:
+            pass
+
+    def top_n(d: dict[str, int], n: int = 10) -> list[dict[str, Any]]:
+        items = sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
+        return [{"label": k, "value": v} for k, v in items]
+
+    return {
+        "total_calls": sum(resolution.values()),
+        "resolution": resolution,
+        "top_reasons": top_reasons,
+        "quality_flags_top": top_n(quality_flags, 10),
+        "emotions_top": top_n(emotions, 8),
+        "unresolved_reasons_top": top_n(unresolved_reasons, 10),
+        "note": f"Computed from {min(len(files), max_files)} per-call JSON files.",
+    }
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         try:
@@ -379,6 +529,58 @@ class Handler(BaseHTTPRequestHandler):
             run = STORE.create_run(session_id=session_id, task=task, command=command)
             RUNNER.enqueue(run.id)
             return self._json(200, {"run": asdict(run)})
+
+        if parsed.path == "/api/session/audio":
+            session_id = payload.get("session_id")
+            files = payload.get("files")
+            if not session_id or session_id not in STORE.sessions:
+                return self._bad("invalid session_id")
+            if not isinstance(files, list):
+                return self._bad("files must be a list")
+            audio_dir = REPO_ROOT / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            cleaned: list[str] = []
+            for name in files:
+                if not isinstance(name, str):
+                    continue
+                if "/" in name or "\\" in name:
+                    continue
+                p = audio_dir / name
+                if not p.exists():
+                    continue
+                if p.suffix.lower() not in ALLOWED_AUDIO_EXTS:
+                    continue
+                cleaned.append(name)
+            STORE.set_session_audio(session_id=session_id, files=cleaned)
+            return self._json(200, {"ok": True, "files": cleaned})
+
+        if parsed.path == "/api/audio/upload":
+            files = payload.get("files")
+            if not isinstance(files, list) or not files:
+                return self._bad("files must be a non-empty list")
+            audio_dir = REPO_ROOT / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            saved: list[str] = []
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                name = (item.get("name") or "").strip()
+                data_b64 = (item.get("data_base64") or "").strip()
+                if not name or "/" in name or "\\" in name:
+                    continue
+                if Path(name).suffix.lower() not in ALLOWED_AUDIO_EXTS:
+                    continue
+                if not data_b64:
+                    continue
+                try:
+                    raw = base64.b64decode(data_b64, validate=True)
+                except Exception:
+                    continue
+                if len(raw) > 200 * 1024 * 1024:
+                    continue
+                (audio_dir / name).write_bytes(raw)
+                saved.append(name)
+            return self._json(200, {"ok": True, "saved": saved})
 
         if parsed.path == "/api/stop":
             run_id = payload.get("run_id")
