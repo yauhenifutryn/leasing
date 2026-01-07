@@ -234,3 +234,9 @@ python demo_ui/server.py
 ```
 
 Открыть: `http://127.0.0.1:8787`
+
+## License
+
+This project is proprietary. It is strictly forbidden to use this code for commercial purposes.
+The code is open for public viewing solely for portfolio demonstration and evaluation.
+See the [LICENSE](LICENSE) file for specific terms.
