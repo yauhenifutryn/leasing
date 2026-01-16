@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import json
-import re
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .citations import attach_citations
+from .text_utils import clean_answer
 from .consent import (
     consent_denied_response,
     consent_granted_response,
@@ -36,13 +36,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def _clean_answer(text: str) -> str:
-    cleaned = text.strip()
-    cleaned = re.sub(r"^\s*\*{0,2}ответ\*{0,2}\s*[:\-]\s*", "", cleaned, flags=re.I)
-    cleaned = re.sub(r"^\s*ответ\s*[:\-]\s*", "", cleaned, flags=re.I)
-    return cleaned.strip()
 
 
 class IndexRequest(BaseModel):
@@ -213,7 +206,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             max_tokens=settings.llm.max_tokens,
             timeout_sec=settings.llm.timeout_sec,
         )
-        answer = _clean_answer(llm_resp.text) or settings.app.strict_refusal_text
+        answer = clean_answer(llm_resp.text) or settings.app.strict_refusal_text
     except Exception as exc:
         state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
         response = {
