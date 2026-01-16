@@ -95,6 +95,7 @@ class Settings:
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPO_ROOT / "rag_demo_system" / "config" / "app.yaml"
+DEFAULT_ENV = REPO_ROOT / "rag_demo_system" / ".env"
 
 
 def _resolve_path(value: str | Path) -> Path:
@@ -104,7 +105,28 @@ def _resolve_path(value: str | Path) -> Path:
     return path
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def load_settings(path: Path | None = None) -> Settings:
+    _load_env_file(DEFAULT_ENV)
     cfg_path = path or DEFAULT_CONFIG
     payload = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
 
