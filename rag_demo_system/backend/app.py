@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .citations import attach_citations
-from .text_utils import clean_answer
+from .text_utils import clean_answer, iter_final_text
 from .consent import (
     consent_denied_response,
     consent_granted_response,
@@ -49,6 +49,7 @@ class RetrieveRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    stream: bool = False
 
 
 @app.get("/api/health")
@@ -194,7 +195,84 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         f"{weak_hint}{context_block}\n\nВопрос клиента: {message}"
     )
 
-    from .llm import call_openai_compatible
+    from .llm import call_openai_compatible, iter_openai_compatible_stream
+
+    if stream:
+        def gen() -> Any:
+            streamed_parts: list[str] = []
+            had_final = False
+            try:
+                stream_iter = iter_openai_compatible_stream(
+                    base_url=settings.llm.base_url,
+                    model=settings.llm.model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=settings.llm.temperature,
+                    max_tokens=settings.llm.max_tokens,
+                    timeout_sec=settings.llm.timeout_sec,
+                )
+                for chunk in iter_final_text(stream_iter):
+                    had_final = True
+                    streamed_parts.append(chunk)
+                    yield f"data: {json.dumps({'type': 'delta', 'text': chunk}, ensure_ascii=False)}\\n\\n"
+            except Exception as exc:
+                state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
+                error_payload = {
+                    "type": "final",
+                    "ok": True,
+                    "session_id": session_id,
+                    "answer": (
+                        "LLM не настроен или недоступен. "
+                        "Проверьте RAG_LLM_BASE_URL и RAG_LLM_MODEL, затем перезапустите backend."
+                    ),
+                    "consent": "granted",
+                    "chunks": [],
+                    "used_knowledge": [],
+                    "citations": [],
+                }
+                yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\\n\\n"
+                return
+
+            if had_final:
+                answer_text = clean_answer("FINAL:" + "".join(streamed_parts))
+            else:
+                answer_text = settings.app.strict_refusal_text
+
+            citations = attach_citations(answer_text, final_chunks) if had_final else []
+            used_knowledge = [
+                {
+                    "chunk_id": c["chunk_id"],
+                    "heading_path": c.get("heading_path", []),
+                    "snippet": c.get("text", "")[:280],
+                    "source": c.get("source", ""),
+                    "doc_name": c.get("doc_name", ""),
+                }
+                for c in final_chunks
+            ] if had_final else []
+
+            state.log({
+                "event": "chat",
+                "session_id": session_id,
+                "question": message,
+                "normalized_query": retrieval.get("normalized_query"),
+                "rewritten_query": retrieval.get("rewritten_query"),
+                "top_rerank_score": retrieval.get("top_rerank_score"),
+                "chunks": [c.get("chunk_id") for c in final_chunks],
+            })
+
+            final_payload = {
+                "type": "final",
+                "ok": True,
+                "session_id": session_id,
+                "answer": answer_text,
+                "consent": "granted",
+                "chunks": final_chunks if had_final else [],
+                "used_knowledge": used_knowledge,
+                "citations": citations,
+            }
+            yield f"data: {json.dumps(final_payload, ensure_ascii=False)}\\n\\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     try:
         llm_resp = call_openai_compatible(

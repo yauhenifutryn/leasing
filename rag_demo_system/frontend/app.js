@@ -4,6 +4,7 @@ const $ = (sel) => document.querySelector(sel);
 
 let sessionId = null;
 let chunksCollapsed = false;
+const STREAMING = true;
 
 function setStatus(text, level = "warn") {
   const badge = $("#statusBadge");
@@ -19,6 +20,7 @@ function renderMessage(role, text) {
   row.innerHTML = `<div class="role">${role}</div><div class="text">${text}</div>`;
   $("#chatWindow").appendChild(row);
   $("#chatWindow").scrollTop = $("#chatWindow").scrollHeight;
+  return row.querySelector(".text");
 }
 
 function renderChunks(chunks) {
@@ -61,12 +63,52 @@ async function sendMessage() {
   renderMessage("user", message);
   setStatus("Thinking", "warn");
 
-  const payload = { message, session_id: sessionId };
-  const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
-  sessionId = resp.session_id;
-  renderMessage("agent", resp.answer);
-  renderChunks(resp.used_knowledge || []);
-  setStatus("Idle", "good");
+  const payload = { message, session_id: sessionId, stream: STREAMING };
+  if (!STREAMING) {
+    const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
+    sessionId = resp.session_id;
+    renderMessage("agent", resp.answer);
+    renderChunks(resp.used_knowledge || []);
+    setStatus("Idle", "good");
+    return;
+  }
+
+  const agentTextEl = renderMessage("agent", "");
+  const res = await fetch(`${API_BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error("Stream failed");
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop();
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue;
+      const jsonText = line.slice(5).trim();
+      if (!jsonText) continue;
+      const evt = JSON.parse(jsonText);
+      if (evt.type === "delta") {
+        answer += evt.text || "";
+        agentTextEl.textContent = answer;
+      } else if (evt.type === "final") {
+        sessionId = evt.session_id;
+        agentTextEl.textContent = evt.answer || answer;
+        renderChunks(evt.used_knowledge || []);
+        setStatus("Idle", "good");
+      }
+    }
+  }
 }
 
 async function indexKb() {
