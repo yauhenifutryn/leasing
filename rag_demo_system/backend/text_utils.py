@@ -6,6 +6,8 @@ from collections.abc import Iterable, Iterator
 
 def clean_answer(text: str) -> str:
     cleaned = text.strip()
+    cleaned = re.sub(r"(?is)<think>.*?</think>", "", cleaned)
+    cleaned = re.sub(r"(?i)</?think>", "", cleaned)
     parts = re.split(r"(?i)\bfinal\s*:\s*", cleaned)
     if len(parts) > 1:
         cleaned = parts[-1].strip()
@@ -15,23 +17,88 @@ def clean_answer(text: str) -> str:
     return cleaned.strip()
 
 
+def _emit_visible(text: str, carry: str) -> tuple[list[str], str]:
+    data = carry + text
+    out_parts: list[str] = []
+    while True:
+        idx = data.upper().find("FINAL:")
+        if idx == -1:
+            if len(data) <= 6:
+                return out_parts, data
+            out_parts.append(data[:-6])
+            return out_parts, data[-6:]
+        if idx:
+            out_parts.append(data[:idx])
+        data = data[idx + len("FINAL:") :]
+
+
 def iter_final_text(chunks: Iterable[str]) -> Iterator[str]:
     buffer = ""
-    found = False
+    in_think = False
+    carry = ""
+    found_final = False
+    allow_after_think = False
+    final_marker = "FINAL:"
     for chunk in chunks:
         if not chunk:
             continue
-        if found:
-            yield chunk
-            continue
         buffer += chunk
-        marker_index = buffer.upper().find("FINAL:")
-        if marker_index == -1:
-            if len(buffer) > 32:
-                buffer = buffer[-16:]
-            continue
-        found = True
-        remainder = buffer[marker_index + len("FINAL:") :]
-        buffer = ""
-        if remainder:
-            yield remainder
+        while buffer:
+            if in_think:
+                end = buffer.lower().find("</think>")
+                if end == -1:
+                    if len(buffer) > 16:
+                        buffer = buffer[-16:]
+                    break
+                buffer = buffer[end + len("</think>") :]
+                in_think = False
+                allow_after_think = True
+                continue
+            start = buffer.lower().find("<think>")
+            if start != -1:
+                visible = buffer[:start]
+                if found_final or allow_after_think:
+                    out_parts, carry = _emit_visible(visible, carry)
+                    for part in out_parts:
+                        if part:
+                            yield part
+                else:
+                    data = carry + visible
+                    idx = data.upper().find(final_marker)
+                    if idx != -1:
+                        found_final = True
+                        carry = ""
+                        remainder = data[idx + len(final_marker) :]
+                        if remainder:
+                            out_parts, carry = _emit_visible(remainder, carry)
+                            for part in out_parts:
+                                if part:
+                                    yield part
+                    else:
+                        carry = data[-6:] if len(data) > 6 else data
+                buffer = buffer[start + len("<think>") :]
+                in_think = True
+                continue
+            if found_final or allow_after_think:
+                out_parts, carry = _emit_visible(buffer, carry)
+                for part in out_parts:
+                    if part:
+                        yield part
+            else:
+                data = carry + buffer
+                idx = data.upper().find(final_marker)
+                if idx != -1:
+                    found_final = True
+                    carry = ""
+                    remainder = data[idx + len(final_marker) :]
+                    if remainder:
+                        out_parts, carry = _emit_visible(remainder, carry)
+                        for part in out_parts:
+                            if part:
+                                yield part
+                else:
+                    carry = data[-6:] if len(data) > 6 else data
+            buffer = ""
+            break
+    if (found_final or allow_after_think) and not in_think and carry:
+        yield carry

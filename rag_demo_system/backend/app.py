@@ -234,7 +234,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 return
 
             if had_final:
-                answer_text = clean_answer("FINAL:" + "".join(streamed_parts))
+                answer_text = clean_answer("".join(streamed_parts))
             else:
                 answer_text = settings.app.strict_refusal_text
 
