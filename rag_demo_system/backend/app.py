@@ -361,6 +361,8 @@ async def voice_status() -> JSONResponse:
 def _stream_or_json(payload: dict[str, Any], stream: bool) -> Any:
     if not stream:
         return payload
+    if "type" not in payload:
+        payload = {"type": "final", **payload}
 
     def gen() -> Any:
         yield f"data: {json.dumps(payload, ensure_ascii=False)}\\n\\n"
