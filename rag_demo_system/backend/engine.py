@@ -13,10 +13,8 @@ from .cache import TTLCache
 from .ingest import Chunk, build_chunks
 from .query import load_abbreviations, normalize_query
 from .rag import ensure_collection, search, upsert_chunks
-from .llm import call_openai_compatible
 from .rerank import Reranker
 from .settings import Settings
-from .text_utils import sanitize_rewrite
 
 logger = logging.getLogger("rag_demo")
 
@@ -122,25 +120,6 @@ class RAGEngine:
         original_query = query
         normalized = normalize_query(query, self.abbrev)
         rewritten = normalized
-        if self.settings.llm.base_url and self.settings.llm.model:
-            try:
-                llm_resp = call_openai_compatible(
-                    base_url=self.settings.llm.base_url,
-                    model=self.settings.llm.model,
-                    system_prompt=(
-                        "Переформулируй запрос клиента в короткий поисковый запрос для базы знаний. "
-                        "Без домыслов, только ключевые слова. Верни одну строку."
-                    ),
-                    user_prompt=f"Запрос клиента: {normalized}",
-                    temperature=0.0,
-                    max_tokens=48,
-                    timeout_sec=8,
-                )
-                candidate = sanitize_rewrite(llm_resp.text)
-                if candidate:
-                    rewritten = candidate
-            except Exception:
-                rewritten = normalized
 
         embedder = self._get_embedder()
         cached = self.query_cache.get(rewritten)

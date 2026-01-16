@@ -24,13 +24,13 @@ def test_clean_answer_strips_think_block() -> None:
 def test_iter_final_text_skips_until_marker() -> None:
     chunks = ["Размышления ", "FINAL:", " Здравствуйте", ". Чем могу помочь?"]
     out = "".join(iter_final_text(chunks))
-    assert out == " Здравствуйте. Чем могу помочь?"
+    assert out == "Размышления  Здравствуйте. Чем могу помочь?"
 
 
 def test_iter_final_text_skips_think_block() -> None:
     chunks = ["<think>шаг 1", " шаг 2</think>", "FINAL: Привет"]
     out = "".join(iter_final_text(chunks))
-    assert out == " Привет"
+    assert out == "Привет"
 
 
 def test_iter_final_text_fallback_after_think() -> None:

@@ -51,10 +51,6 @@ def _emit_visible(text: str, carry: str) -> tuple[list[str], str]:
 def iter_final_text(chunks: Iterable[str]) -> Iterator[str]:
     buffer = ""
     in_think = False
-    carry = ""
-    found_final = False
-    allow_after_think = False
-    final_marker = "FINAL:"
     for chunk in chunks:
         if not chunk:
             continue
@@ -68,53 +64,16 @@ def iter_final_text(chunks: Iterable[str]) -> Iterator[str]:
                     break
                 buffer = buffer[end + len("</think>") :]
                 in_think = False
-                allow_after_think = True
                 continue
             start = buffer.lower().find("<think>")
             if start != -1:
                 visible = buffer[:start]
-                if found_final or allow_after_think:
-                    out_parts, carry = _emit_visible(visible, carry)
-                    for part in out_parts:
-                        if part:
-                            yield part
-                else:
-                    data = carry + visible
-                    idx = data.upper().find(final_marker)
-                    if idx != -1:
-                        found_final = True
-                        carry = ""
-                        remainder = data[idx + len(final_marker) :]
-                        if remainder:
-                            out_parts, carry = _emit_visible(remainder, carry)
-                            for part in out_parts:
-                                if part:
-                                    yield part
-                    else:
-                        carry = data[-6:] if len(data) > 6 else data
                 buffer = buffer[start + len("<think>") :]
                 in_think = True
-                continue
-            if found_final or allow_after_think:
-                out_parts, carry = _emit_visible(buffer, carry)
-                for part in out_parts:
-                    if part:
-                        yield part
             else:
-                data = carry + buffer
-                idx = data.upper().find(final_marker)
-                if idx != -1:
-                    found_final = True
-                    carry = ""
-                    remainder = data[idx + len(final_marker) :]
-                    if remainder:
-                        out_parts, carry = _emit_visible(remainder, carry)
-                        for part in out_parts:
-                            if part:
-                                yield part
-                else:
-                    carry = data[-6:] if len(data) > 6 else data
-            buffer = ""
-            break
-    if (found_final or allow_after_think) and not in_think and carry:
-        yield carry
+                visible = buffer
+                buffer = ""
+            if visible:
+                cleaned = re.sub(r"(?i)\bfinal\s*:\s*", "", visible)
+                if cleaned:
+                    yield cleaned
