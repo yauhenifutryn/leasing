@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn==0.30.6
+pydantic==2.10.2
+pyyaml==6.0.2
+requests==2.32.3
+qdrant-client==1.12.1
+sentence-transformers==3.4.1
+rank-bm25==0.2.2
+pytest==8.3.4
+huggingface-hub==0.24.5

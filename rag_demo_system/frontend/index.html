@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Микро Лизинг · RAG Demo</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar card">
+        <div>
+          <h1>Микро Лизинг · RAG Demo</h1>
+          <p>Самостоятельный on‑prem RAG (Qdrant + Qwen) с контролем качества и voice‑режимом.</p>
+        </div>
+        <div class="status">
+          <span class="badge" id="statusBadge"><span class="dot warn"></span><span id="statusText">Idle</span></span>
+        </div>
+      </header>
+
+      <main class="grid">
+        <section class="card chat">
+          <div class="row">
+            <h2>Чат</h2>
+            <div class="actions">
+              <button class="btn ghost" id="btnIndex">Индексировать KB</button>
+              <button class="btn good" id="btnConsent">Дать согласие</button>
+              <button class="btn primary" id="btnClear">Очистить</button>
+            </div>
+          </div>
+          <div class="chat-window" id="chatWindow"></div>
+          <div class="composer">
+            <input class="input" id="chatInput" placeholder="Введите вопрос..." />
+            <button class="btn good" id="btnSend">Отправить</button>
+          </div>
+        </section>
+
+        <section class="card voice">
+          <div class="row">
+            <h2>Voice</h2>
+            <label class="switch" title="Voice будет добавлен позже">
+              <input type="checkbox" id="voiceToggle" disabled />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="help">Voice‑интеграция (ElevenLabs) будет добавлена позже.</div>
+          <div class="transcript" id="transcript"></div>
+          <div class="row">
+            <span class="badge" id="voiceStatus"><span class="dot warn"></span><span id="voiceText">Voice: disabled</span></span>
+          </div>
+        </section>
+
+        <section class="card inspector">
+          <div class="row">
+            <h2>Used knowledge</h2>
+            <button class="btn ghost" id="btnToggleChunks">Свернуть</button>
+          </div>
+          <div id="chunksPanel" class="chunks"></div>
+        </section>
+
+        <section class="card logs">
+          <div class="row">
+            <h2>Логи</h2>
+            <button class="btn ghost" id="btnRefreshLogs">Обновить</button>
+          </div>
+          <div class="log" id="logPanel"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

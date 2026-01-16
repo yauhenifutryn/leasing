@@ -1,0 +1,12 @@
+# Runtime state
+.state/
+
+# Local models / caches
+.models/
+__pycache__/
+
+# Frontend build artifacts (if ever added)
+dist/
+
+# Env files
+.env
