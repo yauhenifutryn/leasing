@@ -26,3 +26,10 @@ def test_streamed_consent_response_has_final_type() -> None:
     payload_text = payload_text.replace("\\r", "").replace("\\n", "")
     payload = json.loads(payload_text)
     assert payload.get("type") == "final"
+
+
+def test_stream_events_use_real_newlines() -> None:
+    client = TestClient(app)
+    resp = client.post("/api/chat", json={"message": "да", "stream": True})
+    assert "\n\n" in resp.text
+    assert "\\n\\n" not in resp.text

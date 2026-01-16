@@ -215,7 +215,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 for chunk in iter_final_text(stream_iter):
                     had_final = True
                     streamed_parts.append(chunk)
-                    yield f"data: {json.dumps({'type': 'delta', 'text': chunk}, ensure_ascii=False)}\\n\\n"
+                    yield f"data: {json.dumps({'type': 'delta', 'text': chunk}, ensure_ascii=False)}\n\n"
             except Exception as exc:
                 state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
                 error_payload = {
@@ -231,7 +231,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                     "used_knowledge": [],
                     "citations": [],
                 }
-                yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\\n\\n"
+                yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
                 return
 
             if had_final:
@@ -271,7 +271,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 "used_knowledge": used_knowledge,
                 "citations": citations,
             }
-            yield f"data: {json.dumps(final_payload, ensure_ascii=False)}\\n\\n"
+            yield f"data: {json.dumps(final_payload, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -365,6 +365,6 @@ def _stream_or_json(payload: dict[str, Any], stream: bool) -> Any:
         payload = {"type": "final", **payload}
 
     def gen() -> Any:
-        yield f"data: {json.dumps(payload, ensure_ascii=False)}\\n\\n"
+        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
