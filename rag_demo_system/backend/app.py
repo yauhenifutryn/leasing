@@ -80,6 +80,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     message = payload.message.strip()
     if not message:
         return {"ok": False, "error": "empty message"}
+    stream = bool(payload.stream) or stream
 
     session_id = payload.session_id or str(uuid.uuid4())
     session = state.get(session_id) or state.create(session_id)
