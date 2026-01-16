@@ -16,6 +16,7 @@ from .rag import ensure_collection, search, upsert_chunks
 from .llm import call_openai_compatible
 from .rerank import Reranker
 from .settings import Settings
+from .text_utils import sanitize_rewrite
 
 logger = logging.getLogger("rag_demo")
 
@@ -135,7 +136,7 @@ class RAGEngine:
                     max_tokens=48,
                     timeout_sec=8,
                 )
-                candidate = llm_resp.text.strip().splitlines()[0].strip()
+                candidate = sanitize_rewrite(llm_resp.text)
                 if candidate:
                     rewritten = candidate
             except Exception:

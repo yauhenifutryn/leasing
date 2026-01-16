@@ -16,6 +16,13 @@ def clean_answer(text: str) -> str:
     cleaned = re.sub(r"^\s*\*+\s*", "", cleaned)
     return cleaned.strip()
 
+def sanitize_rewrite(text: str) -> str:
+    cleaned = clean_answer(text)
+    if not cleaned:
+        return ""
+    first_line = cleaned.splitlines()[0].strip()
+    return first_line.strip()
+
 
 def _emit_visible(text: str, carry: str) -> tuple[list[str], str]:
     data = carry + text
