@@ -47,3 +47,13 @@ def test_sanitize_rewrite_strips_think_and_final() -> None:
 def test_sanitize_rewrite_keeps_first_line_only() -> None:
     raw = "ключевые слова\nвторая строка"
     assert sanitize_rewrite(raw) == "ключевые слова"
+
+
+def test_sanitize_rewrite_rejects_long_sentence() -> None:
+    raw = "Это слишком длинный запрос который выглядит как предложение и не подходит"
+    assert sanitize_rewrite(raw) == ""
+
+
+def test_sanitize_rewrite_rejects_sentence_punctuation() -> None:
+    raw = "ключевые слова должны быть краткими."
+    assert sanitize_rewrite(raw) == ""

@@ -21,6 +21,15 @@ def sanitize_rewrite(text: str) -> str:
     if not cleaned:
         return ""
     first_line = cleaned.splitlines()[0].strip()
+    first_line = first_line.strip("\"'“”")
+    if not first_line:
+        return ""
+    if re.search(r"[.!?]", first_line):
+        return ""
+    if len(first_line) > 80:
+        return ""
+    if len(first_line.split()) > 10:
+        return ""
     return first_line.strip()
 
 
