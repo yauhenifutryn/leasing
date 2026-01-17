@@ -36,6 +36,7 @@ body{
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;}
 .topbar h1{margin:0;font-size:20px;}
 .topbar p{margin:6px 0 0;color:var(--muted);font-size:13px;}
+.status{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 
 .grid{display:grid;grid-template-columns:1.4fr 0.8fr;gap:16px;margin-top:16px;}
 @media (max-width: 1100px){.grid{grid-template-columns:1fr;}}
@@ -75,11 +76,17 @@ body{
 .dot{width:9px;height:9px;border-radius:50%;background:var(--warn)}
 .dot.good{background:var(--good)}
 .dot.danger{background:var(--danger)}
+.timer{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:11px;font-weight:800;text-transform:uppercase;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--muted);}
+.timer-label{color:var(--muted);}
 
 .chat-window{min-height:360px;max-height:520px;overflow:auto;border-radius:12px;border:1px solid rgba(255,255,255,0.06);padding:12px;background:rgba(255,255,255,0.02);}
 .message{margin-bottom:12px;}
 .message .role{font-size:12px;color:var(--muted);text-transform:uppercase;font-weight:800;}
 .message .text{margin-top:4px;line-height:1.5;}
+.message .meta{margin-top:6px;}
+.message.pending .text{display:flex;align-items:center;gap:8px;color:var(--muted);}
+.time-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);color:var(--muted);}
+.spinner{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,0.35);border-top-color:var(--accent);animation:spin 0.8s linear infinite;flex:0 0 auto;}
 
 .composer{display:flex;gap:10px;margin-top:10px;}
 
@@ -100,3 +107,8 @@ body{
 .switch input:checked + .slider:before{transform:translateX(24px);} 
 
 .help{font-size:12px;color:var(--muted);line-height:1.4}
+
+@keyframes spin{
+  from{transform:rotate(0deg);}
+  to{transform:rotate(360deg);}
+}

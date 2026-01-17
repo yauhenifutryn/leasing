@@ -5,6 +5,44 @@ const $ = (sel) => document.querySelector(sel);
 let sessionId = null;
 let chunksCollapsed = false;
 const STREAMING = true;
+let activeTimer = null;
+let requestStartMs = null;
+
+function formatMs(ms) {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function updateTimer(elapsedMs) {
+  const el = $("#responseTimer");
+  if (!el) return;
+  el.textContent = formatMs(elapsedMs);
+}
+
+function startTimer() {
+  stopTimer();
+  requestStartMs = performance.now();
+  updateTimer(0);
+  activeTimer = setInterval(() => {
+    updateTimer(performance.now() - requestStartMs);
+  }, 120);
+}
+
+function stopTimer() {
+  if (activeTimer) {
+    clearInterval(activeTimer);
+    activeTimer = null;
+  }
+  if (requestStartMs === null) return null;
+  const elapsedMs = performance.now() - requestStartMs;
+  updateTimer(elapsedMs);
+  requestStartMs = null;
+  return elapsedMs;
+}
+
+function setTimePill(metaEl, elapsedMs) {
+  if (!metaEl || elapsedMs === null) return;
+  metaEl.innerHTML = `<span class="time-pill">${formatMs(elapsedMs)}</span>`;
+}
 
 function setStatus(text, level = "warn") {
   const badge = $("#statusBadge");
@@ -14,13 +52,33 @@ function setStatus(text, level = "warn") {
   $("#statusText").textContent = text;
 }
 
-function renderMessage(role, text) {
+function renderMessage(role, text, opts = {}) {
   const row = document.createElement("div");
   row.className = "message";
-  row.innerHTML = `<div class="role">${role}</div><div class="text">${text}</div>`;
+  if (opts.pending) row.classList.add("pending");
+
+  const roleEl = document.createElement("div");
+  roleEl.className = "role";
+  roleEl.textContent = role;
+
+  const textEl = document.createElement("div");
+  textEl.className = "text";
+  if (opts.pending) {
+    const pendingText = opts.pendingText || "Агент думает...";
+    textEl.innerHTML = `<span class="spinner"></span><span class="pending-text">${pendingText}</span>`;
+  } else {
+    textEl.textContent = text;
+  }
+
+  const metaEl = document.createElement("div");
+  metaEl.className = "meta";
+
+  row.appendChild(roleEl);
+  row.appendChild(textEl);
+  row.appendChild(metaEl);
   $("#chatWindow").appendChild(row);
   $("#chatWindow").scrollTop = $("#chatWindow").scrollHeight;
-  return row.querySelector(".text");
+  return { row, textEl, metaEl };
 }
 
 function renderChunks(chunks) {
@@ -62,52 +120,71 @@ async function sendMessage() {
   input.value = "";
   renderMessage("user", message);
   setStatus("Thinking", "warn");
+  startTimer();
+  const agentMsg = renderMessage("agent", "", { pending: true });
 
   const payload = { message, session_id: sessionId, stream: STREAMING };
-  if (!STREAMING) {
-    const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
-    sessionId = resp.session_id;
-    renderMessage("agent", resp.answer);
-    renderChunks(resp.used_knowledge || []);
-    setStatus("Idle", "good");
-    return;
-  }
+  try {
+    if (!STREAMING) {
+      const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
+      sessionId = resp.session_id;
+      agentMsg.row.classList.remove("pending");
+      agentMsg.textEl.textContent = resp.answer;
+      setTimePill(agentMsg.metaEl, stopTimer());
+      renderChunks(resp.used_knowledge || []);
+      setStatus("Idle", "good");
+      return;
+    }
 
-  const agentTextEl = renderMessage("agent", "");
-  const res = await fetch(`${API_BASE}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok || !res.body) {
-    throw new Error("Stream failed");
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let answer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop();
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data:")) continue;
-      const jsonText = line.slice(5).trim();
-      if (!jsonText) continue;
-      const evt = JSON.parse(jsonText);
-      if (evt.type === "delta") {
-        answer += evt.text || "";
-        agentTextEl.textContent = answer;
-      } else if (evt.type === "final") {
-        sessionId = evt.session_id;
-        agentTextEl.textContent = evt.answer || answer;
-        renderChunks(evt.used_knowledge || []);
-        setStatus("Idle", "good");
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) {
+      throw new Error("Stream failed");
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let answer = "";
+    let sawDelta = false;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data:")) continue;
+        const jsonText = line.slice(5).trim();
+        if (!jsonText) continue;
+        const evt = JSON.parse(jsonText);
+        if (evt.type === "delta") {
+          if (!sawDelta) {
+            sawDelta = true;
+            setStatus("Streaming", "warn");
+            agentMsg.row.classList.remove("pending");
+          }
+          answer += evt.text || "";
+          agentMsg.textEl.textContent = answer;
+        } else if (evt.type === "final") {
+          sessionId = evt.session_id;
+          agentMsg.row.classList.remove("pending");
+          agentMsg.textEl.textContent = evt.answer || answer;
+          setTimePill(agentMsg.metaEl, stopTimer());
+          renderChunks(evt.used_knowledge || []);
+          setStatus("Idle", "good");
+        }
       }
     }
+  } catch (err) {
+    stopTimer();
+    setStatus("Error", "danger");
+    agentMsg.row.classList.remove("pending");
+    agentMsg.textEl.textContent = "Ошибка запроса. Проверьте соединение и повторите.";
+    throw err;
   }
 }
 
