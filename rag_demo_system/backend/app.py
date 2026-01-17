@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .citations import attach_citations
 from .text_utils import clean_answer, iter_final_text
+from .memory import build_memory_block
 from .consent import (
     consent_denied_response,
     consent_granted_response,
@@ -50,6 +51,17 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     stream: bool = False
+    fast: bool = False
+
+
+def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> None:
+    if max_turns <= 0:
+        return
+    session.transcript.append({"role": "user", "text": message})
+    session.transcript.append({"role": "assistant", "text": answer})
+    limit = max_turns * 2
+    if limit > 0 and len(session.transcript) > limit:
+        session.transcript = session.transcript[-limit:]
 
 
 @app.get("/api/health")
@@ -81,6 +93,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     if not message:
         return {"ok": False, "error": "empty message"}
     stream = bool(payload.stream) or stream
+    fast = bool(payload.fast)
 
     session_id = payload.session_id or str(uuid.uuid4())
     session = state.get(session_id) or state.create(session_id)
@@ -143,9 +156,11 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "chunks": [],
             "citations": [],
         }
+        _append_turn(session, message, routed.response, settings.app.memory_turns)
+        state.update(session)
         return _stream_or_json(response, stream)
 
-    retrieval = engine.retrieve(message)
+    retrieval = engine.retrieve(message, fast=fast)
     if not retrieval.get("ok"):
         response = {
             "ok": True,
@@ -155,6 +170,8 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "chunks": [],
             "citations": [],
         }
+        _append_turn(session, message, response["answer"], settings.app.memory_turns)
+        state.update(session)
         return _stream_or_json(response, stream)
 
     final_chunks = retrieval.get("final") or []
@@ -169,9 +186,12 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "chunks": [],
             "citations": [],
         }
+        _append_turn(session, message, response["answer"], settings.app.memory_turns)
+        state.update(session)
         return _stream_or_json(response, stream)
 
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    memory_block = build_memory_block(session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
         [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
     )
@@ -192,11 +212,14 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     user_prompt = (
         "Ответь строго на основе следующих фрагментов базы знаний. "
         "Если ответа нет — верни точный отказ.\n\n"
-        f"{length_hint}\n\n"
+        f"{memory_block}{length_hint}\n\n"
         f"{weak_hint}{context_block}\n\nВопрос клиента: {message}"
     )
 
     from .llm import call_openai_compatible, iter_openai_compatible_stream
+
+    model = settings.llm.fast_model if fast and settings.llm.fast_model else settings.llm.model
+    max_tokens = settings.llm.fast_max_tokens if fast else settings.llm.max_tokens
 
     if stream:
         def gen() -> Any:
@@ -205,11 +228,11 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             try:
                 stream_iter = iter_openai_compatible_stream(
                     base_url=settings.llm.base_url,
-                    model=settings.llm.model,
+                    model=model,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     temperature=settings.llm.temperature,
-                    max_tokens=settings.llm.max_tokens,
+                    max_tokens=max_tokens,
                     timeout_sec=settings.llm.timeout_sec,
                 )
                 for chunk in iter_final_text(stream_iter):
@@ -238,6 +261,9 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 answer_text = clean_answer("".join(streamed_parts))
             else:
                 answer_text = settings.app.strict_refusal_text
+
+            _append_turn(session, message, answer_text, settings.app.memory_turns)
+            state.update(session)
 
             citations = attach_citations(answer_text, final_chunks) if had_final else []
             used_knowledge = [
@@ -278,11 +304,11 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     try:
         llm_resp = call_openai_compatible(
             base_url=settings.llm.base_url,
-            model=settings.llm.model,
+            model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=settings.llm.temperature,
-            max_tokens=settings.llm.max_tokens,
+            max_tokens=max_tokens,
             timeout_sec=settings.llm.timeout_sec,
         )
         answer = clean_answer(llm_resp.text) or settings.app.strict_refusal_text
@@ -335,6 +361,8 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "candidates": retrieval.get("candidates"),
         },
     }
+    _append_turn(session, message, answer, settings.app.memory_turns)
+    state.update(session)
     return _stream_or_json(response, stream)
 
 

@@ -15,6 +15,7 @@ class AppConfig:
     system_prompt_path: Path
     kb_markdown_path: Path
     strict_refusal_text: str
+    memory_turns: int
 
 
 @dataclass
@@ -41,6 +42,10 @@ class RetrievalConfig:
     score_threshold: float
     min_rerank_score: float
     context_max_tokens: int
+    fast_vector_top_k: int
+    fast_bm25_top_k: int
+    fast_final_top_n: int
+    fast_context_max_tokens: int
 
 
 @dataclass
@@ -50,6 +55,8 @@ class LLMConfig:
     model: str
     temperature: float
     max_tokens: int
+    fast_model: str
+    fast_max_tokens: int
     timeout_sec: int
     concise_sentences_min: int
     concise_sentences_max: int
@@ -146,11 +153,12 @@ def load_settings(path: Path | None = None) -> Settings:
             system_prompt_path=_resolve_path(app.get("system_prompt_path")),
             kb_markdown_path=_resolve_path(app.get("kb_markdown_path")),
             strict_refusal_text=app.get("strict_refusal_text", ""),
+            memory_turns=int(app.get("memory_turns", 4)),
         ),
         embedding=EmbeddingConfig(
             model_name=embedding.get("model_name", "intfloat/multilingual-e5-large"),
             batch_size=int(embedding.get("batch_size", 16)),
-            device=embedding.get("device", "cpu"),
+            device=os.getenv("RAG_EMBEDDING_DEVICE", embedding.get("device", "cpu")),
             max_characters=int(embedding.get("max_characters", 6000)),
             chunk_size_tokens=int(embedding.get("chunk_size_tokens", 700)),
             chunk_overlap_tokens=int(embedding.get("chunk_overlap_tokens", 120)),
@@ -166,6 +174,10 @@ def load_settings(path: Path | None = None) -> Settings:
             score_threshold=float(retrieval.get("score_threshold", 0.35)),
             min_rerank_score=float(retrieval.get("min_rerank_score", 0.10)),
             context_max_tokens=int(retrieval.get("context_max_tokens", 1800)),
+            fast_vector_top_k=int(retrieval.get("fast_vector_top_k", 4)),
+            fast_bm25_top_k=int(retrieval.get("fast_bm25_top_k", 4)),
+            fast_final_top_n=int(retrieval.get("fast_final_top_n", 3)),
+            fast_context_max_tokens=int(retrieval.get("fast_context_max_tokens", 900)),
         ),
         llm=LLMConfig(
             provider=llm.get("provider", "openai_compatible"),
@@ -173,6 +185,8 @@ def load_settings(path: Path | None = None) -> Settings:
             model=os.getenv("RAG_LLM_MODEL", llm.get("model", "")),
             temperature=float(llm.get("temperature", 0.1)),
             max_tokens=int(llm.get("max_tokens", 420)),
+            fast_model=os.getenv("RAG_LLM_FAST_MODEL", llm.get("fast_model", "")),
+            fast_max_tokens=int(os.getenv("RAG_LLM_FAST_MAX_TOKENS", llm.get("fast_max_tokens", 220))),
             timeout_sec=int(llm.get("timeout_sec", 60)),
             concise_sentences_min=int(llm.get("concise_sentences_min", 3)),
             concise_sentences_max=int(llm.get("concise_sentences_max", 6)),
@@ -181,7 +195,7 @@ def load_settings(path: Path | None = None) -> Settings:
         reranker=RerankerConfig(
             enabled=bool(reranker.get("enabled", True)),
             model_name=reranker.get("model_name", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"),
-            device=reranker.get("device", "cpu"),
+            device=os.getenv("RAG_RERANKER_DEVICE", reranker.get("device", "cpu")),
             batch_size=int(reranker.get("batch_size", 16)),
             allow_no_rerank=bool(reranker.get("allow_no_rerank", False)),
         ),

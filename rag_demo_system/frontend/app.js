@@ -7,6 +7,7 @@ let chunksCollapsed = false;
 const STREAMING = true;
 let activeTimer = null;
 let requestStartMs = null;
+let consentState = "needed";
 
 function formatMs(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
@@ -25,6 +26,35 @@ function startTimer() {
   activeTimer = setInterval(() => {
     updateTimer(performance.now() - requestStartMs);
   }, 120);
+}
+
+function setSessionId(id) {
+  if (!id) return;
+  sessionId = id;
+  localStorage.setItem("rag_session_id", id);
+}
+
+function setConsentState(state) {
+  if (!state) return;
+  consentState = state;
+  localStorage.setItem("rag_consent", state);
+  const granted = state === "granted";
+  $("#chatInput").disabled = !granted;
+  $("#btnSend").disabled = !granted;
+  $("#btnConsent").disabled = granted;
+  $("#chatInput").placeholder = granted ? "Введите вопрос..." : "Сначала подтвердите согласие...";
+}
+
+function initSession() {
+  const storedSession = localStorage.getItem("rag_session_id");
+  const storedConsent = localStorage.getItem("rag_consent");
+  if (storedSession) {
+    sessionId = storedSession;
+  }
+  if (storedConsent) {
+    consentState = storedConsent;
+  }
+  setConsentState(consentState || "needed");
 }
 
 function stopTimer() {
@@ -113,10 +143,14 @@ async function api(path, opts = {}) {
   return data;
 }
 
-async function sendMessage() {
+async function sendMessage(opts = {}) {
   const input = $("#chatInput");
   const message = input.value.trim();
   if (!message) return;
+  if (!opts.bypassConsent && consentState !== "granted") {
+    setStatus("Need consent", "warn");
+    return;
+  }
   input.value = "";
   renderMessage("user", message);
   setStatus("Thinking", "warn");
@@ -127,7 +161,8 @@ async function sendMessage() {
   try {
     if (!STREAMING) {
       const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
-      sessionId = resp.session_id;
+      setSessionId(resp.session_id);
+      setConsentState(resp.consent || consentState);
       agentMsg.row.classList.remove("pending");
       agentMsg.textEl.textContent = resp.answer;
       setTimePill(agentMsg.metaEl, stopTimer());
@@ -149,6 +184,7 @@ async function sendMessage() {
     let buffer = "";
     let answer = "";
     let sawDelta = false;
+    let sawFinal = false;
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -170,7 +206,9 @@ async function sendMessage() {
           answer += evt.text || "";
           agentMsg.textEl.textContent = answer;
         } else if (evt.type === "final") {
-          sessionId = evt.session_id;
+          sawFinal = true;
+          setSessionId(evt.session_id);
+          setConsentState(evt.consent || consentState);
           agentMsg.row.classList.remove("pending");
           agentMsg.textEl.textContent = evt.answer || answer;
           setTimePill(agentMsg.metaEl, stopTimer());
@@ -178,6 +216,12 @@ async function sendMessage() {
           setStatus("Idle", "good");
         }
       }
+    }
+    if (!sawFinal) {
+      agentMsg.row.classList.remove("pending");
+      agentMsg.textEl.textContent = answer || "Ответ не получен полностью.";
+      setTimePill(agentMsg.metaEl, stopTimer());
+      setStatus("Idle", "good");
     }
   } catch (err) {
     stopTimer();
@@ -209,7 +253,8 @@ function toggleChunks() {
 
 async function sendConsent() {
   $("#chatInput").value = "Подтверждаю согласие";
-  await sendMessage();
+  setConsentState("pending");
+  await sendMessage({ bypassConsent: true });
 }
 
 $("#btnSend").addEventListener("click", () => sendMessage().catch(alert));
@@ -227,3 +272,4 @@ $("#btnToggleChunks").addEventListener("click", toggleChunks);
 
 setStatus("Idle", "good");
 refreshLogs().catch(() => {});
+initSession();

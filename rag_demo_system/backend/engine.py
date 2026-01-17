@@ -14,7 +14,7 @@ from .ingest import Chunk, build_chunks
 from .query import load_abbreviations, normalize_query
 from .rag import ensure_collection, search, upsert_chunks
 from .rerank import Reranker
-from .settings import Settings
+from .settings import Settings, RetrievalConfig
 
 logger = logging.getLogger("rag_demo")
 
@@ -26,6 +26,22 @@ def iter_batches(items: list[Chunk], batch_size: int) -> list[list[Chunk]]:
     for i in range(0, len(items), batch_size):
         out.append(items[i : i + batch_size])
     return out
+
+
+def effective_retrieval(config: RetrievalConfig, fast: bool) -> dict[str, int]:
+    if not fast:
+        return {
+            "vector_top_k": config.vector_top_k,
+            "bm25_top_k": config.bm25_top_k,
+            "final_top_n": config.final_top_n,
+            "context_max_tokens": config.context_max_tokens,
+        }
+    return {
+        "vector_top_k": config.fast_vector_top_k,
+        "bm25_top_k": config.fast_bm25_top_k,
+        "final_top_n": config.fast_final_top_n,
+        "context_max_tokens": config.fast_context_max_tokens,
+    }
 
 
 class RAGEngine:
@@ -116,7 +132,7 @@ class RAGEngine:
         if chunks:
             self._build_bm25(chunks)
 
-    def retrieve(self, query: str) -> dict[str, Any]:
+    def retrieve(self, query: str, fast: bool = False) -> dict[str, Any]:
         original_query = query
         normalized = normalize_query(query, self.abbrev)
         rewritten = normalized
@@ -131,13 +147,16 @@ class RAGEngine:
             q_vec = [cached]
 
         client = QdrantClient(url=self.settings.qdrant.url)
-        vector_hits = search(client, self.settings.qdrant.collection, q_vec[0], self.settings.retrieval.vector_top_k)
+        retrieval_cfg = effective_retrieval(self.settings.retrieval, fast)
+        vector_hits = search(client, self.settings.qdrant.collection, q_vec[0], retrieval_cfg["vector_top_k"])
 
         self._ensure_bm25()
         bm25_hits: list[Chunk] = []
         if self.bm25 and self.bm25_chunks:
             scores = self.bm25.get_scores(self._tokenize(rewritten))
-            top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[: self.settings.retrieval.bm25_top_k]
+            top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[
+                : retrieval_cfg["bm25_top_k"]
+            ]
             bm25_hits = [self.bm25_chunks[i] for i in top_idx]
 
         merged: dict[str, dict[str, Any]] = {}
@@ -192,14 +211,14 @@ class RAGEngine:
         total_tokens = 0
         if not filtered and candidates:
             weak = True
-            filtered = candidates[: self.settings.retrieval.final_top_n]
+            filtered = candidates[: retrieval_cfg["final_top_n"]]
         for c in filtered:
             tokens = len(c.get("text", "").split())
-            if total_tokens + tokens > self.settings.retrieval.context_max_tokens:
+            if total_tokens + tokens > retrieval_cfg["context_max_tokens"]:
                 break
             final.append(c)
             total_tokens += tokens
-            if len(final) >= self.settings.retrieval.final_top_n:
+            if len(final) >= retrieval_cfg["final_top_n"]:
                 break
 
         return {

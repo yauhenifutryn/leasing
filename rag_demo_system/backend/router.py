@@ -50,6 +50,18 @@ def _classify_with_llm(message: str, base_url: str, model: str) -> str | None:
     return None
 
 
+def _heuristic_intent(message: str) -> str | None:
+    text = message.strip().lower()
+    if not text:
+        return None
+    if len(text) <= 32:
+        if text.startswith(("привет", "здрав", "добрый", "доброе", "добрая")):
+            return "greeting"
+    if "как вас зовут" in text or "как тебя зовут" in text or "кто вы" in text:
+        return "identity"
+    return None
+
+
 def route_non_rag(message: str, base_url: str | None = None, model: str | None = None) -> RouterDecision | None:
     text = message.strip()
     if not text:
@@ -59,6 +71,14 @@ def route_non_rag(message: str, base_url: str | None = None, model: str | None =
         return None
 
     try:
+        heuristic = _heuristic_intent(message)
+        if heuristic == "greeting":
+            return RouterDecision(kind="greeting", response="Здравствуйте. Чем могу помочь?")
+        if heuristic == "identity":
+            return RouterDecision(
+                kind="identity",
+                response="Я голосовой помощник компании «Микро Лизинг». Чем могу помочь?",
+            )
         intent = _classify_with_llm(message, base_url, model)
         if intent == "greeting":
             return RouterDecision(kind="greeting", response="Здравствуйте. Чем могу помочь?")

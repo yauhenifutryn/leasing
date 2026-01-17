@@ -41,3 +41,25 @@ def test_load_settings_reads_dotenv(monkeypatch):
             settings_module.os.environ.pop("RAG_LLM_MODEL", None)
         else:
             settings_module.os.environ["RAG_LLM_MODEL"] = original_model
+
+
+def test_load_settings_reads_device_overrides(monkeypatch):
+    original_embed = settings_module.os.environ.get("RAG_EMBEDDING_DEVICE")
+    original_rerank = settings_module.os.environ.get("RAG_RERANKER_DEVICE")
+    try:
+        monkeypatch.setenv("RAG_EMBEDDING_DEVICE", "cuda")
+        monkeypatch.setenv("RAG_RERANKER_DEVICE", "cuda")
+
+        loaded = settings_module.load_settings()
+
+        assert loaded.embedding.device == "cuda"
+        assert loaded.reranker.device == "cuda"
+    finally:
+        if original_embed is None:
+            settings_module.os.environ.pop("RAG_EMBEDDING_DEVICE", None)
+        else:
+            settings_module.os.environ["RAG_EMBEDDING_DEVICE"] = original_embed
+        if original_rerank is None:
+            settings_module.os.environ.pop("RAG_RERANKER_DEVICE", None)
+        else:
+            settings_module.os.environ["RAG_RERANKER_DEVICE"] = original_rerank
