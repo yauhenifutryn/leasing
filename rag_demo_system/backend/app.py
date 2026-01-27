@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import time
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,13 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     stream: bool = False
     fast: bool = False
+    mode: str | None = None
+
+
+class VoiceChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+    stream: bool = True
 
 
 def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> None:
@@ -93,10 +101,13 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     if not message:
         return {"ok": False, "error": "empty message"}
     stream = bool(payload.stream) or stream
-    fast = bool(payload.fast)
+    mode = (payload.mode or "").strip().lower()
+    voice_fast = mode == "voice_fast"
+    fast = bool(payload.fast) or voice_fast
 
     session_id = payload.session_id or str(uuid.uuid4())
     session = state.get(session_id) or state.create(session_id)
+    timings: dict[str, Any] = {}
 
     decision = detect_consent(message)
     if session.consent_denied:
@@ -145,7 +156,9 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         }
         return _stream_or_json(response, stream)
 
+    t_route = time.perf_counter()
     routed = route_non_rag(message, settings.llm.base_url, settings.llm.model)
+    timings["route_ms"] = (time.perf_counter() - t_route) * 1000
     if routed:
         state.log({"event": "router", "kind": routed.kind, "session_id": session_id})
         response = {
@@ -155,12 +168,15 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "consent": "granted",
             "chunks": [],
             "citations": [],
+            "timings": timings,
         }
         _append_turn(session, message, routed.response, settings.app.memory_turns)
         state.update(session)
         return _stream_or_json(response, stream)
 
-    retrieval = engine.retrieve(message, fast=fast)
+    retrieval = engine.retrieve(message, fast=fast, voice_fast=voice_fast, session_id=session_id)
+    if retrieval.get("timings"):
+        timings.update(retrieval.get("timings") or {})
     if not retrieval.get("ok"):
         response = {
             "ok": True,
@@ -169,6 +185,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "consent": "granted",
             "chunks": [],
             "citations": [],
+            "timings": timings,
         }
         _append_turn(session, message, response["answer"], settings.app.memory_turns)
         state.update(session)
@@ -185,12 +202,14 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "consent": "granted",
             "chunks": [],
             "citations": [],
+            "timings": timings,
         }
         _append_turn(session, message, response["answer"], settings.app.memory_turns)
         state.update(session)
         return _stream_or_json(response, stream)
 
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    system_prompt = system_prompt + "\n\nСогласие на обработку данных уже получено, не запрашивай его."
     memory_block = build_memory_block(session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
         [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
@@ -216,7 +235,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         f"{weak_hint}{context_block}\n\nВопрос клиента: {message}"
     )
 
-    from .llm import call_openai_compatible, iter_openai_compatible_stream
+    from .llm import call_openai_compatible, iter_openai_compatible_stream_events
 
     model = settings.llm.fast_model if fast and settings.llm.fast_model else settings.llm.model
     max_tokens = settings.llm.fast_max_tokens if fast else settings.llm.max_tokens
@@ -225,17 +244,34 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         def gen() -> Any:
             streamed_parts: list[str] = []
             had_final = False
+            finish_reason: str | None = None
+            llm_start = time.perf_counter()
+            first_token_at: float | None = None
             try:
-                stream_iter = iter_openai_compatible_stream(
-                    base_url=settings.llm.base_url,
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    temperature=settings.llm.temperature,
-                    max_tokens=max_tokens,
-                    timeout_sec=settings.llm.timeout_sec,
-                )
+                def delta_texts() -> Any:
+                    nonlocal finish_reason
+                    stream_iter = iter_openai_compatible_stream_events(
+                        base_url=settings.llm.base_url,
+                        model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        temperature=settings.llm.temperature,
+                        max_tokens=max_tokens,
+                        timeout_sec=settings.llm.timeout_sec,
+                    )
+                    for event in stream_iter:
+                        choice = (event.get("choices") or [{}])[0]
+                        if choice.get("finish_reason"):
+                            finish_reason = choice.get("finish_reason")
+                        delta = choice.get("delta") or {}
+                        text = delta.get("content") or ""
+                        if text:
+                            yield text
+
+                stream_iter = delta_texts()
                 for chunk in iter_final_text(stream_iter):
+                    if first_token_at is None:
+                        first_token_at = time.perf_counter()
                     had_final = True
                     streamed_parts.append(chunk)
                     yield f"data: {json.dumps({'type': 'delta', 'text': chunk}, ensure_ascii=False)}\n\n"
@@ -262,6 +298,15 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             else:
                 answer_text = settings.app.strict_refusal_text
 
+            llm_end = time.perf_counter()
+            llm_total = llm_end - llm_start
+            ttfb_ms = ((first_token_at - llm_start) * 1000) if first_token_at else None
+            token_est = max(1, len(answer_text.split()))
+            timings["llm_ttfb_ms"] = ttfb_ms
+            timings["llm_total_ms"] = llm_total * 1000
+            timings["llm_tokens_per_sec"] = token_est / llm_total if llm_total > 0 else None
+            timings["llm_finish_reason"] = finish_reason
+
             _append_turn(session, message, answer_text, settings.app.memory_turns)
             state.update(session)
 
@@ -285,6 +330,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 "rewritten_query": retrieval.get("rewritten_query"),
                 "top_rerank_score": retrieval.get("top_rerank_score"),
                 "chunks": [c.get("chunk_id") for c in final_chunks],
+                "timings": timings,
             })
 
             final_payload = {
@@ -296,12 +342,15 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 "chunks": final_chunks if had_final else [],
                 "used_knowledge": used_knowledge,
                 "citations": citations,
+                "timings": timings,
+                "incomplete": bool(finish_reason == "length"),
             }
             yield f"data: {json.dumps(final_payload, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     try:
+        llm_start = time.perf_counter()
         llm_resp = call_openai_compatible(
             base_url=settings.llm.base_url,
             model=model,
@@ -312,6 +361,11 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             timeout_sec=settings.llm.timeout_sec,
         )
         answer = clean_answer(llm_resp.text) or settings.app.strict_refusal_text
+        llm_total = time.perf_counter() - llm_start
+        token_est = max(1, len(answer.split()))
+        timings["llm_ttfb_ms"] = None
+        timings["llm_total_ms"] = llm_total * 1000
+        timings["llm_tokens_per_sec"] = token_est / llm_total if llm_total > 0 else None
     except Exception as exc:
         state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
         response = {
@@ -324,6 +378,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "consent": "granted",
             "chunks": [],
             "citations": [],
+            "timings": timings,
         }
         return _stream_or_json(response, stream)
     citations = attach_citations(answer, final_chunks)
@@ -346,6 +401,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         "rewritten_query": retrieval.get("rewritten_query"),
         "top_rerank_score": retrieval.get("top_rerank_score"),
         "chunks": [c.get("chunk_id") for c in final_chunks],
+        "timings": timings,
     })
 
     response = {
@@ -356,6 +412,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         "chunks": final_chunks,
         "used_knowledge": used_knowledge,
         "citations": citations,
+        "timings": timings,
         "retrieval": {
             "normalized_query": retrieval.get("normalized_query"),
             "candidates": retrieval.get("candidates"),
@@ -364,6 +421,18 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     _append_turn(session, message, answer, settings.app.memory_turns)
     state.update(session)
     return _stream_or_json(response, stream)
+
+
+@app.post("/api/voice/chat")
+async def voice_chat(payload: VoiceChatRequest) -> Any:
+    chat_payload = ChatRequest(
+        message=payload.message,
+        session_id=payload.session_id,
+        stream=payload.stream,
+        fast=True,
+        mode="voice_fast",
+    )
+    return await chat(chat_payload, stream=payload.stream)
 
 
 @app.get("/api/logs")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 import logging
 from typing import Any
@@ -9,12 +10,12 @@ from qdrant_client import QdrantClient
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-from .cache import TTLCache
+from .cache import TTLCache, LRUCache
 from .ingest import Chunk, build_chunks
 from .query import load_abbreviations, normalize_query
 from .rag import ensure_collection, search, upsert_chunks
 from .rerank import Reranker
-from .settings import Settings, RetrievalConfig
+from .settings import Settings, RetrievalConfig, RerankerConfig
 
 logger = logging.getLogger("rag_demo")
 
@@ -28,7 +29,14 @@ def iter_batches(items: list[Chunk], batch_size: int) -> list[list[Chunk]]:
     return out
 
 
-def effective_retrieval(config: RetrievalConfig, fast: bool) -> dict[str, int]:
+def effective_retrieval(config: RetrievalConfig, fast: bool, voice_fast: bool = False) -> dict[str, int]:
+    if voice_fast:
+        return {
+            "vector_top_k": config.voice_vector_top_k,
+            "bm25_top_k": config.voice_bm25_top_k,
+            "final_top_n": config.voice_final_top_n,
+            "context_max_tokens": config.voice_context_max_tokens,
+        }
     if not fast:
         return {
             "vector_top_k": config.vector_top_k,
@@ -44,6 +52,12 @@ def effective_retrieval(config: RetrievalConfig, fast: bool) -> dict[str, int]:
     }
 
 
+def should_rerank(config: RerankerConfig, voice_fast: bool) -> bool:
+    if voice_fast:
+        return False
+    return bool(config.enabled)
+
+
 class RAGEngine:
     def __init__(self, settings: Settings, state_dir: Path) -> None:
         self.settings = settings
@@ -54,15 +68,18 @@ class RAGEngine:
         self.bm25: BM25Okapi | None = None
         self.bm25_chunks: list[Chunk] = []
         self.abbrev = load_abbreviations(self.settings.query_rewrite.abbreviations_path)
-        self.query_cache = TTLCache(ttl_sec=60)
-        self.rerank_cache = TTLCache(ttl_sec=60)
+        self.embed_cache = LRUCache(max_size=512)
+        self.query_cache = TTLCache(ttl_sec=45)
+        self.rerank_cache = TTLCache(ttl_sec=45)
 
     def _get_embedder(self) -> SentenceTransformer:
         if self.embedder is None:
             self.embedder = SentenceTransformer(self.settings.embedding.model_name, device=self.settings.embedding.device)
         return self.embedder
 
-    def _get_reranker(self) -> Reranker | None:
+    def _get_reranker(self, allow_rerank: bool) -> Reranker | None:
+        if not allow_rerank:
+            return None
         if not self.settings.reranker.enabled:
             return None
         if self.reranker is None:
@@ -132,32 +149,52 @@ class RAGEngine:
         if chunks:
             self._build_bm25(chunks)
 
-    def retrieve(self, query: str, fast: bool = False) -> dict[str, Any]:
+    def retrieve(self, query: str, fast: bool = False, voice_fast: bool = False, session_id: str | None = None) -> dict[str, Any]:
         original_query = query
+        timings: dict[str, float] = {}
+        t0 = time.perf_counter()
         normalized = normalize_query(query, self.abbrev)
+        timings["normalize_ms"] = (time.perf_counter() - t0) * 1000
         rewritten = normalized
+        session_key = session_id or "anon"
+        cache_key = f"{session_key}:{rewritten}:fast={fast}:voice={voice_fast}"
+
+        cached = self.query_cache.get(cache_key)
+        if cached:
+            cached["cache_hit"] = True
+            cached["timings"] = {"cache_hit": 1.0, "total_ms": 0.0}
+            return cached
 
         embedder = self._get_embedder()
-        cached = self.query_cache.get(rewritten)
-        if cached is None:
+        embed_key = f"{session_key}:{rewritten}"
+        t_embed = time.perf_counter()
+        cached_embed = self.embed_cache.get(embed_key)
+        if cached_embed is None:
             q_vec = embedder.encode([f"query: {rewritten}"], normalize_embeddings=True)
             q_vec = q_vec.tolist() if hasattr(q_vec, "tolist") else q_vec
-            self.query_cache.set(rewritten, q_vec[0])
+            self.embed_cache.set(embed_key, q_vec[0])
         else:
-            q_vec = [cached]
+            q_vec = [cached_embed]
+        timings["embed_ms"] = (time.perf_counter() - t_embed) * 1000
 
         client = QdrantClient(url=self.settings.qdrant.url)
-        retrieval_cfg = effective_retrieval(self.settings.retrieval, fast)
+        retrieval_cfg = effective_retrieval(self.settings.retrieval, fast, voice_fast=voice_fast)
+        t_qdrant = time.perf_counter()
         vector_hits = search(client, self.settings.qdrant.collection, q_vec[0], retrieval_cfg["vector_top_k"])
+        timings["qdrant_ms"] = (time.perf_counter() - t_qdrant) * 1000
 
         self._ensure_bm25()
         bm25_hits: list[Chunk] = []
         if self.bm25 and self.bm25_chunks:
+            t_bm25 = time.perf_counter()
             scores = self.bm25.get_scores(self._tokenize(rewritten))
             top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[
                 : retrieval_cfg["bm25_top_k"]
             ]
             bm25_hits = [self.bm25_chunks[i] for i in top_idx]
+            timings["bm25_ms"] = (time.perf_counter() - t_bm25) * 1000
+        else:
+            timings["bm25_ms"] = 0.0
 
         merged: dict[str, dict[str, Any]] = {}
         for hit in vector_hits:
@@ -179,23 +216,28 @@ class RAGEngine:
 
         candidates = list(merged.values())
 
-        reranker = self._get_reranker()
+        allow_rerank = should_rerank(self.settings.reranker, voice_fast=voice_fast)
+        reranker = self._get_reranker(allow_rerank=allow_rerank)
         if reranker:
-            cache_key = normalized + ":" + ",".join(sorted([c["chunk_id"] for c in candidates]))
-            cached_rerank = self.rerank_cache.get(cache_key)
+            t_rerank = time.perf_counter()
+            rerank_key = normalized + ":" + ",".join(sorted([c["chunk_id"] for c in candidates]))
+            cached_rerank = self.rerank_cache.get(rerank_key)
             if cached_rerank is None:
                 rerank_scores = reranker.rerank(rewritten, candidates)
                 score_map = {r.chunk_id: r.score for r in rerank_scores}
-                self.rerank_cache.set(cache_key, score_map)
+                self.rerank_cache.set(rerank_key, score_map)
             else:
                 score_map = cached_rerank
             for c in candidates:
                 c["rerank_score"] = float(score_map.get(c["chunk_id"], 0.0))
+            timings["rerank_ms"] = (time.perf_counter() - t_rerank) * 1000
         else:
-            if not self.settings.reranker.allow_no_rerank:
-                return {"ok": False, "error": "Reranker disabled and allow_no_rerank=false"}
+            if allow_rerank:
+                if not self.settings.reranker.allow_no_rerank:
+                    return {"ok": False, "error": "Reranker disabled and allow_no_rerank=false"}
             for c in candidates:
                 c["rerank_score"] = c.get("score", 0.0)
+            timings["rerank_ms"] = 0.0
 
         candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
         top_rerank_score = candidates[0].get("rerank_score", 0.0) if candidates else 0.0
@@ -221,7 +263,15 @@ class RAGEngine:
             if len(final) >= retrieval_cfg["final_top_n"]:
                 break
 
-        return {
+        timings["total_ms"] = (
+            timings.get("normalize_ms", 0.0)
+            + timings.get("embed_ms", 0.0)
+            + timings.get("qdrant_ms", 0.0)
+            + timings.get("bm25_ms", 0.0)
+            + timings.get("rerank_ms", 0.0)
+        )
+
+        result = {
             "ok": True,
             "query": original_query,
             "normalized_query": normalized,
@@ -230,4 +280,8 @@ class RAGEngine:
             "final": final,
             "weak": weak,
             "top_rerank_score": float(top_rerank_score),
+            "timings": timings,
+            "cache_hit": False,
         }
+        self.query_cache.set(cache_key, result)
+        return result

@@ -86,6 +86,7 @@ body{
 .message .meta{margin-top:6px;}
 .message.pending .text{display:flex;align-items:center;gap:8px;color:var(--muted);}
 .time-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);color:var(--muted);}
+.warn-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(255,193,7,0.12);border:1px solid rgba(255,193,7,0.35);color:#ffca28;}
 .spinner{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,0.35);border-top-color:var(--accent);animation:spin 0.8s linear infinite;flex:0 0 auto;}
 
 .composer{display:flex;gap:10px;margin-top:10px;}

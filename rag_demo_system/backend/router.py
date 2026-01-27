@@ -50,16 +50,86 @@ def _classify_with_llm(message: str, base_url: str, model: str) -> str | None:
     return None
 
 
+def _looks_like_business_question(text: str, check_qmark: bool = True) -> bool:
+    if check_qmark and "?" in text:
+        return True
+    markers = (
+        "лизинг",
+        "услов",
+        "треб",
+        "ставк",
+        "аванс",
+        "срок",
+        "документ",
+        "платеж",
+        "калькуля",
+        "авто",
+        "машин",
+        "транспорт",
+        "груз",
+        "оборуд",
+        "недвиж",
+        "ип",
+        "юрлиц",
+    )
+    return any(m in text for m in markers)
+
+
 def _heuristic_intent(message: str) -> str | None:
     text = message.strip().lower()
     if not text:
         return None
     if len(text) <= 32:
         if text.startswith(("привет", "здрав", "добрый", "доброе", "добрая")):
-            return "greeting"
-    if "как вас зовут" in text or "как тебя зовут" in text or "кто вы" in text:
-        return "identity"
+            if not _looks_like_business_question(text, check_qmark=True):
+                return "greeting"
+    if "как вас зовут" in text or "как тебя зовут" in text or "кто вы" in text or "кто ты" in text:
+        if not _looks_like_business_question(text, check_qmark=False):
+            return "identity"
     return None
+
+
+def _fallback_response(intent: str) -> str:
+    if intent == "greeting":
+        return "Здравствуйте. Чем могу помочь?"
+    if intent == "identity":
+        return "Я виртуальный помощник компании «Микро Лизинг». Чем могу помочь?"
+    if intent == "meta":
+        return "Я консультирую по услугам компании «Микро Лизинг». Чем могу помочь?"
+    if intent == "off_topic":
+        return (
+            "Я могу консультировать только по услугам компании «Микро Лизинг». "
+            "Если у вас есть вопрос по лизингу, я помогу."
+        )
+    if intent == "unclear":
+        return "Подскажите, пожалуйста, в чем именно ваш вопрос по лизингу?"
+    return "Чем могу помочь?"
+
+
+def _llm_router_response(intent: str, message: str, base_url: str, model: str) -> str:
+    system_prompt = (
+        "Ты голосовой помощник компании «Микро Лизинг». "
+        "Отвечай кратко и вежливо. "
+        "Не запрашивай согласие и не упоминай базу знаний. "
+        "Если intent:\n"
+        "- greeting: короткое приветствие + вопрос, чем помочь.\n"
+        "- identity: представься как помощник компании и спроси, чем помочь.\n"
+        "- meta: объясни, что консультируешь по лизингу компании.\n"
+        "- off_topic: вежливо откажи и направь к вопросам по лизингу.\n"
+        "- unclear: попроси уточнить вопрос по лизингу.\n"
+        "Ответ 1-2 короткими предложениями."
+    )
+    user_prompt = f"intent: {intent}\nсообщение клиента: {message}\nОтветь кратко."
+    resp = call_openai_compatible(
+        base_url=base_url,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.3,
+        max_tokens=120,
+        timeout_sec=8,
+    )
+    return resp.text.strip()
 
 
 def route_non_rag(message: str, base_url: str | None = None, model: str | None = None) -> RouterDecision | None:
@@ -67,47 +137,55 @@ def route_non_rag(message: str, base_url: str | None = None, model: str | None =
     if not text:
         return None
 
-    if not base_url or not model:
-        return None
-
     try:
         heuristic = _heuristic_intent(message)
-        if heuristic == "greeting":
-            return RouterDecision(kind="greeting", response="Здравствуйте. Чем могу помочь?")
-        if heuristic == "identity":
-            return RouterDecision(
-                kind="identity",
-                response="Я голосовой помощник компании «Микро Лизинг». Чем могу помочь?",
-            )
-        intent = _classify_with_llm(message, base_url, model)
+        intent = heuristic
+        if not intent:
+            if _looks_like_business_question(text.lower(), check_qmark=True):
+                return None
+            if not base_url or not model:
+                return None
+            intent = _classify_with_llm(message, base_url, model)
         if intent == "greeting":
-            return RouterDecision(kind="greeting", response="Здравствуйте. Чем могу помочь?")
+            response = _fallback_response("greeting")
+            if base_url and model:
+                try:
+                    response = _llm_router_response("greeting", message, base_url, model)
+                except Exception:
+                    response = _fallback_response("greeting")
+            return RouterDecision(kind="greeting", response=response)
         if intent == "meta":
-            return RouterDecision(
-                kind="meta",
-                response=(
-                    "Я консультирую по услугам компании «Микро Лизинг». "
-                    "Задайте, пожалуйста, конкретный вопрос, я помогу."
-                ),
-            )
+            response = _fallback_response("meta")
+            if base_url and model:
+                try:
+                    response = _llm_router_response("meta", message, base_url, model)
+                except Exception:
+                    response = _fallback_response("meta")
+            return RouterDecision(kind="meta", response=response)
         if intent == "off_topic":
-            return RouterDecision(
-                kind="offtopic",
-                response=(
-                    "Я могу консультировать только по услугам компании «Микро Лизинг». "
-                    "Если у вас есть вопрос по лизингу, условиям, документам или оплате, я помогу."
-                ),
-            )
+            response = _fallback_response("off_topic")
+            if base_url and model:
+                try:
+                    response = _llm_router_response("off_topic", message, base_url, model)
+                except Exception:
+                    response = _fallback_response("off_topic")
+            return RouterDecision(kind="offtopic", response=response)
         if intent == "identity":
-            return RouterDecision(
-                kind="identity",
-                response="Я голосовой помощник компании «Микро Лизинг». Чем могу помочь?",
-            )
+            response = _fallback_response("identity")
+            if base_url and model:
+                try:
+                    response = _llm_router_response("identity", message, base_url, model)
+                except Exception:
+                    response = _fallback_response("identity")
+            return RouterDecision(kind="identity", response=response)
         if intent == "unclear":
-            return RouterDecision(
-                kind="unclear",
-                response="Подскажите, пожалуйста, в чем именно ваш вопрос по лизингу?",
-            )
+            response = _fallback_response("unclear")
+            if base_url and model:
+                try:
+                    response = _llm_router_response("unclear", message, base_url, model)
+                except Exception:
+                    response = _fallback_response("unclear")
+            return RouterDecision(kind="unclear", response=response)
         return None
     except Exception:
         return None

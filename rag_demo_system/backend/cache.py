@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from collections import OrderedDict
 from typing import Any
 
 
@@ -27,6 +28,31 @@ class TTLCache:
 
     def set(self, key: str, value: Any) -> None:
         self._store[key] = CacheItem(value=value, expires_at=time.time() + self.ttl_sec)
+
+    def clear(self) -> None:
+        self._store.clear()
+
+
+class LRUCache:
+    def __init__(self, max_size: int = 256) -> None:
+        if max_size <= 0:
+            raise ValueError("max_size must be > 0")
+        self.max_size = max_size
+        self._store: OrderedDict[str, Any] = OrderedDict()
+
+    def get(self, key: str) -> Any | None:
+        if key not in self._store:
+            return None
+        value = self._store.pop(key)
+        self._store[key] = value
+        return value
+
+    def set(self, key: str, value: Any) -> None:
+        if key in self._store:
+            self._store.pop(key)
+        self._store[key] = value
+        while len(self._store) > self.max_size:
+            self._store.popitem(last=False)
 
     def clear(self) -> None:
         self._store.clear()

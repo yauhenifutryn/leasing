@@ -46,6 +46,10 @@ class RetrievalConfig:
     fast_bm25_top_k: int
     fast_final_top_n: int
     fast_context_max_tokens: int
+    voice_vector_top_k: int
+    voice_bm25_top_k: int
+    voice_final_top_n: int
+    voice_context_max_tokens: int
 
 
 @dataclass
@@ -178,6 +182,10 @@ def load_settings(path: Path | None = None) -> Settings:
             fast_bm25_top_k=int(retrieval.get("fast_bm25_top_k", 4)),
             fast_final_top_n=int(retrieval.get("fast_final_top_n", 3)),
             fast_context_max_tokens=int(retrieval.get("fast_context_max_tokens", 900)),
+            voice_vector_top_k=int(retrieval.get("voice_vector_top_k", 3)),
+            voice_bm25_top_k=int(retrieval.get("voice_bm25_top_k", 1)),
+            voice_final_top_n=int(retrieval.get("voice_final_top_n", 2)),
+            voice_context_max_tokens=int(retrieval.get("voice_context_max_tokens", 500)),
         ),
         llm=LLMConfig(
             provider=llm.get("provider", "openai_compatible"),

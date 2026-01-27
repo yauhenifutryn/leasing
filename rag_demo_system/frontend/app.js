@@ -74,6 +74,11 @@ function setTimePill(metaEl, elapsedMs) {
   metaEl.innerHTML = `<span class="time-pill">${formatMs(elapsedMs)}</span>`;
 }
 
+function setIncompletePill(metaEl) {
+  if (!metaEl) return;
+  metaEl.innerHTML += ` <span class="warn-pill">Ответ неполный</span>`;
+}
+
 function setStatus(text, level = "warn") {
   const badge = $("#statusBadge");
   const dot = badge.querySelector(".dot");
@@ -212,6 +217,7 @@ async function sendMessage(opts = {}) {
           agentMsg.row.classList.remove("pending");
           agentMsg.textEl.textContent = evt.answer || answer;
           setTimePill(agentMsg.metaEl, stopTimer());
+          if (evt.incomplete) setIncompletePill(agentMsg.metaEl);
           renderChunks(evt.used_knowledge || []);
           setStatus("Idle", "good");
         }
@@ -221,6 +227,7 @@ async function sendMessage(opts = {}) {
       agentMsg.row.classList.remove("pending");
       agentMsg.textEl.textContent = answer || "Ответ не получен полностью.";
       setTimePill(agentMsg.metaEl, stopTimer());
+      setIncompletePill(agentMsg.metaEl);
       setStatus("Idle", "good");
     }
   } catch (err) {
