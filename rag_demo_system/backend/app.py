@@ -238,6 +238,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     from .llm import call_openai_compatible, iter_openai_compatible_stream_events
 
     model = settings.llm.fast_model if fast and settings.llm.fast_model else settings.llm.model
+    base_url = settings.llm.fast_base_url if fast and settings.llm.fast_base_url else settings.llm.base_url
     max_tokens = settings.llm.fast_max_tokens if fast else settings.llm.max_tokens
 
     if stream:
@@ -251,8 +252,8 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 def delta_texts() -> Any:
                     nonlocal finish_reason
                     stream_iter = iter_openai_compatible_stream_events(
-                        base_url=settings.llm.base_url,
-                        model=model,
+                    base_url=base_url,
+                    model=model,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
                         temperature=settings.llm.temperature,
@@ -352,7 +353,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     try:
         llm_start = time.perf_counter()
         llm_resp = call_openai_compatible(
-            base_url=settings.llm.base_url,
+            base_url=base_url,
             model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,

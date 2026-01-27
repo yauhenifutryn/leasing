@@ -8,6 +8,7 @@ const STREAMING = true;
 let activeTimer = null;
 let requestStartMs = null;
 let consentState = "needed";
+let voiceFast = false;
 
 function formatMs(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
@@ -48,13 +49,19 @@ function setConsentState(state) {
 function initSession() {
   const storedSession = localStorage.getItem("rag_session_id");
   const storedConsent = localStorage.getItem("rag_consent");
+  const storedFast = localStorage.getItem("rag_voice_fast");
   if (storedSession) {
     sessionId = storedSession;
   }
   if (storedConsent) {
     consentState = storedConsent;
   }
+  if (storedFast) {
+    voiceFast = storedFast === "true";
+  }
   setConsentState(consentState || "needed");
+  const toggle = $("#fastToggle");
+  if (toggle) toggle.checked = voiceFast;
 }
 
 function stopTimer() {
@@ -163,6 +170,9 @@ async function sendMessage(opts = {}) {
   const agentMsg = renderMessage("agent", "", { pending: true });
 
   const payload = { message, session_id: sessionId, stream: STREAMING };
+  if (voiceFast) {
+    payload.mode = "voice_fast";
+  }
   try {
     if (!STREAMING) {
       const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
@@ -276,6 +286,10 @@ $("#btnClear").addEventListener("click", () => {
 });
 $("#btnRefreshLogs").addEventListener("click", () => refreshLogs().catch(alert));
 $("#btnToggleChunks").addEventListener("click", toggleChunks);
+$("#fastToggle").addEventListener("change", (e) => {
+  voiceFast = Boolean(e.target.checked);
+  localStorage.setItem("rag_voice_fast", voiceFast ? "true" : "false");
+});
 
 setStatus("Idle", "good");
 refreshLogs().catch(() => {});

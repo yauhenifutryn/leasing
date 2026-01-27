@@ -59,6 +59,7 @@ class LLMConfig:
     model: str
     temperature: float
     max_tokens: int
+    fast_base_url: str
     fast_model: str
     fast_max_tokens: int
     timeout_sec: int
@@ -193,6 +194,7 @@ def load_settings(path: Path | None = None) -> Settings:
             model=os.getenv("RAG_LLM_MODEL", llm.get("model", "")),
             temperature=float(llm.get("temperature", 0.1)),
             max_tokens=int(llm.get("max_tokens", 420)),
+            fast_base_url=os.getenv("RAG_LLM_FAST_BASE_URL", llm.get("fast_base_url", "")),
             fast_model=os.getenv("RAG_LLM_FAST_MODEL", llm.get("fast_model", "")),
             fast_max_tokens=int(os.getenv("RAG_LLM_FAST_MAX_TOKENS", llm.get("fast_max_tokens", 220))),
             timeout_sec=int(llm.get("timeout_sec", 60)),

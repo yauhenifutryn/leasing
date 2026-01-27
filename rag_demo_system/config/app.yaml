@@ -38,6 +38,7 @@ llm:
   provider: "openai_compatible"
   temperature: 0.1
   max_tokens: 420
+  fast_base_url: ""
   fast_model: ""
   fast_max_tokens: 220
   timeout_sec: 60
