@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from kb_schema import normalize_entry
 from utils import read_json, write_json
 
 
@@ -107,7 +108,7 @@ def main() -> None:
                 temperature=temperature,
                 max_attempts=max_attempts,
             )
-            knowledge_base.append(kb_entry)
+            knowledge_base.append(normalize_entry(kb_entry))
         except Exception as exc:  # noqa: BLE001
             if "content" in locals() and content and content.strip():
                 log_bad_response(out_dir, cluster_label, content)
