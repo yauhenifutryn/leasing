@@ -47,3 +47,5 @@ demo_ui/__pycache__/
 
 # Archives
 *.zip
+
+.worktrees/
