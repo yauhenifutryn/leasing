@@ -2,10 +2,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import time
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from kb_progress import maybe_log_progress, maybe_write_checkpoint
 from kb_schema import normalize_entry
 from utils import read_json, write_json
 
@@ -90,10 +92,14 @@ def main() -> None:
     template = Path(args.prompt).read_text(encoding="utf-8")
     max_attempts = int(os.getenv("KB_MAX_RETRIES", "12"))
     temperature = select_temperature(args.model)
+    progress_every = int(os.getenv("KB_PROGRESS_EVERY", "10"))
+    checkpoint_every = int(os.getenv("KB_CHECKPOINT_EVERY", "20"))
 
     clusters = read_json(in_dir / "global_faq_clusters_dedup.json")
     knowledge_base = []
-    for cluster in clusters:
+    total = len(clusters)
+    start_ts = time.time()
+    for idx, cluster in enumerate(clusters, start=1):
         cluster_label = (
             cluster.get("canonical_q")
             or cluster.get("cluster_label")
@@ -109,6 +115,15 @@ def main() -> None:
                 max_attempts=max_attempts,
             )
             knowledge_base.append(normalize_entry(kb_entry))
+            maybe_log_progress(idx, total, progress_every)
+            maybe_write_checkpoint(
+                index=idx,
+                total=total,
+                every=checkpoint_every,
+                out_path=out_dir / "kb_faq_ru.json",
+                partial_path=out_dir / "kb_faq_ru.partial.json",
+                data=knowledge_base,
+            )
         except Exception as exc:  # noqa: BLE001
             if "content" in locals() and content and content.strip():
                 log_bad_response(out_dir, cluster_label, content)
@@ -116,6 +131,8 @@ def main() -> None:
                 f"KB synthesis failed for cluster '{cluster_label}' after {max_attempts} attempts: {exc}"
             ) from exc
 
+    elapsed = int(time.time() - start_ts)
+    print(f"KB build complete in {elapsed}s.", flush=True)
     write_json(out_dir / "kb_faq_ru.json", knowledge_base)
 
     try:
