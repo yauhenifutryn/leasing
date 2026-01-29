@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node -r dotenv/config server.js",
-    "test": "node --test server/__tests__"
+    "test": "node --test server/__tests__/*.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
