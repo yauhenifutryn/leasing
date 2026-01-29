@@ -101,9 +101,11 @@ make rollup            # batch-level rollups (deduplicated)
 make aggregate         # global aggregation step
 make dedup             # embedding-based FAQ deduplication
 make kb                # build final knowledge base entries (JSON + YAML)
-make kb-markdown       # export KB JSON → Markdown (.md) for Retell KB
+make kb-markdown       # export KB JSON → Markdown (.md) for Retell KB (flat + structured)
 make markdown          # alias for kb-markdown
 ```
+
+Note: `make kb-markdown` produces both `knowledge_base/kb_faq_ru.md` and `knowledge_base/kb_faq_ru_structured.md`.
 
 ## Pipeline Overview
 

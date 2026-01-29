@@ -51,7 +51,7 @@ dedup:
 kb:
 	$(PY) $(SRC)/50_build_kb.py --in insights_global --out knowledge_base
 
-# 8) Export KB to Markdown for Retell
+# 8) Export KB to Markdown for Retell (flat + structured)
 kb-markdown:
 	$(PY) $(SRC)/55_export_kb_markdown.py --in knowledge_base/kb_faq_ru.json --out knowledge_base/kb_faq_ru.md
 
