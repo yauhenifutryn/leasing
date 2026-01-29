@@ -1,0 +1,49 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: #f6f7fb;
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ddd;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+}
+
+button {
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
+.panel {
+  background: #fff;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+pre {
+  white-space: pre-wrap;
+}
