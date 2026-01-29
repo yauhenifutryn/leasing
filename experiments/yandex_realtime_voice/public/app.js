@@ -52,6 +52,14 @@ function handleServerEvent(evt) {
   if (evt.type === "response.output_audio.delta") {
     playPcm(b64ToInt16(evt.delta));
   }
+  if (evt.type === "input_audio_buffer.speech_started") {
+    if (playCtx) {
+      playCtx.close();
+      playCtx = null;
+      nextPlayTime = 0;
+    }
+    assistantEl.textContent = "";
+  }
   if (evt.type === "response.done") {
     assistantEl.textContent += "\n";
   }
