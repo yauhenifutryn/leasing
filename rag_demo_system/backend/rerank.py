@@ -3,9 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sentence_transformers import CrossEncoder
-
-
 @dataclass
 class RerankResult:
     chunk_id: str
@@ -14,6 +11,8 @@ class RerankResult:
 
 class Reranker:
     def __init__(self, model_name: str, device: str, batch_size: int) -> None:
+        from sentence_transformers import CrossEncoder
+
         self.model = CrossEncoder(model_name, device=device)
         self.batch_size = batch_size
 

@@ -1,178 +1,160 @@
 # RAG Demo System (Micro Leasing)
 
-Демо‑система полностью изолирована и живёт в `rag_demo_system/`. Удаление этой папки **не влияет** на основной проект.
+This demo lives entirely under `rag_demo_system/`. The current MVP target is:
 
-Цели:
-- Воссоздать **качество RAG ElevenLabs** на собственной инфраструктуре.
-- Строгое grounding: **только** из Markdown KB.
-- Быстрая, лаконичная выдача, без галлюцинаций.
+- one browser UI
+- one FastAPI backend that also serves the UI
+- switchable `our_rag` and `dify_rag`
+- Russian voice I/O
+- one public HTTPS link for client testing
 
-## Структура
+For the first deployable MVP, the recommended shape is:
 
-```
+- Vast GPU host for:
+  - backend and UI on `:8000`
+  - Qdrant on `:6333`
+  - Qwen / vLLM on `:8001`
+  - SenseVoice official server on `:50000`
+  - CosyVoice official server on `:50001`
+  - Whisper fallback service on `:50002`
+- Dify Cloud over API, not self-hosted Dify
+- `ngrok` for the public HTTPS link
+
+## What Is In Repo
+
+```text
 rag_demo_system/
-  backend/          # FastAPI API
-  frontend/         # UI (HTML/CSS/JS)
-  config/           # YAML конфиги и системный промпт
-  scripts/          # утилиты запуска
-  tests/            # проверки
-  .state/           # локальное состояние и логи (не коммитится)
+  backend/                    # FastAPI app and RAG logic
+  services/                   # Auxiliary voice services, including Whisper fallback
+  frontend/                   # Static UI, served by backend at "/"
+  config/                     # YAML config and system prompt
+  scripts/                    # Launch and smoke helpers
+  tests/                      # Lightweight repo tests
+  requirements.txt            # Backend requirements
+  requirements-voice-fallback.txt
 ```
 
-## ВАЖНО (Read‑only core)
-- Ничего в корневых папках не изменяем.
-- Вся демо‑логика — только в `rag_demo_system/`.
+## MVP Deployment Model
 
----
+### `our_rag`
+- indexes `knowledge_base/kb_faq_ru.md` locally into Qdrant
+- retrieves with vector + BM25 + rerank
+- calls your OpenAI-compatible Qwen endpoint
 
-## 1) Быстрый локальный запуск
+### `dify_rag`
+- calls a Dify Chatflow over API
+- Dify Cloud stores and indexes the same KB corpus independently
+- the backend normalizes Dify retriever output into the same UI contract
 
-### 1.1 Qdrant (Vector DB)
-```bash
-docker compose -f rag_demo_system/docker-compose.yml up -d
-```
+### Voice
+- browser sends PCM16 audio chunks over `WS /ws/voice`
+- backend calls:
+  - SenseVoice official API directly for STT
+  - CosyVoice official API directly for TTS
+  - optional local Whisper fallback service if SenseVoice is unavailable
 
-### 1.2 Backend
-```bash
-cd rag_demo_system
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+## Important Runtime Notes
 
-export RAG_LLM_BASE_URL="https://<public-tunnel-host>/v1"
-export RAG_LLM_MODEL="Qwen3-30B-A3B-Instruct"
+- The UI is now served by the FastAPI backend itself. For public testing, expose only port `8000`.
+- The frontend no longer hardcodes `127.0.0.1:8000`. It uses the current origin by default.
+- If you want Dify Cloud to use the same Qwen model as `our_rag`, Dify Cloud must be able to reach your vLLM endpoint. The simplest MVP path is an additional `ngrok` tunnel for port `8001`.
+- Dify Cloud is being used to test Dify's retrieval and orchestration behavior. If you later move to self-hosted Dify and keep the same Chatflow design, KB corpus, chunking, retrieval settings, rerank settings, and LLM endpoint, the RAG quality should stay materially the same. Hosting location is not what defines retrieval quality.
+- Current local verification gap: full `backend.app` import is still slow/sticky on this Mac environment, so server instructions are designed for the actual GPU host rather than pretending this laptop is the target runtime.
 
-./scripts/run_backend.sh
-```
+## Environment
 
-Backend: `http://127.0.0.1:8000`
+Copy `.env.example` to `.env` and fill in the values.
 
-### 1.3 Frontend
-Откройте `rag_demo_system/frontend/index.html` в браузере.
+Key variables:
 
-### Полный старт одной командой
-```bash
-./rag_demo_system/scripts/run_all.sh
-```
+- `RAG_LLM_BASE_URL`
+- `RAG_LLM_MODEL`
+- `DIFY_API_BASE_URL`
+- `DIFY_API_KEY`
+- `SENSEVOICE_BASE_URL`
+- `SENSEVOICE_API_STYLE=official`
+- `COSYVOICE_BASE_URL`
+- `COSYVOICE_API_STYLE=official`
+- `COSYVOICE_SPK_ID`
+- `WHISPER_BASE_URL`
 
----
+## Useful Endpoints
 
-## 2) Индексация базы знаний
+- `GET /`
+- `GET /api/health`
+- `GET /api/backends`
+- `GET /api/voice/status`
+- `POST /api/index`
+- `POST /api/retrieve`
+- `POST /api/chat`
+- `POST /api/voice/chat`
+- `WS /ws/voice`
 
-Markdown KB используется как **единственный источник правды**:
-`knowledge_base/kb_faq_ru.md`
+## Smoke Test
 
-Запустить индексацию:
-```bash
-curl -X POST http://127.0.0.1:8000/api/index
-```
-
-## RAG Quality Defaults (Demo)
-- Hybrid retrieval: Vector topK=8 + BM25 topK=8 → merge → rerank → final topN=6
-- Reranker: `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (CPU по умолчанию)
-- Строгая проверка уверенности: если evidence слабый → отказ
-- Контекстный бюджет: 1800 токенов (предпочитаем меньше, но увереннее)
-
----
-
-## 3) Демонстрация диалога
-
-UI отправляет запросы в `/api/chat`.
-
-**Внимание:**
-- До первого ответа ассистент **обязательно** запрашивает согласие на обработку ПДн.
-- Без согласия он завершает диалог.
-
----
-
-## 4) Серверный запуск (AWS / on‑prem)
-
-1. Поднять Qdrant через `docker-compose`.
-2. Запустить backend:
-   ```bash
-   uvicorn backend.app:app --host 0.0.0.0 --port 8000
-   ```
-3. Пробросить порт 8000 наружу (reverse proxy / ingress).
-4. Frontend — статические файлы (можно отдать через Nginx).
-
----
-
-## 5) Google Colab (vLLM + Qwen)
-
-### Коллаб:
-- Запустить vLLM OpenAI‑compatible сервер.
-- Пробросить через публичный туннель.
-
-Пример:
-```
-https://<public-tunnel-host>/v1
-```
-
-### Конфиг (rag_demo_system/config/app.yaml):
-```
-llm:
-  base_url: "https://<public-tunnel-host>/v1"
-  model: "Qwen3-30B-A3B-Instruct"
-```
-
-**TODO:** уточнить точное имя модели в vLLM.
-
----
-
-## 6) VS Code ↔ Colab (optional)
-
-Рекомендация: использовать `ssh` туннель или `ngrok/cloudflared` для стабильного URL.
-
-TODO:
-- Добавить инструкцию для VS Code Remote + Colab.
-
----
-
-## 7) Voice (ElevenLabs)
-
-Voice‑интеграция **будет добавлена позже** (в этой итерации выключена).
-UI уже содержит переключатель, но backend возвращает `501 Not Implemented`.
-
----
-
-## Smoke test
-
-Минимальная проверка (health → index → chat → used_knowledge):
 ```bash
 ./rag_demo_system/scripts/smoke_test.sh
 ```
 
----
+It checks:
 
-## 8) Qwen local model connection (on‑prem)
+- health
+- backend availability
+- voice service status
+- local KB indexing
+- `our_rag` chat path
 
-Если Qwen будет запущен локально (vLLM):
+If Dify is configured, use the backend switch in the UI or post the same question twice:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Какие требования к лизингу грузового транспорта?","backend":"our_rag"}'
+
+curl -sS http://127.0.0.1:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Какие требования к лизингу грузового транспорта?","backend":"dify_rag"}'
 ```
-RAG_LLM_BASE_URL=http://localhost:8000/v1
-RAG_LLM_MODEL=Qwen3-30B-A3B-Instruct
+
+## Voice Service Notes
+
+### SenseVoice
+- The backend supports the official SenseVoice FastAPI service contract via `SENSEVOICE_API_STYLE=official`.
+- It sends WAV-wrapped audio to `/api/v1/asr`.
+
+### CosyVoice
+- The backend supports the official CosyVoice FastAPI service contract via `COSYVOICE_API_STYLE=official`.
+- It calls `/inference_sft`.
+- The adapter strips the WAV container and returns raw PCM16 back to the browser so playback works.
+
+### Whisper fallback
+- `services/whisper_server.py` is the local fallback service.
+- It exposes:
+  - `GET /health`
+  - `POST /transcribe`
+
+## Stack Control
+
+Repo-level launcher:
+
+```bash
+./rag_demo_system/scripts/stack.sh status
+./rag_demo_system/scripts/stack.sh up
+./rag_demo_system/scripts/stack.sh down
+./rag_demo_system/scripts/stack.sh smoke
 ```
 
----
+The supervisor mode is the fallback mode for container-style GPU hosts. It is the relevant mode for Vast if Docker Compose is not usable there.
 
-## TODO (креды/инфра)
-- [ ] RAG_LLM_BASE_URL / RAG_LLM_MODEL для vLLM
-- [ ] ELEVENLABS_API_KEY (на будущее)
-- [ ] Добавить HTTPS reverse proxy для продакшена
+### ngrok
 
----
+The repo includes an example config at:
 
-## API endpoints
+```bash
+rag_demo_system/scripts/ngrok.yml.example
+```
 
-- `POST /api/index`
-- `POST /api/retrieve`
-- `POST /api/chat`
-- `GET  /api/health`
-- `GET  /api/logs`
+For the fair benchmark case, run two tunnels:
 
----
-
-## Требования к качеству
-- Никаких галлюцинаций.
-- Только ответы из retrieved chunks.
-- Если контекста нет — строгий отказ.
-- Короткие ответы (1–4 предложения по умолчанию).
+- `app` for `:8000`
+- `llm` for `:8001`

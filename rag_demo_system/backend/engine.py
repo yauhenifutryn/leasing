@@ -6,15 +6,14 @@ from pathlib import Path
 import logging
 from typing import Any
 
-from qdrant_client import QdrantClient
 from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
 
 from .cache import TTLCache, LRUCache
 from .ingest import Chunk, build_chunks
 from .query import load_abbreviations, normalize_query
 from .rag import ensure_collection, search, upsert_chunks
 from .rerank import Reranker
+from .retrieval_utils import filter_vector_hits
 from .settings import Settings, RetrievalConfig, RerankerConfig
 
 logger = logging.getLogger("rag_demo")
@@ -72,8 +71,10 @@ class RAGEngine:
         self.query_cache = TTLCache(ttl_sec=45)
         self.rerank_cache = TTLCache(ttl_sec=45)
 
-    def _get_embedder(self) -> SentenceTransformer:
+    def _get_embedder(self) -> Any:
         if self.embedder is None:
+            from sentence_transformers import SentenceTransformer
+
             self.embedder = SentenceTransformer(self.settings.embedding.model_name, device=self.settings.embedding.device)
         return self.embedder
 
@@ -116,6 +117,8 @@ class RAGEngine:
         )
 
         embedder = self._get_embedder()
+        from qdrant_client import QdrantClient
+
         client = QdrantClient(url=self.settings.qdrant.url)
         batch_size = self.settings.embedding.batch_size
         total = len(chunks)
@@ -177,10 +180,13 @@ class RAGEngine:
             q_vec = [cached_embed]
         timings["embed_ms"] = (time.perf_counter() - t_embed) * 1000
 
+        from qdrant_client import QdrantClient
+
         client = QdrantClient(url=self.settings.qdrant.url)
         retrieval_cfg = effective_retrieval(self.settings.retrieval, fast, voice_fast=voice_fast)
         t_qdrant = time.perf_counter()
         vector_hits = search(client, self.settings.qdrant.collection, q_vec[0], retrieval_cfg["vector_top_k"])
+        vector_hits = filter_vector_hits(vector_hits, self.settings.retrieval.score_threshold)
         timings["qdrant_ms"] = (time.perf_counter() - t_qdrant) * 1000
 
         self._ensure_bm25()

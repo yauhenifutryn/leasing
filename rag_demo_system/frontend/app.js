@@ -1,5 +1,5 @@
-const API_BASE = "http://127.0.0.1:8000";
-
+const API_BASE = window.__RAG_API_BASE__ || window.location.origin;
+const WS_BASE = API_BASE.replace(/^http/, "ws");
 const $ = (sel) => document.querySelector(sel);
 
 let sessionId = null;
@@ -9,6 +9,14 @@ let activeTimer = null;
 let requestStartMs = null;
 let consentState = "needed";
 let voiceFast = false;
+let selectedBackend = "our_rag";
+let voiceSocket = null;
+let voiceConnected = false;
+let talking = false;
+let audioCtx = null;
+let recorderNode = null;
+let playCtx = null;
+let nextPlayTime = 0;
 
 function formatMs(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
@@ -24,9 +32,19 @@ function startTimer() {
   stopTimer();
   requestStartMs = performance.now();
   updateTimer(0);
-  activeTimer = setInterval(() => {
-    updateTimer(performance.now() - requestStartMs);
-  }, 120);
+  activeTimer = setInterval(() => updateTimer(performance.now() - requestStartMs), 120);
+}
+
+function stopTimer() {
+  if (activeTimer) {
+    clearInterval(activeTimer);
+    activeTimer = null;
+  }
+  if (requestStartMs === null) return null;
+  const elapsedMs = performance.now() - requestStartMs;
+  updateTimer(elapsedMs);
+  requestStartMs = null;
+  return elapsedMs;
 }
 
 function setSessionId(id) {
@@ -46,34 +64,20 @@ function setConsentState(state) {
   $("#chatInput").placeholder = granted ? "Введите вопрос..." : "Сначала подтвердите согласие...";
 }
 
-function initSession() {
-  const storedSession = localStorage.getItem("rag_session_id");
-  const storedConsent = localStorage.getItem("rag_consent");
-  const storedFast = localStorage.getItem("rag_voice_fast");
-  if (storedSession) {
-    sessionId = storedSession;
-  }
-  if (storedConsent) {
-    consentState = storedConsent;
-  }
-  if (storedFast) {
-    voiceFast = storedFast === "true";
-  }
-  setConsentState(consentState || "needed");
-  const toggle = $("#fastToggle");
-  if (toggle) toggle.checked = voiceFast;
+function setStatus(text, level = "warn") {
+  const badge = $("#statusBadge");
+  const dot = badge.querySelector(".dot");
+  dot.classList.remove("good", "danger", "warn");
+  dot.classList.add(level);
+  $("#statusText").textContent = text;
 }
 
-function stopTimer() {
-  if (activeTimer) {
-    clearInterval(activeTimer);
-    activeTimer = null;
-  }
-  if (requestStartMs === null) return null;
-  const elapsedMs = performance.now() - requestStartMs;
-  updateTimer(elapsedMs);
-  requestStartMs = null;
-  return elapsedMs;
+function setVoiceStatus(text, level = "warn") {
+  const badge = $("#voiceStatus");
+  const dot = badge.querySelector(".dot");
+  dot.classList.remove("good", "danger", "warn");
+  dot.classList.add(level);
+  $("#voiceText").textContent = text;
 }
 
 function setTimePill(metaEl, elapsedMs) {
@@ -84,14 +88,6 @@ function setTimePill(metaEl, elapsedMs) {
 function setIncompletePill(metaEl) {
   if (!metaEl) return;
   metaEl.innerHTML += ` <span class="warn-pill">Ответ неполный</span>`;
-}
-
-function setStatus(text, level = "warn") {
-  const badge = $("#statusBadge");
-  const dot = badge.querySelector(".dot");
-  dot.classList.remove("good", "danger", "warn");
-  dot.classList.add(level);
-  $("#statusText").textContent = text;
 }
 
 function renderMessage(role, text, opts = {}) {
@@ -143,6 +139,12 @@ function renderChunks(chunks) {
   }
 }
 
+function toggleChunks() {
+  chunksCollapsed = !chunksCollapsed;
+  $("#chunksPanel").style.display = chunksCollapsed ? "none" : "block";
+  $("#btnToggleChunks").textContent = chunksCollapsed ? "Раскрыть" : "Свернуть";
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -153,6 +155,46 @@ async function api(path, opts = {}) {
     throw new Error(data?.error || res.status);
   }
   return data;
+}
+
+async function refreshCapabilities() {
+  try {
+    const backendData = await api("/api/backends");
+    const voiceData = await api("/api/voice/status");
+    const selector = $("#backendSelect");
+    const backends = backendData.backends || {};
+    selector.innerHTML = "";
+    for (const key of ["our_rag", "dify_rag"]) {
+      if (!(key in backends)) continue;
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = key;
+      const status = backends[key];
+      if (!status.available) opt.textContent += " (off)";
+      selector.appendChild(opt);
+    }
+    selector.value = selectedBackend;
+    const voiceServices = voiceData.services || {};
+    const ready = Boolean(voiceServices.sensevoice?.available || voiceServices.whisper?.available) && Boolean(voiceServices.cosyvoice?.available);
+    $("#btnVoiceConnect").disabled = !ready;
+    setVoiceStatus(ready ? "Voice services detected" : "Voice services not configured", ready ? "good" : "warn");
+  } catch (err) {
+    setVoiceStatus("Voice status unavailable", "warn");
+  }
+}
+
+function initSession() {
+  const storedSession = localStorage.getItem("rag_session_id");
+  const storedConsent = localStorage.getItem("rag_consent");
+  const storedFast = localStorage.getItem("rag_voice_fast");
+  const storedBackend = localStorage.getItem("rag_backend");
+  if (storedSession) sessionId = storedSession;
+  if (storedConsent) consentState = storedConsent;
+  if (storedFast) voiceFast = storedFast === "true";
+  if (storedBackend) selectedBackend = storedBackend;
+  setConsentState(consentState || "needed");
+  $("#fastToggle").checked = voiceFast;
+  $("#backendSelect").value = selectedBackend;
 }
 
 async function sendMessage(opts = {}) {
@@ -169,31 +211,21 @@ async function sendMessage(opts = {}) {
   startTimer();
   const agentMsg = renderMessage("agent", "", { pending: true });
 
-  const payload = { message, session_id: sessionId, stream: STREAMING };
-  if (voiceFast) {
-    payload.mode = "voice_fast";
-  }
-  try {
-    if (!STREAMING) {
-      const resp = await api("/api/chat", { method: "POST", body: JSON.stringify(payload) });
-      setSessionId(resp.session_id);
-      setConsentState(resp.consent || consentState);
-      agentMsg.row.classList.remove("pending");
-      agentMsg.textEl.textContent = resp.answer;
-      setTimePill(agentMsg.metaEl, stopTimer());
-      renderChunks(resp.used_knowledge || []);
-      setStatus("Idle", "good");
-      return;
-    }
+  const payload = {
+    message,
+    session_id: sessionId,
+    stream: STREAMING,
+    backend: selectedBackend,
+  };
+  if (voiceFast) payload.mode = "voice_fast";
 
+  try {
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok || !res.body) {
-      throw new Error("Stream failed");
-    }
+    if (!res.ok || !res.body) throw new Error("Stream failed");
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -209,14 +241,12 @@ async function sendMessage(opts = {}) {
       for (const part of parts) {
         const line = part.trim();
         if (!line.startsWith("data:")) continue;
-        const jsonText = line.slice(5).trim();
-        if (!jsonText) continue;
-        const evt = JSON.parse(jsonText);
+        const evt = JSON.parse(line.slice(5).trim());
         if (evt.type === "delta") {
           if (!sawDelta) {
             sawDelta = true;
-            setStatus("Streaming", "warn");
             agentMsg.row.classList.remove("pending");
+            setStatus(`Streaming (${evt.backend || selectedBackend})`, "warn");
           }
           answer += evt.text || "";
           agentMsg.textEl.textContent = answer;
@@ -229,7 +259,7 @@ async function sendMessage(opts = {}) {
           setTimePill(agentMsg.metaEl, stopTimer());
           if (evt.incomplete) setIncompletePill(agentMsg.metaEl);
           renderChunks(evt.used_knowledge || []);
-          setStatus("Idle", "good");
+          setStatus(`Idle (${evt.backend || selectedBackend})`, "good");
         }
       }
     }
@@ -258,20 +288,122 @@ async function indexKb() {
 async function refreshLogs() {
   const resp = await api("/api/logs?limit=200");
   const items = resp.items || [];
-  const logPanel = $("#logPanel");
-  logPanel.textContent = items.map((i) => JSON.stringify(i)).join("\n") || "(empty)";
-}
-
-function toggleChunks() {
-  chunksCollapsed = !chunksCollapsed;
-  $("#chunksPanel").style.display = chunksCollapsed ? "none" : "block";
-  $("#btnToggleChunks").textContent = chunksCollapsed ? "Раскрыть" : "Свернуть";
+  $("#logPanel").textContent = items.map((i) => JSON.stringify(i)).join("\n") || "(empty)";
 }
 
 async function sendConsent() {
   $("#chatInput").value = "Подтверждаю согласие";
   setConsentState("pending");
   await sendMessage({ bypassConsent: true });
+}
+
+function b64ToInt16(b64) {
+  const bin = atob(b64);
+  const buf = new Int16Array(bin.length / 2);
+  for (let i = 0; i < buf.length; i++) {
+    buf[i] = (bin.charCodeAt(i * 2 + 1) << 8) | bin.charCodeAt(i * 2);
+  }
+  return buf;
+}
+
+function playPcm(int16, sampleRate = 24000) {
+  if (!playCtx) {
+    playCtx = new AudioContext({ sampleRate });
+    nextPlayTime = playCtx.currentTime + 0.05;
+  }
+  const buffer = playCtx.createBuffer(1, int16.length, sampleRate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < int16.length; i++) channel[i] = int16[i] / 0x8000;
+  const src = playCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(playCtx.destination);
+  src.start(nextPlayTime);
+  nextPlayTime += buffer.duration;
+}
+
+function handleVoiceEvent(evt) {
+  if (evt.type === "session.ready") {
+    setSessionId(evt.session_id);
+    setVoiceStatus(`Voice connected (${evt.backend})`, "good");
+    $("#btnVoiceTalk").disabled = false;
+  }
+  if (evt.type === "session.updated") {
+    setVoiceStatus(`Voice backend: ${evt.backend}`, "good");
+  }
+  if (evt.type === "conversation.item.input_audio_transcription.completed") {
+    $("#transcript").textContent = evt.transcription || "";
+  }
+  if (evt.type === "assistant_response") {
+    $("#assistantVoice").textContent = evt.answer || "";
+  }
+  if (evt.type === "response.output_text.delta") {
+    $("#assistantVoice").textContent = ($("#assistantVoice").textContent || "") + (evt.delta || "");
+  }
+  if (evt.type === "response.output_audio.delta" && evt.delta) {
+    playPcm(b64ToInt16(evt.delta), evt.sample_rate_hz || 24000);
+  }
+  if (evt.type === "interrupt") {
+    $("#assistantVoice").textContent = "";
+    setVoiceStatus("Assistant interrupted", "warn");
+  }
+  if (evt.type === "response.done") {
+    renderChunks(evt.used_knowledge || []);
+    setVoiceStatus("Voice idle", "good");
+  }
+  if (evt.type === "warning") {
+    setVoiceStatus(evt.message || "Voice warning", "warn");
+  }
+  if (evt.type === "error") {
+    setVoiceStatus(evt.error || "Voice error", "danger");
+  }
+}
+
+async function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new AudioContext();
+  await audioCtx.audioWorklet.addModule("/recorder-worklet.js");
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const source = audioCtx.createMediaStreamSource(stream);
+  recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
+  recorderNode.port.onmessage = (e) => {
+    if (!talking || !voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) return;
+    const chunk = e.data;
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(chunk.buffer)));
+    voiceSocket.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
+  };
+  source.connect(recorderNode);
+}
+
+async function connectVoice() {
+  if (voiceConnected) return;
+  voiceSocket = new WebSocket(`${WS_BASE}/ws/voice`);
+  voiceSocket.onopen = async () => {
+    voiceConnected = true;
+    setVoiceStatus("Voice websocket connected", "good");
+    await initAudio();
+    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend }));
+  };
+  voiceSocket.onmessage = (msg) => handleVoiceEvent(JSON.parse(msg.data));
+  voiceSocket.onerror = () => setVoiceStatus("Voice websocket error", "danger");
+  voiceSocket.onclose = () => {
+    voiceConnected = false;
+    $("#btnVoiceTalk").disabled = true;
+    setVoiceStatus("Voice disconnected", "warn");
+  };
+}
+
+function startTalking() {
+  if (!voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) return;
+  talking = true;
+  $("#transcript").textContent = "";
+  $("#assistantVoice").textContent = "";
+  setVoiceStatus("Listening", "warn");
+}
+
+function stopTalking() {
+  if (!voiceSocket || !talking) return;
+  talking = false;
+  voiceSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
 }
 
 $("#btnSend").addEventListener("click", () => sendMessage().catch(alert));
@@ -290,7 +422,27 @@ $("#fastToggle").addEventListener("change", (e) => {
   voiceFast = Boolean(e.target.checked);
   localStorage.setItem("rag_voice_fast", voiceFast ? "true" : "false");
 });
+$("#backendSelect").addEventListener("change", (e) => {
+  selectedBackend = e.target.value;
+  localStorage.setItem("rag_backend", selectedBackend);
+  if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
+    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend }));
+  }
+});
+$("#btnVoiceConnect").addEventListener("click", () => connectVoice().catch(alert));
+$("#btnVoiceTalk").addEventListener("mousedown", startTalking);
+$("#btnVoiceTalk").addEventListener("mouseup", stopTalking);
+$("#btnVoiceTalk").addEventListener("mouseleave", stopTalking);
+$("#btnVoiceTalk").addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  startTalking();
+});
+$("#btnVoiceTalk").addEventListener("touchend", (e) => {
+  e.preventDefault();
+  stopTalking();
+});
 
 setStatus("Idle", "good");
 refreshLogs().catch(() => {});
 initSession();
+refreshCapabilities().catch(() => {});

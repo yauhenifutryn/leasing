@@ -39,6 +39,13 @@
             <button class="btn good" id="btnSend">Отправить</button>
           </div>
           <div class="toggle-row">
+            <span class="toggle-label">Backend</span>
+            <select id="backendSelect">
+              <option value="our_rag">our_rag</option>
+              <option value="dify_rag">dify_rag</option>
+            </select>
+          </div>
+          <div class="toggle-row">
             <span class="toggle-label">Voice fast</span>
             <label class="switch" title="Использовать быстрый режим для voice_fast">
               <input type="checkbox" id="fastToggle" />
@@ -50,13 +57,14 @@
         <section class="card voice">
           <div class="row">
             <h2>Voice</h2>
-            <label class="switch" title="Voice будет добавлен позже">
-              <input type="checkbox" id="voiceToggle" disabled />
-              <span class="slider"></span>
-            </label>
+            <div class="actions">
+              <button class="btn ghost" id="btnVoiceConnect">Connect</button>
+              <button class="btn good" id="btnVoiceTalk" disabled>Hold to talk</button>
+            </div>
           </div>
-          <div class="help">Voice‑интеграция (ElevenLabs) будет добавлена позже.</div>
+          <div class="help">WebSocket voice mode with backend switch. STT/TTS services must be configured server-side.</div>
           <div class="transcript" id="transcript"></div>
+          <div class="transcript" id="assistantVoice"></div>
           <div class="row">
             <span class="badge" id="voiceStatus"><span class="dot warn"></span><span id="voiceText">Voice: disabled</span></span>
           </div>

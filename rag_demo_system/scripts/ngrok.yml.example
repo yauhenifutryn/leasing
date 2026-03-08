@@ -1,0 +1,9 @@
+version: 2
+
+tunnels:
+  app:
+    proto: http
+    addr: 8000
+  llm:
+    proto: http
+    addr: 8001

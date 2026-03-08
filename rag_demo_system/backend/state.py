@@ -12,6 +12,7 @@ class SessionState:
     consent_given: bool = False
     consent_denied: bool = False
     transcript: list[dict[str, str]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class StateStore:
@@ -33,6 +34,7 @@ class StateStore:
                 consent_given=bool(item.get("consent_given", False)),
                 consent_denied=bool(item.get("consent_denied", False)),
                 transcript=item.get("transcript") or [],
+                metadata=item.get("metadata") or {},
             )
             if sess.session_id:
                 self._sessions[sess.session_id] = sess
