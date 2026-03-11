@@ -76,3 +76,11 @@ def test_provider_response_marks_assistant_speaking_and_captures_task() -> None:
     ]
     assert session.assistant_speaking is True
     assert session.active_task_id == "task-11"
+
+
+def test_session_defaults_to_local_voice_provider() -> None:
+    voice_session = _load_module()
+
+    session = voice_session.VoiceSession(session_id="s4", backend="our_rag")
+
+    assert session.voice_provider == "local"

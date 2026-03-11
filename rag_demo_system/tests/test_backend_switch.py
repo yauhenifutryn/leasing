@@ -72,6 +72,9 @@ def test_build_backend_status_reports_all_services() -> None:
             "sensevoice": {"available": True, "healthy": True},
             "whisper": {"available": True, "healthy": False},
             "cosyvoice": {"available": True, "healthy": True},
+            "yandex_speechkit": {"available": True, "healthy": True},
+            "vosk": {"available": True, "healthy": True},
+            "vosk_tts": {"available": True, "healthy": True},
         },
         llm_status={"qwen": {"available": True, "healthy": True}},
     )
@@ -84,5 +87,8 @@ def test_build_backend_status_reports_all_services() -> None:
         "sensevoice",
         "whisper",
         "cosyvoice",
+        "yandex_speechkit",
+        "vosk",
+        "vosk_tts",
         "qwen",
     }

@@ -16,3 +16,14 @@ def test_backend_mounts_frontend_static_files() -> None:
 
     assert "StaticFiles" in app_py
     assert "app.mount(\"/\", StaticFiles(directory=FRONTEND_DIR, html=True), name=\"frontend\")" in app_py
+
+
+def test_frontend_exposes_voice_provider_selector_contract() -> None:
+    app_js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    index_html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "voice_provider" in app_js
+    assert "evt.transcript" in app_js
+    assert "voiceProviderSelect" in index_html
+    assert "yandex_speechkit" in index_html
+    assert "oss_russian" in index_html

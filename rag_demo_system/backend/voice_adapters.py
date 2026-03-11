@@ -8,6 +8,13 @@ from typing import Any
 
 import requests
 
+from .yandex_speechkit import (
+    build_status as build_yandex_speechkit_status,
+    synthesize_audio as synthesize_with_yandex_speechkit,
+    transcribe_audio as transcribe_with_yandex_speechkit,
+)
+from .yandex_realtime import build_status as build_yandex_realtime_status
+
 
 def _service_status(name: str, base_url: str | None) -> dict[str, Any]:
     if not base_url:
@@ -30,6 +37,10 @@ def build_voice_statuses() -> dict[str, dict[str, Any]]:
         "sensevoice": _service_status("sensevoice", os.getenv("SENSEVOICE_BASE_URL")),
         "whisper": _service_status("whisper", os.getenv("WHISPER_BASE_URL")),
         "cosyvoice": _service_status("cosyvoice", os.getenv("COSYVOICE_BASE_URL")),
+        "vosk": _service_status("vosk", os.getenv("VOSK_BASE_URL")),
+        "vosk_tts": _service_status("vosk_tts", os.getenv("VOSK_TTS_BASE_URL")),
+        "yandex_speechkit": build_yandex_speechkit_status(),
+        "yandex_realtime": build_yandex_realtime_status(),
     }
 
 
@@ -102,11 +113,15 @@ def _cosyvoice_api_style() -> str:
 
 def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoice") -> dict[str, Any]:
     order = [preferred]
-    if preferred != "sensevoice":
-        order.append("sensevoice")
-    if "whisper" not in order:
-        order.append("whisper")
+    for fallback in ("sensevoice", "whisper"):
+        if fallback not in order:
+            order.append(fallback)
     for name in order:
+        if name == "yandex_speechkit":
+            data = transcribe_with_yandex_speechkit(audio_b64, sample_rate_hz=24000)
+            if data.get("text"):
+                return data
+            continue
         base_url = os.getenv(f"{name.upper()}_BASE_URL")
         if not base_url:
             continue
@@ -136,7 +151,29 @@ def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoi
     raise RuntimeError("No STT service configured")
 
 
-def synthesize_audio(text: str, session_id: str) -> dict[str, Any]:
+def synthesize_audio(text: str, session_id: str, preferred: str = "cosyvoice") -> dict[str, Any]:
+    return synthesize_audio_with_provider(text, session_id, preferred=preferred)
+
+
+def synthesize_audio_with_provider(text: str, session_id: str, preferred: str = "cosyvoice") -> dict[str, Any]:
+    if preferred == "yandex_speechkit":
+        data = synthesize_with_yandex_speechkit(text)
+        data.setdefault("session_id", session_id)
+        return data
+    if preferred == "vosk_tts":
+        base_url = os.getenv("VOSK_TTS_BASE_URL")
+        if not base_url:
+            raise RuntimeError("VOSK_TTS_BASE_URL is not configured")
+        resp = requests.post(
+            base_url.rstrip("/") + "/speak",
+            json={"text": text, "session_id": session_id, "language": "ru"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        data.setdefault("provider", "vosk_tts")
+        data.setdefault("session_id", session_id)
+        return data
     base_url = os.getenv("COSYVOICE_BASE_URL")
     if not base_url:
         raise RuntimeError("COSYVOICE_BASE_URL is not configured")

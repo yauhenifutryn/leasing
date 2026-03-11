@@ -6,6 +6,7 @@ This demo lives entirely under `rag_demo_system/`. The current MVP target is:
 - one FastAPI backend that also serves the UI
 - switchable `our_rag` and `dify_rag`
 - Russian voice I/O
+- multiple voice-provider options with the same backend brain
 - one public HTTPS link for client testing
 
 For the first deployable MVP, the recommended shape is:
@@ -48,10 +49,13 @@ rag_demo_system/
 
 ### Voice
 - browser sends PCM16 audio chunks over `WS /ws/voice`
-- backend calls:
+- `local` provider calls:
   - SenseVoice official API directly for STT
   - CosyVoice official API directly for TTS
   - optional local Whisper fallback service if SenseVoice is unavailable
+- `yandex_speechkit` uses Yandex STT + Yandex TTS, while retrieval and answer generation stay in your backend
+- `oss_russian` uses Vosk STT + Vosk TTS, while retrieval and answer generation stay in your backend
+- `yandex_realtime` provider opens an upstream Yandex Realtime WebSocket and relays browser audio/events directly to Yandex
 
 ## Important Runtime Notes
 
@@ -77,6 +81,18 @@ Key variables:
 - `COSYVOICE_API_STYLE=official`
 - `COSYVOICE_SPK_ID`
 - `WHISPER_BASE_URL`
+- `VOSK_BASE_URL`
+- `VOSK_TTS_BASE_URL`
+- `VOSK_MODEL_PATH`
+- `VOSK_TTS_MODEL_NAME`
+- `VOSK_TTS_SAMPLE_RATE_HZ`
+- `YC_FOLDER_ID`
+- `YC_API_KEY` or `YC_IAM_TOKEN`
+- `YC_MODEL` optional, defaults to `gpt://<folder_id>/speech-realtime-250923`
+- `YC_VOICE` optional, defaults to `ermil`
+- `YANDEX_AI_SEARCH_INDEX_ID` optional, for Yandex-side `file_search`
+- `YANDEX_REALTIME_PROMPT` optional, to override the default Russian voice prompt
+- `YC_REALTIME_WS_URL` optional, to override the default Yandex Realtime endpoint
 
 ## Useful Endpoints
 
@@ -118,6 +134,14 @@ curl -sS http://127.0.0.1:8000/api/chat \
 
 ## Voice Service Notes
 
+### Voice provider toggle
+- The voice panel now has a `Voice provider` selector.
+- `local` keeps the current SenseVoice -> RAG -> CosyVoice pipeline.
+- `yandex_speechkit` uses Yandex SpeechKit only for STT/TTS. Your own backend still owns RAG and answer generation.
+- `oss_russian` uses Vosk STT and Vosk TTS with the same backend RAG and LLM.
+- `yandex_realtime` bypasses local STT/TTS and relays the WebSocket session to Yandex Realtime.
+- The existing backend selector still applies to text chat. In `yandex_realtime` voice mode, Yandex handles the voice turn itself.
+
 ### SenseVoice
 - The backend supports the official SenseVoice FastAPI service contract via `SENSEVOICE_API_STYLE=official`.
 - It sends WAV-wrapped audio to `/api/v1/asr`.
@@ -132,6 +156,21 @@ curl -sS http://127.0.0.1:8000/api/chat \
 - It exposes:
   - `GET /health`
   - `POST /transcribe`
+
+### Yandex Realtime
+- The backend uses `wss://rest-assistant.api.cloud.yandex.net/v1/realtime/openai?model=...` by default.
+- Auth is forwarded as `Authorization: Api-Key <key>` or `Authorization: Bearer <iam_token>`.
+- The relay sends a `session.update` with 24 kHz mono PCM input, 44.1 kHz PCM output, `ermil` by default, and optional `file_search` wiring through `YANDEX_AI_SEARCH_INDEX_ID`.
+
+### Yandex SpeechKit split-brain
+- This is the preferred Yandex path if you want your own brain.
+- The backend calls Yandex sync STT and Yandex TTS directly, then keeps retrieval and answer generation local.
+
+### OSS Russian split-brain
+- This uses local Vosk STT and local Vosk TTS services.
+- It is weaker than Yandex on naturalness, but fully open-source and Russian-capable.
+
+Detailed server instructions live in [SERVER_SETUP_VOICE_OPTIONS.md](./SERVER_SETUP_VOICE_OPTIONS.md).
 
 ## Stack Control
 

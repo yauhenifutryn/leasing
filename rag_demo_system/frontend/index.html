@@ -63,6 +63,15 @@
             </div>
           </div>
           <div class="help">WebSocket voice mode with backend switch. STT/TTS services must be configured server-side.</div>
+          <div class="toggle-row">
+            <span class="toggle-label">Voice provider</span>
+            <select id="voiceProviderSelect">
+              <option value="local">local</option>
+              <option value="yandex_speechkit">yandex_speechkit</option>
+              <option value="oss_russian">oss_russian</option>
+              <option value="yandex_realtime">yandex_realtime</option>
+            </select>
+          </div>
           <div class="transcript" id="transcript"></div>
           <div class="transcript" id="assistantVoice"></div>
           <div class="row">

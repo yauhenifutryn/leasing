@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 import time
@@ -29,8 +30,9 @@ from .rag_backends import build_backend_status
 from .settings import load_settings
 from .state import StateStore
 from .router import route_non_rag
-from .voice_adapters import build_llm_status, build_voice_statuses, synthesize_audio, transcribe_audio
+from .voice_adapters import build_llm_status, build_voice_statuses, synthesize_audio_with_provider, transcribe_audio
 from .voice_session import VoiceSession
+from .yandex_realtime import YandexRealtimeRelay, normalize_voice_provider
 
 settings = load_settings()
 state = StateStore(Path(__file__).resolve().parents[1] / ".state")
@@ -91,6 +93,17 @@ def _selected_backend(requested: str | None) -> str:
 
 def _launch_mode() -> str:
     return os.getenv("RAG_LAUNCH_MODE", "direct")
+
+
+def _voice_pipeline(voice_provider: str) -> tuple[str, str]:
+    if voice_provider == "yandex_speechkit":
+        return ("yandex_speechkit", "yandex_speechkit")
+    if voice_provider == "oss_russian":
+        return ("vosk", "vosk_tts")
+    return (
+        (os.getenv("VOICE_STT_PROVIDER") or "sensevoice").strip().lower(),
+        (os.getenv("VOICE_TTS_PROVIDER") or "cosyvoice").strip().lower(),
+    )
 
 
 def _rag_statuses() -> dict[str, dict[str, Any]]:
@@ -605,11 +618,13 @@ async def voice_ws(websocket: WebSocket) -> None:
     session = VoiceSession(session_id=session_id, backend="our_rag")
     voice_sessions[session_id] = session
     audio_chunks: list[str] = []
+    yandex_relay: YandexRealtimeRelay | None = None
     await websocket.send_json(
         {
             "type": "session.ready",
             "session_id": session_id,
             "backend": session.backend,
+            "voice_provider": session.voice_provider,
         }
     )
     try:
@@ -618,13 +633,44 @@ async def voice_ws(websocket: WebSocket) -> None:
             event_type = event.get("type")
             if event_type == "session.update":
                 session.backend = _selected_backend(event.get("backend"))
+                session.voice_provider = normalize_voice_provider(event.get("voice_provider"))
+                if session.voice_provider == "yandex_realtime":
+                    if yandex_relay is None:
+                        yandex_relay = YandexRealtimeRelay(websocket)
+                    try:
+                        await yandex_relay.refresh_session()
+                    except Exception as exc:  # noqa: BLE001
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "session_id": session_id,
+                                "error": f"yandex_connect_failed: {exc}",
+                            }
+                        )
+                elif yandex_relay is not None:
+                    await yandex_relay.close()
+                    yandex_relay = None
                 await websocket.send_json(
                     {
                         "type": "session.updated",
                         "session_id": session_id,
                         "backend": session.backend,
+                        "voice_provider": session.voice_provider,
                     }
                 )
+            elif session.voice_provider == "yandex_realtime":
+                if yandex_relay is None:
+                    yandex_relay = YandexRealtimeRelay(websocket)
+                try:
+                    await yandex_relay.send_event(event)
+                except Exception as exc:  # noqa: BLE001
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "session_id": session_id,
+                            "error": f"yandex_relay_failed: {exc}",
+                        }
+                    )
             elif event_type == "input_audio_buffer.append":
                 audio = event.get("audio") or ""
                 if audio:
@@ -653,8 +699,9 @@ async def voice_ws(websocket: WebSocket) -> None:
             elif event_type == "input_audio_buffer.commit":
                 audio_b64 = "".join(audio_chunks)
                 audio_chunks.clear()
+                stt_provider, tts_provider = _voice_pipeline(session.voice_provider)
                 try:
-                    transcript = transcribe_audio(audio_b64, session_id=session_id)
+                    transcript = transcribe_audio(audio_b64, session_id=session_id, preferred=stt_provider)
                 except Exception as exc:  # noqa: BLE001
                     await websocket.send_json(
                         {
@@ -701,7 +748,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                             }
                         )
                     try:
-                        audio_response = synthesize_audio(answer_text, session_id=session_id)
+                        audio_response = synthesize_audio_with_provider(answer_text, session_id=session_id, preferred=tts_provider)
                         audio_b64 = audio_response.get("audio_b64") or ""
                         if audio_b64:
                             await websocket.send_json(
@@ -736,6 +783,10 @@ async def voice_ws(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "response.cancelled", "session_id": session_id})
     except WebSocketDisconnect:
         voice_sessions.pop(session_id, None)
+    finally:
+        voice_sessions.pop(session_id, None)
+        if yandex_relay is not None:
+            await yandex_relay.close()
 
 
 @app.post("/api/voice/start")

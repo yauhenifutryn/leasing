@@ -8,6 +8,7 @@ from typing import Any
 class VoiceSession:
     session_id: str
     backend: str = "our_rag"
+    voice_provider: str = "local"
     assistant_speaking: bool = False
     interrupted: bool = False
     active_task_id: str | None = None

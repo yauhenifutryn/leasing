@@ -10,6 +10,7 @@ let requestStartMs = null;
 let consentState = "needed";
 let voiceFast = false;
 let selectedBackend = "our_rag";
+let selectedVoiceProvider = "local";
 let voiceSocket = null;
 let voiceConnected = false;
 let talking = false;
@@ -78,6 +79,17 @@ function setVoiceStatus(text, level = "warn") {
   dot.classList.remove("good", "danger", "warn");
   dot.classList.add(level);
   $("#voiceText").textContent = text;
+}
+
+function localVoiceReady(services) {
+  return Boolean(services.sensevoice?.available || services.whisper?.available) && Boolean(services.cosyvoice?.available);
+}
+
+function voiceProviderReady(provider, services) {
+  if (provider === "yandex_realtime") return Boolean(services.yandex_realtime?.available);
+  if (provider === "yandex_speechkit") return Boolean(services.yandex_speechkit?.available);
+  if (provider === "oss_russian") return Boolean(services.vosk?.available) && Boolean(services.vosk_tts?.available);
+  return localVoiceReady(services);
 }
 
 function setTimePill(metaEl, elapsedMs) {
@@ -175,7 +187,7 @@ async function refreshCapabilities() {
     }
     selector.value = selectedBackend;
     const voiceServices = voiceData.services || {};
-    const ready = Boolean(voiceServices.sensevoice?.available || voiceServices.whisper?.available) && Boolean(voiceServices.cosyvoice?.available);
+    const ready = voiceProviderReady(selectedVoiceProvider, voiceServices);
     $("#btnVoiceConnect").disabled = !ready;
     setVoiceStatus(ready ? "Voice services detected" : "Voice services not configured", ready ? "good" : "warn");
   } catch (err) {
@@ -188,13 +200,16 @@ function initSession() {
   const storedConsent = localStorage.getItem("rag_consent");
   const storedFast = localStorage.getItem("rag_voice_fast");
   const storedBackend = localStorage.getItem("rag_backend");
+  const storedVoiceProvider = localStorage.getItem("rag_voice_provider");
   if (storedSession) sessionId = storedSession;
   if (storedConsent) consentState = storedConsent;
   if (storedFast) voiceFast = storedFast === "true";
   if (storedBackend) selectedBackend = storedBackend;
+  if (storedVoiceProvider) selectedVoiceProvider = storedVoiceProvider;
   setConsentState(consentState || "needed");
   $("#fastToggle").checked = voiceFast;
   $("#backendSelect").value = selectedBackend;
+  $("#voiceProviderSelect").value = selectedVoiceProvider;
 }
 
 async function sendMessage(opts = {}) {
@@ -324,14 +339,14 @@ function playPcm(int16, sampleRate = 24000) {
 function handleVoiceEvent(evt) {
   if (evt.type === "session.ready") {
     setSessionId(evt.session_id);
-    setVoiceStatus(`Voice connected (${evt.backend})`, "good");
+    setVoiceStatus(`Voice connected (${evt.voice_provider || "local"})`, "good");
     $("#btnVoiceTalk").disabled = false;
   }
   if (evt.type === "session.updated") {
-    setVoiceStatus(`Voice backend: ${evt.backend}`, "good");
+    setVoiceStatus(`Voice provider: ${evt.voice_provider || "local"}`, "good");
   }
   if (evt.type === "conversation.item.input_audio_transcription.completed") {
-    $("#transcript").textContent = evt.transcription || "";
+    $("#transcript").textContent = evt.transcription || evt.transcript || "";
   }
   if (evt.type === "assistant_response") {
     $("#assistantVoice").textContent = evt.answer || "";
@@ -381,7 +396,7 @@ async function connectVoice() {
     voiceConnected = true;
     setVoiceStatus("Voice websocket connected", "good");
     await initAudio();
-    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend }));
+    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend, voice_provider: selectedVoiceProvider }));
   };
   voiceSocket.onmessage = (msg) => handleVoiceEvent(JSON.parse(msg.data));
   voiceSocket.onerror = () => setVoiceStatus("Voice websocket error", "danger");
@@ -426,7 +441,15 @@ $("#backendSelect").addEventListener("change", (e) => {
   selectedBackend = e.target.value;
   localStorage.setItem("rag_backend", selectedBackend);
   if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend }));
+    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend, voice_provider: selectedVoiceProvider }));
+  }
+});
+$("#voiceProviderSelect").addEventListener("change", (e) => {
+  selectedVoiceProvider = e.target.value;
+  localStorage.setItem("rag_voice_provider", selectedVoiceProvider);
+  refreshCapabilities().catch(() => {});
+  if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
+    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend, voice_provider: selectedVoiceProvider }));
   }
 });
 $("#btnVoiceConnect").addEventListener("click", () => connectVoice().catch(alert));
