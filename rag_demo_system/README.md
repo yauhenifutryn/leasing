@@ -93,6 +93,9 @@ Key variables:
 - `YANDEX_AI_SEARCH_INDEX_ID` optional, for Yandex-side `file_search`
 - `YANDEX_REALTIME_PROMPT` optional, to override the default Russian voice prompt
 - `YC_REALTIME_WS_URL` optional, to override the default Yandex Realtime endpoint
+- `STACK_VOICE_PROFILE` optional, one of `local`, `yandex_speechkit`, `oss_russian`, `yandex_realtime`
+- `STACK_QWEN_CMD` optional, if you want the repo launcher to start vLLM itself
+- `STACK_VOSK_CMD` and `STACK_VOSK_TTS_CMD` optional, used for one-command `oss_russian` startup
 
 ## Useful Endpoints
 
@@ -177,6 +180,8 @@ Detailed server instructions live in [SERVER_SETUP_VOICE_OPTIONS.md](./SERVER_SE
 Repo-level launcher:
 
 ```bash
+./rag_demo_system/scripts/setup_vast_voice.sh oss_russian
+./rag_demo_system/scripts/setup_vast_voice.sh yandex_speechkit
 ./rag_demo_system/scripts/stack.sh status
 ./rag_demo_system/scripts/stack.sh up
 ./rag_demo_system/scripts/stack.sh down
@@ -184,6 +189,12 @@ Repo-level launcher:
 ```
 
 The supervisor mode is the fallback mode for container-style GPU hosts. It is the relevant mode for Vast if Docker Compose is not usable there.
+`STACK_VOICE_PROFILE` decides which auxiliary voice services the launcher starts:
+
+- `local`: SenseVoice / CosyVoice / optional Whisper, if their `STACK_*_CMD` values are configured
+- `oss_russian`: Vosk STT + Vosk TTS
+- `yandex_speechkit`: no local speech service, only backend and optional Qwen
+- `yandex_realtime`: no local speech service, only backend and optional Qwen
 
 ### ngrok
 

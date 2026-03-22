@@ -54,3 +54,51 @@ def test_build_up_commands_includes_dify_compose_when_configured() -> None:
         "-d",
     ]
     assert commands[2][0] == "supervisord"
+
+
+def test_resolve_voice_profile_defaults_to_local() -> None:
+    stack_cli = _load_module()
+
+    profile = stack_cli.resolve_voice_profile(requested=None)
+
+    assert profile == "local"
+
+
+def test_resolve_voice_profile_rejects_unknown_values() -> None:
+    stack_cli = _load_module()
+
+    profile = stack_cli.resolve_voice_profile(requested="unknown")
+
+    assert profile == "local"
+
+
+def test_build_program_selection_for_oss_russian() -> None:
+    stack_cli = _load_module()
+
+    programs = stack_cli.build_program_selection(
+        voice_profile="oss_russian",
+        env={
+            "STACK_QWEN_CMD": "python -m vllm.entrypoints.openai.api_server",
+            "STACK_VOSK_CMD": "./scripts/run_vosk_server.sh",
+            "STACK_VOSK_TTS_CMD": "./scripts/run_vosk_tts_server.sh",
+        },
+    )
+
+    assert programs["start"] == ["backend", "qwen", "vosk", "vosk_tts"]
+    assert programs["stop"] == ["cosyvoice", "frontend", "ngrok", "sensevoice", "whisper"]
+
+
+def test_build_program_selection_for_yandex_speechkit_keeps_only_backend_and_qwen() -> None:
+    stack_cli = _load_module()
+
+    programs = stack_cli.build_program_selection(
+        voice_profile="yandex_speechkit",
+        env={
+            "STACK_QWEN_CMD": "python -m vllm.entrypoints.openai.api_server",
+            "STACK_VOSK_CMD": "./scripts/run_vosk_server.sh",
+            "STACK_VOSK_TTS_CMD": "./scripts/run_vosk_tts_server.sh",
+        },
+    )
+
+    assert programs["start"] == ["backend", "qwen"]
+    assert programs["stop"] == ["cosyvoice", "frontend", "ngrok", "sensevoice", "vosk", "vosk_tts", "whisper"]

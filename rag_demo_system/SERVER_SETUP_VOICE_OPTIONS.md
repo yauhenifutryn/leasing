@@ -44,19 +44,24 @@ From repo root:
 
 ```bash
 cd /workspace/leasing
-python3 -m venv rag_demo_system/.venv
-source rag_demo_system/.venv/bin/activate
-pip install -r rag_demo_system/requirements.txt
+./rag_demo_system/scripts/setup_vast_voice.sh yandex_speechkit
 ```
 
 Then start your LLM endpoint and Qdrant the same way you already do.
 
-Then start the backend:
+Copy the env:
 
 ```bash
-cd /workspace/leasing/rag_demo_system
-source .venv/bin/activate
-python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
+cp rag_demo_system/.env.voice.yandex-speechkit rag_demo_system/.env
+```
+
+If you want the repo launcher to start vLLM too, fill `STACK_QWEN_CMD` in `rag_demo_system/.env`.
+
+Then run everything from one terminal:
+
+```bash
+cd /workspace/leasing
+./rag_demo_system/scripts/stack.sh up
 ```
 
 ### UI test flow
@@ -113,43 +118,22 @@ unzip -o vosk-model-small-ru-0.22.zip
 
 ```bash
 cd /workspace/leasing
-python3 -m venv rag_demo_system/.venv-voice-oss
-source rag_demo_system/.venv-voice-oss/bin/activate
-pip install -r rag_demo_system/requirements-voice-oss.txt
+./rag_demo_system/scripts/setup_vast_voice.sh oss_russian
 ```
 
-### Start OSS voice services
-
-Terminal 1:
+Copy the env:
 
 ```bash
-cd /workspace/leasing/rag_demo_system
-source .venv-voice-oss/bin/activate
-export VOSK_MODEL_PATH=/workspace/leasing/models/vosk-model-small-ru-0.22
-python -m uvicorn services.vosk_server:app --host 0.0.0.0 --port 50010
+cp rag_demo_system/.env.voice.oss-russian.example rag_demo_system/.env
 ```
 
-Terminal 2:
+If you want the repo launcher to start vLLM too, fill `STACK_QWEN_CMD` in `rag_demo_system/.env`.
 
-```bash
-cd /workspace/leasing/rag_demo_system
-source .venv-voice-oss/bin/activate
-export VOSK_TTS_MODEL_NAME=vosk-model-tts-ru-0.9-multi
-export VOSK_TTS_SAMPLE_RATE_HZ=22050
-python -m uvicorn services.vosk_tts_server:app --host 0.0.0.0 --port 50011
-```
-
-### Start backend
-
-Terminal 3:
+Then run everything from one terminal:
 
 ```bash
 cd /workspace/leasing
-python3 -m venv rag_demo_system/.venv
-source rag_demo_system/.venv/bin/activate
-pip install -r rag_demo_system/requirements.txt
-cd rag_demo_system
-python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
+./rag_demo_system/scripts/stack.sh up
 ```
 
 ### UI test flow
@@ -165,3 +149,4 @@ python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
 - `yandex_realtime` still exists in the codebase, but it is not the preferred path if you do not trust the Yandex model/tool layer.
 - `yandex_speechkit` and `oss_russian` both keep the brain on your side.
 - `oss_russian` is expected to be weaker than Yandex on voice quality and often on latency, but it is the most practical fully open-source Russian stack in this repo.
+- `stack.sh up` uses `supervisord` and starts only the auxiliary voice services required by `STACK_VOICE_PROFILE`.
