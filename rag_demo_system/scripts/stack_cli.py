@@ -83,13 +83,6 @@ def build_up_commands(repo_root: str, mode: str, dify_dir: str | None = None) ->
         )
         if dify_dir:
             commands.append(["docker", "compose", "up", "-d"])
-    commands.append(
-        [
-            "supervisord",
-            "-c",
-            str(repo_root_path / "rag_demo_system" / "scripts" / "supervisord.conf"),
-        ]
-    )
     return commands
 
 
@@ -182,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if dify_dir:
                 subprocess.run(["docker", "compose", "down"], cwd=dify_dir, check=False)
-        subprocess.run(["supervisorctl", "-c", str(repo_root / "rag_demo_system" / "scripts" / "supervisord.conf"), "shutdown"], check=False)
+        subprocess.run([_supervisorctl_bin(repo_root), "-c", _supervisor_conf(repo_root), "shutdown"], check=False)
         return 0
     if command == "smoke":
         subprocess.run([str(repo_root / "rag_demo_system" / "scripts" / "smoke_test.sh")], check=True)

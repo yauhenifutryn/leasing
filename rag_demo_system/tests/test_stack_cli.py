@@ -53,7 +53,6 @@ def test_build_up_commands_includes_dify_compose_when_configured() -> None:
         "up",
         "-d",
     ]
-    assert commands[2][0] == "supervisord"
 
 
 def test_resolve_voice_profile_defaults_to_local() -> None:
