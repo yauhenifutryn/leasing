@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 2 context gathered
-last_updated: "2026-03-25T21:33:09.031Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-03-25T22:09:18.838Z"
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  completed_phases: 2
+  total_plans: 5
+  completed_plans: 5
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Accurate, low-latency Russian voice answers grounded in the company knowledge base, with full on-premises control over every pipeline component
-**Current focus:** Phase 01 — instrumentation-and-ui-switching
+**Current focus:** Phase 02 — voice-provider-adapters
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
+Phase: 02 (voice-provider-adapters) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Plan: Not started
 | Phase 01-instrumentation-and-ui-switching P01 | 2 | 2 tasks | 3 files |
 | Phase 01-instrumentation-and-ui-switching P03 | 10 | 2 tasks | 2 files |
 | Phase 01-instrumentation-and-ui-switching P02 | 8 | 2 tasks | 3 files |
+| Phase 02-voice-provider-adapters P01 | 2 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ Recent decisions affecting current work:
 - [Phase 01-instrumentation-and-ui-switching]: time.time() chosen over perf_counter for voice turn timestamps — absolute epoch values required for cross-process log correlation in benchmarks
 - [Phase 01-instrumentation-and-ui-switching]: t_llm_first_token = t_retrieval_done is conservative approximation for non-streaming chat() — TODO to extract real first token in Phase 3 streaming
 - [Phase 01-instrumentation-and-ui-switching]: brain_model validated against allowlist (Qwen3-30B-A3B, Qwen3.5-35B-A3B); invalid values fall back to default silently to prevent misconfiguration
+- [Phase 02-voice-provider-adapters]: _HARD_FAIL_STT frozenset at module level: new STT providers hard-fail on missing BASE_URL; no silent fallback to sensevoice/whisper
+- [Phase 02-voice-provider-adapters]: qwen3_tts hard-fail mirrors STT pattern: all three new providers raise RuntimeError when unconfigured rather than degrading silently
 
 ### Pending Todos
 
@@ -92,6 +95,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T21:33:09.022Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-voice-provider-adapters/02-CONTEXT.md
+Last session: 2026-03-25T22:09:04.627Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: None

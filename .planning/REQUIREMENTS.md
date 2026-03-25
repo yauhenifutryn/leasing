@@ -28,11 +28,11 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 
 ### Voice Providers
 
-- [ ] **VPROV-01**: Qwen3-TTS adapter integrated into voice_adapters.py with sidecar FastAPI service
-- [ ] **VPROV-02**: Qwen3-ASR adapter integrated into voice_adapters.py with sidecar FastAPI service
-- [ ] **VPROV-03**: Voxtral STT adapter integrated into voice_adapters.py (sidecar or API client depending on self-host availability)
-- [ ] **VPROV-04**: All new adapters pass the existing voice adapter contract tests
-- [ ] **VPROV-05**: Frontend voice provider selector updated to include all new providers
+- [x] **VPROV-01**: Qwen3-TTS adapter integrated into voice_adapters.py with sidecar FastAPI service
+- [x] **VPROV-02**: Qwen3-ASR adapter integrated into voice_adapters.py with sidecar FastAPI service
+- [x] **VPROV-03**: Voxtral STT adapter integrated into voice_adapters.py (sidecar or API client depending on self-host availability)
+- [x] **VPROV-04**: All new adapters pass the existing voice adapter contract tests
+- [x] **VPROV-05**: Frontend voice provider selector updated to include all new providers
 
 ### Brain
 
@@ -103,11 +103,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SWITCH-01 | Phase 1 | Complete |
 | SWITCH-02 | Phase 1 | Complete |
 | SWITCH-03 | Phase 1 | Complete |
-| VPROV-01 | Phase 2 | Pending |
-| VPROV-02 | Phase 2 | Pending |
-| VPROV-03 | Phase 2 | Pending |
-| VPROV-04 | Phase 2 | Pending |
-| VPROV-05 | Phase 2 | Pending |
+| VPROV-01 | Phase 2 | Complete |
+| VPROV-02 | Phase 2 | Complete |
+| VPROV-03 | Phase 2 | Complete |
+| VPROV-04 | Phase 2 | Complete |
+| VPROV-05 | Phase 2 | Complete |
 | BRAIN-01 | Phase 3 | Pending |
 | BENCH-01 | Phase 3 | Pending |
 | BENCH-02 | Phase 3 | Pending |

@@ -45,8 +45,8 @@ Plans:
   5. The provider field in each log line matches the intended provider when the fallback env vars (SENSEVOICE_BASE_URL, WHISPER_BASE_URL) are unset, confirming no silent fallback during benchmarking
 **Plans:** 2 plans
 Plans:
-- [ ] 02-01-PLAN.md — Contract tests, adapter branches, health status, frontend options
-- [ ] 02-02-PLAN.md — Qwen3-TTS, Qwen3-ASR, Voxtral sidecar servers + requirements files
+- [x] 02-01-PLAN.md — Contract tests, adapter branches, health status, frontend options
+- [x] 02-02-PLAN.md — Qwen3-TTS, Qwen3-ASR, Voxtral sidecar servers + requirements files
 
 ### Phase 3: Brain Upgrade and Benchmark Framework
 **Goal**: The brain model is switchable via UI selector and env var, a fixed Russian question set and benchmark runner are ready for use, and per-stack env profiles cover every configuration to be benchmarked
