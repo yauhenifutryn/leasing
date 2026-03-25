@@ -161,3 +161,93 @@ def test_synthesize_audio_supports_vosk_tts_service(monkeypatch: pytest.MonkeyPa
         "session_id": "s6",
         "language": "ru",
     }
+
+
+def test_transcribe_audio_supports_qwen3_asr_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setenv("QWEN3_ASR_BASE_URL", "http://qwen3-asr.local")
+    monkeypatch.delenv("SENSEVOICE_BASE_URL", raising=False)
+    monkeypatch.delenv("WHISPER_BASE_URL", raising=False)
+
+    def fake_post(url, headers=None, data=None, timeout=None, files=None, json=None):
+        calls.append({"url": url, "json": json})
+        return FakeResponse(json_data={"text": "Лизинг одобрен", "provider": "qwen3_asr"})
+
+    monkeypatch.setattr(voice_adapters.requests, "post", fake_post)
+
+    data = voice_adapters.transcribe_audio("AQIDBA==", session_id="s1", preferred="qwen3_asr")
+
+    assert data["text"] == "Лизинг одобрен"
+    assert data["provider"] == "qwen3_asr"
+    assert calls[0]["url"] == "http://qwen3-asr.local/transcribe"
+    assert calls[0]["json"]["sample_rate_hz"] == 24000
+
+
+def test_synthesize_audio_supports_qwen3_tts_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setenv("QWEN3_TTS_BASE_URL", "http://qwen3-tts.local")
+
+    def fake_post(url, headers=None, data=None, timeout=None, files=None, json=None):
+        calls.append({"url": url, "json": json})
+        return FakeResponse(
+            json_data={
+                "audio_b64": "AQIDBA==",
+                "sample_rate_hz": 24000,
+                "provider": "qwen3_tts",
+                "session_id": "s1",
+            }
+        )
+
+    monkeypatch.setattr(voice_adapters.requests, "post", fake_post)
+
+    data = voice_adapters.synthesize_audio("Здравствуйте", session_id="s1", preferred="qwen3_tts")
+
+    assert data["provider"] == "qwen3_tts"
+    assert data["audio_b64"] == "AQIDBA=="
+    assert calls[0]["url"] == "http://qwen3-tts.local/speak"
+    assert calls[0]["json"] == {"text": "Здравствуйте", "session_id": "s1", "language": "ru"}
+
+
+def test_transcribe_audio_supports_voxtral_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setenv("VOXTRAL_BASE_URL", "http://voxtral.local")
+    monkeypatch.delenv("SENSEVOICE_BASE_URL", raising=False)
+    monkeypatch.delenv("WHISPER_BASE_URL", raising=False)
+
+    def fake_post(url, headers=None, data=None, timeout=None, files=None, json=None):
+        calls.append({"url": url, "json": json})
+        return FakeResponse(json_data={"text": "Лизинг одобрен", "provider": "voxtral"})
+
+    monkeypatch.setattr(voice_adapters.requests, "post", fake_post)
+
+    data = voice_adapters.transcribe_audio("AQIDBA==", session_id="s1", preferred="voxtral")
+
+    assert data["text"] == "Лизинг одобрен"
+    assert data["provider"] == "voxtral"
+    assert calls[0]["url"] == "http://voxtral.local/transcribe"
+    assert calls[0]["json"]["sample_rate_hz"] == 24000
+
+
+def test_qwen3_asr_hard_fail_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QWEN3_ASR_BASE_URL", raising=False)
+    monkeypatch.delenv("SENSEVOICE_BASE_URL", raising=False)
+    monkeypatch.delenv("WHISPER_BASE_URL", raising=False)
+
+    with pytest.raises(RuntimeError, match="QWEN3_ASR_BASE_URL"):
+        voice_adapters.transcribe_audio("AQIDBA==", session_id="s1", preferred="qwen3_asr")
+
+
+def test_qwen3_tts_hard_fail_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QWEN3_TTS_BASE_URL", raising=False)
+
+    with pytest.raises(RuntimeError, match="QWEN3_TTS_BASE_URL"):
+        voice_adapters.synthesize_audio_with_provider("Здравствуйте", session_id="s1", preferred="qwen3_tts")
+
+
+def test_voxtral_hard_fail_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VOXTRAL_BASE_URL", raising=False)
+    monkeypatch.delenv("SENSEVOICE_BASE_URL", raising=False)
+    monkeypatch.delenv("WHISPER_BASE_URL", raising=False)
+
+    with pytest.raises(RuntimeError, match="VOXTRAL_BASE_URL"):
+        voice_adapters.transcribe_audio("AQIDBA==", session_id="s1", preferred="voxtral")
