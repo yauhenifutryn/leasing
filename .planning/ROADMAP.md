@@ -27,9 +27,9 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
   2. The primary KPI (playback_started minus speech_stopped) is computed and present in every log line without requiring manual calculation
   3. The UI shows live selectors for RAG backend (our_rag / dify_rag), brain model (Qwen3-30B / Qwen3.5-35B), STT provider, and TTS provider; switching any selector takes effect without requiring a full backend restart
   4. The active stack_id is derived from the current selector combination and embedded in every log line automatically, so no manual tagging is needed during benchmarking
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 Plans:
-- [ ] 01-01-PLAN.md — VoiceSession dataclass extension + test scaffolding
+- [x] 01-01-PLAN.md — VoiceSession dataclass extension + test scaffolding
 - [ ] 01-02-PLAN.md — Backend instrumentation (timestamps, session.update, structured log)
 - [ ] 01-03-PLAN.md — Frontend UI selectors (brain model, STT, TTS)
 
@@ -95,7 +95,7 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Instrumentation and UI Switching | 0/3 | Planning complete | - |
+| 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
 | 2. Voice Provider Adapters | 0/TBD | Not started | - |
 | 3. Brain Upgrade and Benchmark Framework | 0/TBD | Not started | - |
 | 4. Qwen3-Omni Hybrid | 0/TBD | Not started | - |

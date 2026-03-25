@@ -1,3 +1,17 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: Ready to execute
+stopped_at: "Completed 01-01-PLAN.md: VoiceSession fields and log event contract"
+last_updated: "2026-03-25T20:55:06.409Z"
+progress:
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 3
+  completed_plans: 1
+---
+
 # Project State
 
 ## Project Reference
@@ -5,20 +19,17 @@
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Accurate, low-latency Russian voice answers grounded in the company knowledge base, with full on-premises control over every pipeline component
-**Current focus:** Phase 1 — Instrumentation and UI Switching
+**Current focus:** Phase 01 — instrumentation-and-ui-switching
 
 ## Current Position
 
-Phase: 1 of 5 (Instrumentation and UI Switching)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-25 — Roadmap rewritten to 5-phase structure (local build phases 1-4, server phase 5)
-
-Progress: [░░░░░░░░░░] 0%
+Phase: 01 (instrumentation-and-ui-switching) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: --
 - Total execution time: 0 hours
@@ -30,10 +41,12 @@ Progress: [░░░░░░░░░░] 0%
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: --
 - Trend: --
 
 *Updated after each plan completion*
+| Phase 01-instrumentation-and-ui-switching P01 | 2 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -47,6 +60,8 @@ Recent decisions affecting current work:
 - [Roadmap v2]: Phase 4 (Omni) depends on Phase 2 and Phase 3; cannot start until both complete
 - [Roadmap v2]: Phase 5 benchmark execution order is fixed: RAG comparison first, brain second, STT/TTS third, Omni vs. split pipeline last; this order isolates one variable per run
 - [Roadmap v2]: DEPLOY-01 (env profiles) moved from Phase 1 to Phase 3 (Benchmark Framework) where it logically belongs; DEPLOY-02 and DEPLOY-03 remain in Phase 5
+- [Phase 01-instrumentation-and-ui-switching]: stack_id is a @property not a dataclass field: avoids stale value bugs when backend or provider fields are mutated at runtime
+- [Phase 01-instrumentation-and-ui-switching]: primary_kpi_ms formula is (playback_started - speech_stopped) * 1000: speech_stopped is end of user utterance, playback_started is first audio reaching the browser
 
 ### Pending Todos
 
@@ -70,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25
-Stopped at: Roadmap rewritten to 5-phase structure; state and requirements traceability updated; ready to begin Phase 1 planning
+Last session: 2026-03-25T20:55:06.406Z
+Stopped at: Completed 01-01-PLAN.md: VoiceSession fields and log event contract
 Resume file: None
