@@ -9,10 +9,18 @@ class VoiceSession:
     session_id: str
     backend: str = "our_rag"
     voice_provider: str = "local"
+    brain_model: str = "Qwen/Qwen3-30B-A3B"
+    stt_provider: str = "sensevoice"
+    tts_provider: str = "cosyvoice"
     assistant_speaking: bool = False
     interrupted: bool = False
     active_task_id: str | None = None
     last_user_message: str = ""
+
+    @property
+    def stack_id(self) -> str:
+        brain = self.brain_model.split("/")[-1]
+        return f"{self.backend}__{brain}__{self.stt_provider}__{self.tts_provider}"
 
     def on_audio_chunk(self, _audio_b64: str) -> list[dict[str, Any]]:
         if not self.assistant_speaking:

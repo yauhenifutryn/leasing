@@ -84,3 +84,50 @@ def test_session_defaults_to_local_voice_provider() -> None:
     session = voice_session.VoiceSession(session_id="s4", backend="our_rag")
 
     assert session.voice_provider == "local"
+
+
+def test_default_brain_model() -> None:
+    voice_session = _load_module()
+
+    session = voice_session.VoiceSession(session_id="s1")
+
+    assert session.brain_model == "Qwen/Qwen3-30B-A3B"
+
+
+def test_default_stt_provider() -> None:
+    voice_session = _load_module()
+
+    session = voice_session.VoiceSession(session_id="s1")
+
+    assert session.stt_provider == "sensevoice"
+
+
+def test_default_tts_provider() -> None:
+    voice_session = _load_module()
+
+    session = voice_session.VoiceSession(session_id="s1")
+
+    assert session.tts_provider == "cosyvoice"
+
+
+def test_stack_id_composition() -> None:
+    voice_session = _load_module()
+
+    session = voice_session.VoiceSession(
+        session_id="s1",
+        backend="our_rag",
+        brain_model="Qwen/Qwen3-30B-A3B",
+        stt_provider="sensevoice",
+        tts_provider="cosyvoice",
+    )
+
+    assert session.stack_id == "our_rag__Qwen3-30B-A3B__sensevoice__cosyvoice"
+
+
+def test_stack_id_updates_on_field_change() -> None:
+    voice_session = _load_module()
+
+    session = voice_session.VoiceSession(session_id="s1")
+    session.backend = "dify_rag"
+
+    assert session.stack_id.startswith("dify_rag__")
