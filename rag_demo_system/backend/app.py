@@ -625,6 +625,10 @@ async def voice_ws(websocket: WebSocket) -> None:
             "session_id": session_id,
             "backend": session.backend,
             "voice_provider": session.voice_provider,
+            "brain_model": session.brain_model,
+            "stt_provider": session.stt_provider,
+            "tts_provider": session.tts_provider,
+            "stack_id": session.stack_id,
         }
     )
     try:
@@ -634,6 +638,20 @@ async def voice_ws(websocket: WebSocket) -> None:
             if event_type == "session.update":
                 session.backend = _selected_backend(event.get("backend"))
                 session.voice_provider = normalize_voice_provider(event.get("voice_provider"))
+                if "brain_model" in event:
+                    bm = str(event["brain_model"]).strip()
+                    session.brain_model = (
+                        bm
+                        if bm in ("Qwen/Qwen3-30B-A3B", "Qwen/Qwen3.5-35B-A3B")
+                        else "Qwen/Qwen3-30B-A3B"
+                    )
+                if "stt_provider" in event:
+                    session.stt_provider = str(event["stt_provider"]).strip().lower()
+                if "tts_provider" in event:
+                    session.tts_provider = str(event["tts_provider"]).strip().lower()
+                if session.voice_provider == "yandex_realtime":
+                    session.stt_provider = "yandex_realtime"
+                    session.tts_provider = "yandex_realtime"
                 if session.voice_provider == "yandex_realtime":
                     if yandex_relay is None:
                         yandex_relay = YandexRealtimeRelay(websocket)
@@ -656,6 +674,10 @@ async def voice_ws(websocket: WebSocket) -> None:
                         "session_id": session_id,
                         "backend": session.backend,
                         "voice_provider": session.voice_provider,
+                        "brain_model": session.brain_model,
+                        "stt_provider": session.stt_provider,
+                        "tts_provider": session.tts_provider,
+                        "stack_id": session.stack_id,
                     }
                 )
             elif session.voice_provider == "yandex_realtime":
@@ -697,11 +719,15 @@ async def voice_ws(websocket: WebSocket) -> None:
                                         }
                                     )
             elif event_type == "input_audio_buffer.commit":
+                question_id = str(uuid.uuid4())
+                t_speech_stopped = time.time()
+
                 audio_b64 = "".join(audio_chunks)
                 audio_chunks.clear()
-                stt_provider, tts_provider = _voice_pipeline(session.voice_provider)
+                stt_provider = session.stt_provider
+                tts_provider = session.tts_provider
                 try:
-                    transcript = transcribe_audio(audio_b64, session_id=session_id, preferred=stt_provider)
+                    transcript = transcribe_audio(audio_b64, session_id=session_id)
                 except Exception as exc:  # noqa: BLE001
                     await websocket.send_json(
                         {
@@ -711,6 +737,9 @@ async def voice_ws(websocket: WebSocket) -> None:
                         }
                     )
                     continue
+
+                t_stt_done = time.time()
+
                 text = (transcript.get("text") or "").strip()
                 await websocket.send_json(
                     {
@@ -735,6 +764,12 @@ async def voice_ws(websocket: WebSocket) -> None:
                     ),
                     stream=False,
                 )
+
+                t_retrieval_done = time.time()
+                # Conservative approximation for non-streaming path.
+                # TODO: extract first_token_at from streaming chat() in Phase 3
+                t_llm_first_token = t_retrieval_done
+
                 if isinstance(response, dict):
                     for action in session.on_provider_response(response):
                         await websocket.send_json(action)
@@ -749,6 +784,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                         )
                     try:
                         audio_response = synthesize_audio_with_provider(answer_text, session_id=session_id, preferred=tts_provider)
+                        t_tts_first_chunk = time.time()
                         audio_b64 = audio_response.get("audio_b64") or ""
                         if audio_b64:
                             await websocket.send_json(
@@ -759,7 +795,12 @@ async def voice_ws(websocket: WebSocket) -> None:
                                     "sample_rate_hz": audio_response.get("sample_rate_hz"),
                                 }
                             )
+                            t_playback_started = time.time()
+                        else:
+                            t_playback_started = t_tts_first_chunk
                     except Exception as exc:  # noqa: BLE001
+                        t_tts_first_chunk = time.time()
+                        t_playback_started = t_tts_first_chunk
                         await websocket.send_json(
                             {
                                 "type": "warning",
@@ -767,6 +808,27 @@ async def voice_ws(websocket: WebSocket) -> None:
                                 "message": f"tts_failed: {exc}",
                             }
                         )
+
+                    primary_kpi_ms = (t_playback_started - t_speech_stopped) * 1000
+                    state.log({
+                        "event": "voice_turn",
+                        "question_id": question_id,
+                        "stack_id": session.stack_id,
+                        "session_id": session.session_id,
+                        "backend": session.backend,
+                        "brain_model": session.brain_model,
+                        "stt_provider": session.stt_provider,
+                        "tts_provider": session.tts_provider,
+                        "transcript": text,
+                        "speech_stopped": t_speech_stopped,
+                        "stt_done": t_stt_done,
+                        "retrieval_done": t_retrieval_done,
+                        "llm_first_token": t_llm_first_token,
+                        "tts_first_chunk": t_tts_first_chunk,
+                        "playback_started": t_playback_started,
+                        "primary_kpi_ms": primary_kpi_ms,
+                    })
+
                     await websocket.send_json(
                         {
                             "type": "response.done",

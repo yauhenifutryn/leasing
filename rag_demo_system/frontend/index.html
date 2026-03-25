@@ -63,6 +63,8 @@
             </div>
           </div>
           <div class="help">WebSocket voice mode with backend switch. STT/TTS services must be configured server-side.</div>
+          <div class="transcript" id="transcript"></div>
+          <div class="transcript" id="assistantVoice"></div>
           <div class="toggle-row">
             <span class="toggle-label">Voice provider</span>
             <select id="voiceProviderSelect">
@@ -72,8 +74,30 @@
               <option value="yandex_realtime">yandex_realtime</option>
             </select>
           </div>
-          <div class="transcript" id="transcript"></div>
-          <div class="transcript" id="assistantVoice"></div>
+          <div class="toggle-row">
+            <span class="toggle-label">Brain model</span>
+            <select id="brainModelSelect">
+              <option value="Qwen/Qwen3-30B-A3B">Qwen3-30B-A3B</option>
+              <option value="Qwen/Qwen3.5-35B-A3B">Qwen3.5-35B-A3B</option>
+            </select>
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">STT provider</span>
+            <select id="sttProviderSelect">
+              <option value="sensevoice">sensevoice</option>
+              <option value="whisper">whisper</option>
+              <option value="vosk">vosk</option>
+              <option value="yandex_speechkit">yandex_speechkit</option>
+            </select>
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">TTS provider</span>
+            <select id="ttsProviderSelect">
+              <option value="cosyvoice">cosyvoice</option>
+              <option value="vosk_tts">vosk_tts</option>
+              <option value="yandex_speechkit">yandex_speechkit</option>
+            </select>
+          </div>
           <div class="row">
             <span class="badge" id="voiceStatus"><span class="dot warn"></span><span id="voiceText">Voice: disabled</span></span>
           </div>

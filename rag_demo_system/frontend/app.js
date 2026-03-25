@@ -11,6 +11,9 @@ let consentState = "needed";
 let voiceFast = false;
 let selectedBackend = "our_rag";
 let selectedVoiceProvider = "local";
+let selectedBrainModel = "Qwen/Qwen3-30B-A3B";
+let selectedSttProvider = "sensevoice";
+let selectedTtsProvider = "cosyvoice";
 let voiceSocket = null;
 let voiceConnected = false;
 let talking = false;
@@ -79,6 +82,17 @@ function setVoiceStatus(text, level = "warn") {
   dot.classList.remove("good", "danger", "warn");
   dot.classList.add(level);
   $("#voiceText").textContent = text;
+}
+
+function buildSessionUpdate() {
+  return JSON.stringify({
+    type: "session.update",
+    backend: selectedBackend,
+    voice_provider: selectedVoiceProvider,
+    brain_model: selectedBrainModel,
+    stt_provider: selectedSttProvider,
+    tts_provider: selectedTtsProvider,
+  });
 }
 
 function localVoiceReady(services) {
@@ -201,15 +215,24 @@ function initSession() {
   const storedFast = localStorage.getItem("rag_voice_fast");
   const storedBackend = localStorage.getItem("rag_backend");
   const storedVoiceProvider = localStorage.getItem("rag_voice_provider");
+  const storedBrainModel = localStorage.getItem("rag_brain_model");
+  const storedSttProvider = localStorage.getItem("rag_stt_provider");
+  const storedTtsProvider = localStorage.getItem("rag_tts_provider");
   if (storedSession) sessionId = storedSession;
   if (storedConsent) consentState = storedConsent;
   if (storedFast) voiceFast = storedFast === "true";
   if (storedBackend) selectedBackend = storedBackend;
   if (storedVoiceProvider) selectedVoiceProvider = storedVoiceProvider;
+  if (storedBrainModel) selectedBrainModel = storedBrainModel;
+  if (storedSttProvider) selectedSttProvider = storedSttProvider;
+  if (storedTtsProvider) selectedTtsProvider = storedTtsProvider;
   setConsentState(consentState || "needed");
   $("#fastToggle").checked = voiceFast;
   $("#backendSelect").value = selectedBackend;
   $("#voiceProviderSelect").value = selectedVoiceProvider;
+  $("#brainModelSelect").value = selectedBrainModel;
+  $("#sttProviderSelect").value = selectedSttProvider;
+  $("#ttsProviderSelect").value = selectedTtsProvider;
 }
 
 async function sendMessage(opts = {}) {
@@ -343,7 +366,7 @@ function handleVoiceEvent(evt) {
     $("#btnVoiceTalk").disabled = false;
   }
   if (evt.type === "session.updated") {
-    setVoiceStatus(`Voice provider: ${evt.voice_provider || "local"}`, "good");
+    setVoiceStatus(`Stack: ${evt.stack_id || evt.voice_provider || "local"}`, "good");
   }
   if (evt.type === "conversation.item.input_audio_transcription.completed") {
     $("#transcript").textContent = evt.transcription || evt.transcript || "";
@@ -396,7 +419,7 @@ async function connectVoice() {
     voiceConnected = true;
     setVoiceStatus("Voice websocket connected", "good");
     await initAudio();
-    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend, voice_provider: selectedVoiceProvider }));
+    voiceSocket.send(buildSessionUpdate());
   };
   voiceSocket.onmessage = (msg) => handleVoiceEvent(JSON.parse(msg.data));
   voiceSocket.onerror = () => setVoiceStatus("Voice websocket error", "danger");
@@ -441,7 +464,7 @@ $("#backendSelect").addEventListener("change", (e) => {
   selectedBackend = e.target.value;
   localStorage.setItem("rag_backend", selectedBackend);
   if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend, voice_provider: selectedVoiceProvider }));
+    voiceSocket.send(buildSessionUpdate());
   }
 });
 $("#voiceProviderSelect").addEventListener("change", (e) => {
@@ -449,7 +472,28 @@ $("#voiceProviderSelect").addEventListener("change", (e) => {
   localStorage.setItem("rag_voice_provider", selectedVoiceProvider);
   refreshCapabilities().catch(() => {});
   if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-    voiceSocket.send(JSON.stringify({ type: "session.update", backend: selectedBackend, voice_provider: selectedVoiceProvider }));
+    voiceSocket.send(buildSessionUpdate());
+  }
+});
+$("#brainModelSelect").addEventListener("change", (e) => {
+  selectedBrainModel = e.target.value;
+  localStorage.setItem("rag_brain_model", selectedBrainModel);
+  if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
+    voiceSocket.send(buildSessionUpdate());
+  }
+});
+$("#sttProviderSelect").addEventListener("change", (e) => {
+  selectedSttProvider = e.target.value;
+  localStorage.setItem("rag_stt_provider", selectedSttProvider);
+  if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
+    voiceSocket.send(buildSessionUpdate());
+  }
+});
+$("#ttsProviderSelect").addEventListener("change", (e) => {
+  selectedTtsProvider = e.target.value;
+  localStorage.setItem("rag_tts_provider", selectedTtsProvider);
+  if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
+    voiceSocket.send(buildSessionUpdate());
   }
 });
 $("#btnVoiceConnect").addEventListener("click", () => connectVoice().catch(alert));
