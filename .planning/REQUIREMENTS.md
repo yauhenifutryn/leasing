@@ -97,34 +97,34 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INST-01 | -- | Pending |
-| INST-02 | -- | Pending |
-| INST-03 | -- | Pending |
-| SWITCH-01 | -- | Pending |
-| SWITCH-02 | -- | Pending |
-| SWITCH-03 | -- | Pending |
-| BENCH-01 | -- | Pending |
-| BENCH-02 | -- | Pending |
-| BENCH-03 | -- | Pending |
-| BENCH-04 | -- | Pending |
-| VPROV-01 | -- | Pending |
-| VPROV-02 | -- | Pending |
-| VPROV-03 | -- | Pending |
-| VPROV-04 | -- | Pending |
-| VPROV-05 | -- | Pending |
-| BRAIN-01 | -- | Pending |
-| OMNI-01 | -- | Pending |
-| OMNI-02 | -- | Pending |
-| OMNI-03 | -- | Pending |
-| DEPLOY-01 | -- | Pending |
-| DEPLOY-02 | -- | Pending |
-| DEPLOY-03 | -- | Pending |
+| INST-01 | Phase 1 | Pending |
+| INST-02 | Phase 1 | Pending |
+| INST-03 | Phase 1 | Pending |
+| SWITCH-01 | Phase 1 | Pending |
+| SWITCH-02 | Phase 1 | Pending |
+| SWITCH-03 | Phase 1 | Pending |
+| VPROV-01 | Phase 2 | Pending |
+| VPROV-02 | Phase 2 | Pending |
+| VPROV-03 | Phase 2 | Pending |
+| VPROV-04 | Phase 2 | Pending |
+| VPROV-05 | Phase 2 | Pending |
+| BRAIN-01 | Phase 3 | Pending |
+| BENCH-01 | Phase 3 | Pending |
+| BENCH-02 | Phase 3 | Pending |
+| BENCH-03 | Phase 3 | Pending |
+| BENCH-04 | Phase 3 | Pending |
+| DEPLOY-01 | Phase 3 | Pending |
+| OMNI-01 | Phase 4 | Pending |
+| OMNI-02 | Phase 4 | Pending |
+| OMNI-03 | Phase 4 | Pending |
+| DEPLOY-02 | Phase 5 | Pending |
+| DEPLOY-03 | Phase 5 | Pending |
 
 **Coverage:**
 - v1.0 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-25*
-*Last updated: 2026-03-25 after initial definition*
+*Last updated: 2026-03-25 after roadmap rewrite — traceability updated to 5-phase structure*
