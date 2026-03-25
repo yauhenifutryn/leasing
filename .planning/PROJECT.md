@@ -36,14 +36,16 @@ Accurate, low-latency Russian voice answers grounded in the company knowledge ba
 - Brain model selector (Qwen3-30B-A3B vs Qwen3.5-35B-A3B) with live switching (Validated in Phase 1)
 - UI selectors for STT/TTS providers with localStorage persistence and session.update wiring (Validated in Phase 1)
 - Automatic stack_id tagging derived from active selector combination (Validated in Phase 1)
+- Qwen3-TTS voice provider adapter with standalone sidecar server (Validated in Phase 2: Voice Provider Adapters)
+- Qwen3-ASR voice provider adapter with standalone sidecar server (Validated in Phase 2)
+- Voxtral STT adapter with standalone sidecar server (Validated in Phase 2)
+- Voice provider selector in UI expanded to 7 providers including qwen3_tts, qwen3_asr, voxtral (Validated in Phase 2)
+- Hard-fail behavior: new providers raise RuntimeError when sidecar URL unconfigured, no silent fallback (Validated in Phase 2)
 
 ### Active
 
 - [ ] Benchmark logging output format and runner
 - [ ] Fixed Russian benchmark test question set (80+ questions across 5 categories)
-- [ ] Qwen3-TTS voice provider adapter
-- [ ] Qwen3-ASR voice provider adapter
-- [ ] Voxtral STT adapter (optional)
 - [ ] Qwen3-Omni hybrid adapter (prompt-injected retrieved context)
 - [ ] Server deployment automation and env profiles per benchmark stack
 - [ ] Controlled benchmark execution and results comparison
@@ -105,4 +107,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after milestone v1.0 initialization*
+*Last updated: 2026-03-25 after Phase 2 completion*
