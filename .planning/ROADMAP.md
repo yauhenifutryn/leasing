@@ -43,7 +43,10 @@ Plans:
   3. Selecting Voxtral in the UI routes transcription through the Voxtral adapter (sidecar or cloud client); spoken Russian produces a correct Russian text transcript
   4. All three new adapters pass the existing voice adapter contract test suite with no failures (VPROV-04 gate)
   5. The provider field in each log line matches the intended provider when the fallback env vars (SENSEVOICE_BASE_URL, WHISPER_BASE_URL) are unset, confirming no silent fallback during benchmarking
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 02-01-PLAN.md — Contract tests, adapter branches, health status, frontend options
+- [ ] 02-02-PLAN.md — Qwen3-TTS, Qwen3-ASR, Voxtral sidecar servers + requirements files
 
 ### Phase 3: Brain Upgrade and Benchmark Framework
 **Goal**: The brain model is switchable via UI selector and env var, a fixed Russian question set and benchmark runner are ready for use, and per-stack env profiles cover every configuration to be benchmarked
@@ -96,7 +99,7 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
-| 2. Voice Provider Adapters | 0/TBD | Not started | - |
+| 2. Voice Provider Adapters | 0/2 | Not started | - |
 | 3. Brain Upgrade and Benchmark Framework | 0/TBD | Not started | - |
 | 4. Qwen3-Omni Hybrid | 0/TBD | Not started | - |
 | 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |
