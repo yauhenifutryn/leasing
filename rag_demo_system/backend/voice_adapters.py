@@ -15,6 +15,9 @@ from .yandex_speechkit import (
 )
 from .yandex_realtime import build_status as build_yandex_realtime_status
 
+# STT providers that hard-fail when their BASE_URL is unset (no fallback allowed)
+_HARD_FAIL_STT: frozenset[str] = frozenset({"qwen3_asr", "voxtral"})
+
 
 def _service_status(name: str, base_url: str | None) -> dict[str, Any]:
     if not base_url:
@@ -41,6 +44,9 @@ def build_voice_statuses() -> dict[str, dict[str, Any]]:
         "vosk_tts": _service_status("vosk_tts", os.getenv("VOSK_TTS_BASE_URL")),
         "yandex_speechkit": build_yandex_speechkit_status(),
         "yandex_realtime": build_yandex_realtime_status(),
+        "qwen3_asr": _service_status("qwen3_asr", os.getenv("QWEN3_ASR_BASE_URL")),
+        "qwen3_tts": _service_status("qwen3_tts", os.getenv("QWEN3_TTS_BASE_URL")),
+        "voxtral": _service_status("voxtral", os.getenv("VOXTRAL_BASE_URL")),
     }
 
 
@@ -112,6 +118,25 @@ def _cosyvoice_api_style() -> str:
 
 
 def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoice") -> dict[str, Any]:
+    # Hard-fail path for new STT providers: no silent fallback allowed.
+    if preferred in _HARD_FAIL_STT:
+        base_url = os.getenv(f"{preferred.upper()}_BASE_URL")
+        if not base_url:
+            raise RuntimeError(
+                f"{preferred} service unavailable: {preferred.upper()}_BASE_URL not set"
+            )
+        resp = requests.post(
+            base_url.rstrip("/") + "/transcribe",
+            json={"audio_b64": audio_b64, "session_id": session_id, "language": "ru", "sample_rate_hz": 24000},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("text"):
+            data.setdefault("provider", preferred)
+            return data
+        raise RuntimeError(f"{preferred} returned empty transcription")
+
     order = [preferred]
     for fallback in ("sensevoice", "whisper"):
         if fallback not in order:
@@ -158,6 +183,20 @@ def synthesize_audio(text: str, session_id: str, preferred: str = "cosyvoice") -
 def synthesize_audio_with_provider(text: str, session_id: str, preferred: str = "cosyvoice") -> dict[str, Any]:
     if preferred == "yandex_speechkit":
         data = synthesize_with_yandex_speechkit(text)
+        data.setdefault("session_id", session_id)
+        return data
+    if preferred == "qwen3_tts":
+        base_url = os.getenv("QWEN3_TTS_BASE_URL")
+        if not base_url:
+            raise RuntimeError("Qwen3-TTS service unavailable: QWEN3_TTS_BASE_URL not set")
+        resp = requests.post(
+            base_url.rstrip("/") + "/speak",
+            json={"text": text, "session_id": session_id, "language": "ru"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        data.setdefault("provider", "qwen3_tts")
         data.setdefault("session_id", session_id)
         return data
     if preferred == "vosk_tts":
