@@ -9,15 +9,15 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 
 ### Instrumentation
 
-- [ ] **INST-01**: Voice session logs 6 timing milestones per turn: speech_stopped, stt_done, retrieval_done, llm_first_token, tts_first_chunk, playback_started
+- [x] **INST-01**: Voice session logs 6 timing milestones per turn: speech_stopped, stt_done, retrieval_done, llm_first_token, tts_first_chunk, playback_started
 - [ ] **INST-02**: Each voice turn emits a structured JSON log line with question_id, stack_id, all timestamps, and derived latencies
 - [ ] **INST-03**: Primary KPI (playback_started - speech_stopped) is computed and logged for every turn
 
 ### Configuration Switching
 
-- [ ] **SWITCH-01**: UI exposes selectors for RAG backend (our_rag / dify_rag), brain model (Qwen3.5-35B / Qwen3-30B), STT provider, and TTS provider
-- [ ] **SWITCH-02**: Switching any selector updates the active configuration without restarting the backend (where possible) or with clear restart guidance
-- [ ] **SWITCH-03**: The active configuration (stack_id) is captured in every log line so results are automatically tagged by setup
+- [x] **SWITCH-01**: UI exposes selectors for RAG backend (our_rag / dify_rag), brain model (Qwen3.5-35B / Qwen3-30B), STT provider, and TTS provider
+- [x] **SWITCH-02**: Switching any selector updates the active configuration without restarting the backend (where possible) or with clear restart guidance
+- [x] **SWITCH-03**: The active configuration (stack_id) is captured in every log line so results are automatically tagged by setup
 
 ### Benchmark
 
@@ -97,12 +97,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INST-01 | Phase 1 | Pending |
+| INST-01 | Phase 1 | Complete |
 | INST-02 | Phase 1 | Pending |
 | INST-03 | Phase 1 | Pending |
-| SWITCH-01 | Phase 1 | Pending |
-| SWITCH-02 | Phase 1 | Pending |
-| SWITCH-03 | Phase 1 | Pending |
+| SWITCH-01 | Phase 1 | Complete |
+| SWITCH-02 | Phase 1 | Complete |
+| SWITCH-03 | Phase 1 | Complete |
 | VPROV-01 | Phase 2 | Pending |
 | VPROV-02 | Phase 2 | Pending |
 | VPROV-03 | Phase 2 | Pending |

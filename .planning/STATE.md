@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: "Completed 01-01-PLAN.md: VoiceSession fields and log event contract"
-last_updated: "2026-03-25T20:55:06.409Z"
+stopped_at: "Completed 01-03-PLAN.md: UI selectors and session.update wiring"
+last_updated: "2026-03-25T21:00:42.377Z"
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-25)
 ## Current Position
 
 Phase: 01 (instrumentation-and-ui-switching) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -47,6 +47,7 @@ Plan: 2 of 3
 
 *Updated after each plan completion*
 | Phase 01-instrumentation-and-ui-switching P01 | 2 | 2 tasks | 3 files |
+| Phase 01-instrumentation-and-ui-switching P03 | 10 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -62,6 +63,8 @@ Recent decisions affecting current work:
 - [Roadmap v2]: DEPLOY-01 (env profiles) moved from Phase 1 to Phase 3 (Benchmark Framework) where it logically belongs; DEPLOY-02 and DEPLOY-03 remain in Phase 5
 - [Phase 01-instrumentation-and-ui-switching]: stack_id is a @property not a dataclass field: avoids stale value bugs when backend or provider fields are mutated at runtime
 - [Phase 01-instrumentation-and-ui-switching]: primary_kpi_ms formula is (playback_started - speech_stopped) * 1000: speech_stopped is end of user utterance, playback_started is first audio reaching the browser
+- [Phase 01-instrumentation-and-ui-switching]: voiceProviderSelect added alongside the 3 new selectors because buildSessionUpdate() payload requires voice_provider field that was absent from existing code
+- [Phase 01-instrumentation-and-ui-switching]: buildSessionUpdate() helper centralises all 5 selector fields in one place, eliminating drift across session.update call sites
 
 ### Pending Todos
 
@@ -85,6 +88,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T20:55:06.406Z
-Stopped at: Completed 01-01-PLAN.md: VoiceSession fields and log event contract
+Last session: 2026-03-25T21:00:42.374Z
+Stopped at: Completed 01-03-PLAN.md: UI selectors and session.update wiring
 Resume file: None

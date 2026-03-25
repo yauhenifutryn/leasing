@@ -31,7 +31,7 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 Plans:
 - [x] 01-01-PLAN.md — VoiceSession dataclass extension + test scaffolding
 - [ ] 01-02-PLAN.md — Backend instrumentation (timestamps, session.update, structured log)
-- [ ] 01-03-PLAN.md — Frontend UI selectors (brain model, STT, TTS)
+- [x] 01-03-PLAN.md — Frontend UI selectors (brain model, STT, TTS)
 
 ### Phase 2: Voice Provider Adapters
 **Goal**: Qwen3-TTS, Qwen3-ASR, and Voxtral are available as selectable providers in the UI, each backed by a validated sidecar or adapter, and no adapter silently falls through to the default provider
