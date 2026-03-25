@@ -10,8 +10,8 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 ### Instrumentation
 
 - [x] **INST-01**: Voice session logs 6 timing milestones per turn: speech_stopped, stt_done, retrieval_done, llm_first_token, tts_first_chunk, playback_started
-- [ ] **INST-02**: Each voice turn emits a structured JSON log line with question_id, stack_id, all timestamps, and derived latencies
-- [ ] **INST-03**: Primary KPI (playback_started - speech_stopped) is computed and logged for every turn
+- [x] **INST-02**: Each voice turn emits a structured JSON log line with question_id, stack_id, all timestamps, and derived latencies
+- [x] **INST-03**: Primary KPI (playback_started - speech_stopped) is computed and logged for every turn
 
 ### Configuration Switching
 
@@ -98,8 +98,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | INST-01 | Phase 1 | Complete |
-| INST-02 | Phase 1 | Pending |
-| INST-03 | Phase 1 | Pending |
+| INST-02 | Phase 1 | Complete |
+| INST-03 | Phase 1 | Complete |
 | SWITCH-01 | Phase 1 | Complete |
 | SWITCH-02 | Phase 1 | Complete |
 | SWITCH-03 | Phase 1 | Complete |

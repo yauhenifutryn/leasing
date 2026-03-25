@@ -30,7 +30,7 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 **Plans:** 1/3 plans executed
 Plans:
 - [x] 01-01-PLAN.md — VoiceSession dataclass extension + test scaffolding
-- [ ] 01-02-PLAN.md — Backend instrumentation (timestamps, session.update, structured log)
+- [x] 01-02-PLAN.md — Backend instrumentation (timestamps, session.update, structured log)
 - [x] 01-03-PLAN.md — Frontend UI selectors (brain model, STT, TTS)
 
 ### Phase 2: Voice Provider Adapters

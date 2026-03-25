@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: "Completed 01-03-PLAN.md: UI selectors and session.update wiring"
-last_updated: "2026-03-25T21:00:42.377Z"
+status: Phase complete — ready for verification
+stopped_at: "Completed 01-02-PLAN.md: WebSocket voice turn instrumentation and session.update extension"
+last_updated: "2026-03-25T21:01:51.319Z"
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -48,6 +48,7 @@ Plan: 3 of 3
 *Updated after each plan completion*
 | Phase 01-instrumentation-and-ui-switching P01 | 2 | 2 tasks | 3 files |
 | Phase 01-instrumentation-and-ui-switching P03 | 10 | 2 tasks | 2 files |
+| Phase 01-instrumentation-and-ui-switching P02 | 8 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,9 @@ Recent decisions affecting current work:
 - [Phase 01-instrumentation-and-ui-switching]: primary_kpi_ms formula is (playback_started - speech_stopped) * 1000: speech_stopped is end of user utterance, playback_started is first audio reaching the browser
 - [Phase 01-instrumentation-and-ui-switching]: voiceProviderSelect added alongside the 3 new selectors because buildSessionUpdate() payload requires voice_provider field that was absent from existing code
 - [Phase 01-instrumentation-and-ui-switching]: buildSessionUpdate() helper centralises all 5 selector fields in one place, eliminating drift across session.update call sites
+- [Phase 01-instrumentation-and-ui-switching]: time.time() chosen over perf_counter for voice turn timestamps — absolute epoch values required for cross-process log correlation in benchmarks
+- [Phase 01-instrumentation-and-ui-switching]: t_llm_first_token = t_retrieval_done is conservative approximation for non-streaming chat() — TODO to extract real first token in Phase 3 streaming
+- [Phase 01-instrumentation-and-ui-switching]: brain_model validated against allowlist (Qwen3-30B-A3B, Qwen3.5-35B-A3B); invalid values fall back to default silently to prevent misconfiguration
 
 ### Pending Todos
 
@@ -88,6 +92,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T21:00:42.374Z
-Stopped at: Completed 01-03-PLAN.md: UI selectors and session.update wiring
+Last session: 2026-03-25T21:01:51.316Z
+Stopped at: Completed 01-02-PLAN.md: WebSocket voice turn instrumentation and session.update extension
 Resume file: None
