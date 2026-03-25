@@ -32,16 +32,18 @@ Accurate, low-latency Russian voice answers grounded in the company knowledge ba
 - Low-latency voice retrieval profile (`voice_fast`: vector_top_k=3, bm25_top_k=1, final_top_n=2, reranker disabled)
 - One-command stack launcher (`stack.sh`) and supervisor-managed services
 - Qdrant-based vector retrieval with BM25 hybrid search
+- End-to-end timing instrumentation: 6 latency milestones per voice turn with primary KPI (Validated in Phase 1: Instrumentation and UI Switching)
+- Brain model selector (Qwen3-30B-A3B vs Qwen3.5-35B-A3B) with live switching (Validated in Phase 1)
+- UI selectors for STT/TTS providers with localStorage persistence and session.update wiring (Validated in Phase 1)
+- Automatic stack_id tagging derived from active selector combination (Validated in Phase 1)
 
 ### Active
 
-- [ ] End-to-end timing instrumentation for voice sessions
 - [ ] Benchmark logging output format and runner
 - [ ] Fixed Russian benchmark test question set (80+ questions across 5 categories)
 - [ ] Qwen3-TTS voice provider adapter
 - [ ] Qwen3-ASR voice provider adapter
 - [ ] Voxtral STT adapter (optional)
-- [ ] Brain model selector (Qwen3-30B-A3B vs Qwen3.5-35B-A3B)
 - [ ] Qwen3-Omni hybrid adapter (prompt-injected retrieved context)
 - [ ] Server deployment automation and env profiles per benchmark stack
 - [ ] Controlled benchmark execution and results comparison
