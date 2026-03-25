@@ -11,7 +11,7 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [ ] **Phase 1: Instrumentation and UI Switching** - Wire six per-turn latency milestones into voice_session.py, emit structured JSON logs, and expose UI selectors for all pipeline variables with stack_id tagging
-- [ ] **Phase 2: Voice Provider Adapters** - Build Qwen3-TTS sidecar + adapter, Qwen3-ASR sidecar + adapter, and Voxtral adapter; all pass contract tests and appear in the frontend selector
+- [x] **Phase 2: Voice Provider Adapters** - Build Qwen3-TTS sidecar + adapter, Qwen3-ASR sidecar + adapter, and Voxtral adapter; all pass contract tests and appear in the frontend selector (completed 2026-03-25)
 - [ ] **Phase 3: Brain Upgrade and Benchmark Framework** - Make brain model switchable via UI and env var, create the 80+ question Russian fixture, build the benchmark runner CLI and comparison script, and write per-stack env profiles
 - [ ] **Phase 4: Qwen3-Omni Hybrid** - Implement the Omni hybrid adapter with RAG context injection, register it as a UI provider option, and confirm it uses the same log format as the split pipeline
 - [ ] **Phase 5: Server Deployment and Benchmarks** - Provision the GPU server from a fresh VM, validate with smoke test, then run the full benchmark matrix in smart order on the server
@@ -43,7 +43,7 @@ Plans:
   3. Selecting Voxtral in the UI routes transcription through the Voxtral adapter (sidecar or cloud client); spoken Russian produces a correct Russian text transcript
   4. All three new adapters pass the existing voice adapter contract test suite with no failures (VPROV-04 gate)
   5. The provider field in each log line matches the intended provider when the fallback env vars (SENSEVOICE_BASE_URL, WHISPER_BASE_URL) are unset, confirming no silent fallback during benchmarking
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 02-01-PLAN.md — Contract tests, adapter branches, health status, frontend options
 - [x] 02-02-PLAN.md — Qwen3-TTS, Qwen3-ASR, Voxtral sidecar servers + requirements files
@@ -99,7 +99,7 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
-| 2. Voice Provider Adapters | 0/2 | Not started | - |
+| 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
 | 3. Brain Upgrade and Benchmark Framework | 0/TBD | Not started | - |
 | 4. Qwen3-Omni Hybrid | 0/TBD | Not started | - |
 | 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |

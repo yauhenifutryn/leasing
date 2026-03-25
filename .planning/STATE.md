@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-25T22:09:18.838Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-25T22:09:38.779Z"
 progress:
   total_phases: 5
   completed_phases: 2
@@ -50,6 +50,7 @@ Plan: 2 of 2
 | Phase 01-instrumentation-and-ui-switching P03 | 10 | 2 tasks | 2 files |
 | Phase 01-instrumentation-and-ui-switching P02 | 8 | 2 tasks | 3 files |
 | Phase 02-voice-provider-adapters P01 | 2 | 3 tasks | 3 files |
+| Phase 02 P02 | 2 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - [Phase 01-instrumentation-and-ui-switching]: brain_model validated against allowlist (Qwen3-30B-A3B, Qwen3.5-35B-A3B); invalid values fall back to default silently to prevent misconfiguration
 - [Phase 02-voice-provider-adapters]: _HARD_FAIL_STT frozenset at module level: new STT providers hard-fail on missing BASE_URL; no silent fallback to sensevoice/whisper
 - [Phase 02-voice-provider-adapters]: qwen3_tts hard-fail mirrors STT pattern: all three new providers raise RuntimeError when unconfigured rather than degrading silently
+- [Phase 02]: Qwen3-TTS language='Russian' hardcoded in generate_voice_clone call: qwen-tts API uses full language names, not ISO codes
+- [Phase 02]: Voxtral batch/offline API only (processor->generate->batch_decode); streaming API excluded per Pitfall 6 to avoid instability
+- [Phase 02]: Voxtral _target_sr from processor.feature_extractor.sampling_rate (dynamic, not hardcoded) for forward-compatibility
 
 ### Pending Todos
 
@@ -95,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T22:09:04.627Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-03-25T22:09:38.776Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
