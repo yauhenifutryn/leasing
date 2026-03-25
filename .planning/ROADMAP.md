@@ -64,15 +64,15 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 **Plans**: TBD
 
 ### Phase 5: Server Deployment and Benchmarks
-**Goal**: The GPU server is provisioned from a fresh VM, all services pass the smoke test, and the full benchmark matrix is executed in smart order — RAG comparison first, brain comparison second, STT/TTS comparison third, Omni vs. split pipeline last — producing a complete set of JSONL results ready for analysis
+**Goal**: The GPU server is provisioned from a fresh VM, all services pass the smoke test, and the benchmark matrix is executed in smart order — RAG comparison first, brain comparison second, Omni hybrid third (the most promising experiment, now with a baseline to compare against), and full STT/TTS matrix only as a fallback if Omni does not perform well enough
 **Depends on**: Phase 2, Phase 3, Phase 4
 **Requirements**: DEPLOY-02, DEPLOY-03
 **Success Criteria** (what must be TRUE):
   1. The provisioning script runs on a fresh Vast.ai or Azure H100 VM and brings all services to a running state without manual steps; the smoke test script confirms every service returns healthy status before any benchmark run begins
   2. The RAG comparison benchmark (our_rag vs. dify_rag, same brain and providers) completes on the server and produces two JSONL result files with valid timing data across all 80+ questions
-  3. The brain comparison benchmark (Qwen3-30B-A3B vs. Qwen3.5-35B-A3B, same RAG and providers) completes on the server with VRAM confirmed below 80 GB limit via nvidia-smi before each model load
-  4. The STT/TTS provider comparison benchmark (Qwen3-ASR, Qwen3-TTS, Voxtral vs. baseline providers) completes on the server and produces JSONL result files for each provider permutation
-  5. The Omni vs. split pipeline comparison benchmark completes on the server; Omni results and the best split pipeline stack results exist as JSONL files and the comparison script produces a valid side-by-side table
+  3. The brain comparison benchmark (Qwen3-30B-A3B vs. Qwen3.5-35B-A3B, winning RAG, same providers) completes on the server with VRAM confirmed below 80 GB limit via nvidia-smi before each model load
+  4. The Omni hybrid benchmark completes on the server using the winning RAG and brain; Omni results and the best split pipeline results exist as JSONL files and the comparison script produces a valid side-by-side table
+  5. If Omni does not meet quality/latency bar: STT/TTS provider comparison (Qwen3-ASR, Qwen3-TTS, Voxtral vs. baseline providers) runs as fallback and produces JSONL result files for each provider permutation
 **Plans**: TBD
 
 ## Progress
@@ -83,11 +83,11 @@ Phase 3 depends only on Phase 1 (not Phase 2) and can be developed in parallel w
 Phase 4 depends on Phase 2 and Phase 3.
 Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 
-**Benchmark execution order within Phase 5 (fixed):**
-1. RAG comparison (our_rag vs. dify_rag)
-2. Brain comparison (Qwen3-30B vs. Qwen3.5-35B)
-3. STT/TTS provider comparison
-4. Omni vs. split pipeline
+**Benchmark execution order within Phase 5 (smart order):**
+1. RAG comparison (our_rag vs. dify_rag) — gives RAG winner
+2. Brain comparison (Qwen3-30B vs. Qwen3.5-35B, winning RAG) — gives brain winner
+3. Omni hybrid vs. best split pipeline — the most promising experiment, tested third with a baseline to compare against
+4. Only if Omni fails: full STT/TTS matrix (Qwen3-ASR, Qwen3-TTS, Voxtral vs. baseline) — fallback plan, not mandatory
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
