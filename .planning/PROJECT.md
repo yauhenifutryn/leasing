@@ -41,13 +41,16 @@ Accurate, low-latency Russian voice answers grounded in the company knowledge ba
 - Voxtral STT adapter with standalone sidecar server (Validated in Phase 2)
 - Voice provider selector in UI expanded to 7 providers including qwen3_tts, qwen3_asr, voxtral (Validated in Phase 2)
 - Hard-fail behavior: new providers raise RuntimeError when sidecar URL unconfigured, no silent fallback (Validated in Phase 2)
+- Brain model routing: ChatRequest.brain_model field routes inference to per-session model via vLLM (Validated in Phase 3: Brain Upgrade and Benchmark Framework)
+- Real LLM first-token timing via streaming voice chat helper (Validated in Phase 3)
+- 85-question Russian benchmark fixture across 5 categories with expected keywords (Validated in Phase 3)
+- Benchmark runner CLI: WebSocket-based, full pipeline, warmup flagging, JSONL output (Validated in Phase 3)
+- Benchmark comparison script: side-by-side markdown table with p50/p95 and winner highlighting (Validated in Phase 3)
+- Per-stack env profiles for all 7 benchmark configurations as incremental overrides (Validated in Phase 3)
 
 ### Active
 
-- [ ] Benchmark logging output format and runner
-- [ ] Fixed Russian benchmark test question set (80+ questions across 5 categories)
 - [ ] Qwen3-Omni hybrid adapter (prompt-injected retrieved context)
-- [ ] Server deployment automation and env profiles per benchmark stack
 - [ ] Controlled benchmark execution and results comparison
 
 ### Out of Scope
@@ -107,4 +110,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-25 after Phase 2 completion*
+*Last updated: 2026-03-26 after Phase 3 completion*
