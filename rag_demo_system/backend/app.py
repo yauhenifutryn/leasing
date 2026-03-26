@@ -148,6 +148,166 @@ def _dify_inputs(*, fast: bool, voice_fast: bool, mode: str, session_id: str) ->
     }
 
 
+def _voice_chat_streaming_sync(
+    message: str,
+    session_id: str,
+    backend: str,
+    brain_model: str,
+) -> dict[str, Any]:
+    """
+    Synchronous helper for voice WebSocket handler that performs retrieval and
+    streaming LLM inference, capturing real t_llm_first_token at the first
+    content-bearing token via time.time() (not perf_counter).
+
+    For the our_rag backend this avoids the t_llm_first_token = t_retrieval_done
+    approximation that was in place since Phase 1. For dify_rag, the function
+    falls back to non-streaming behavior since Dify manages its own API.
+
+    Returns a dict compatible with chat()'s non-streaming response shape, plus
+    two extra keys for the voice handler:
+        t_retrieval_done  (time.time() after retrieval completes)
+        t_llm_first_token (time.time() at first content chunk, or t_retrieval_done)
+    """
+    from .llm import call_openai_compatible, iter_openai_compatible_stream_events
+
+    # --- dify_rag fallback: no streaming first-token extraction possible ---
+    if backend == "dify_rag":
+        import asyncio
+
+        async def _async_chat() -> dict[str, Any]:
+            resp = await chat(
+                ChatRequest(
+                    message=message,
+                    session_id=session_id,
+                    stream=False,
+                    fast=True,
+                    mode="voice_fast",
+                    backend=backend,
+                    brain_model=brain_model,
+                ),
+                stream=False,
+            )
+            return resp if isinstance(resp, dict) else {}
+
+        t_before = time.time()
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(_async_chat())
+            loop.close()
+        except Exception:
+            t_before = time.time()
+            result = {}
+        t_retrieval_done = time.time()
+        result["t_retrieval_done"] = t_retrieval_done
+        result["t_llm_first_token"] = t_retrieval_done
+        return result
+
+    # --- our_rag path: streaming retrieval + LLM with real first-token timing ---
+    timings: dict[str, Any] = {}
+
+    retrieval = engine.retrieve(message, fast=True, voice_fast=True, session_id=session_id)
+    t_retrieval_done = time.time()
+    if retrieval.get("timings"):
+        timings.update(retrieval.get("timings") or {})
+
+    final_chunks = retrieval.get("final") or []
+    if not retrieval.get("ok") or not final_chunks:
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "backend": backend,
+            "answer": settings.app.strict_refusal_text,
+            "used_knowledge": [],
+            "citations": [],
+            "timings": timings,
+            "conversation_ref": {},
+            "can_barge_in": True,
+            "t_retrieval_done": t_retrieval_done,
+            "t_llm_first_token": t_retrieval_done,
+        }
+
+    # Build prompts — same logic as chat()
+    system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    system_prompt = system_prompt + "\n\nСогласие на обработку данных уже получено, не запрашивай его."
+
+    chat_session = state.get(session_id) or state.create(session_id)
+    memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
+
+    context_block = "\n\n".join(
+        [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
+    )
+    expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
+    length_hint = (
+        f"Ответ должен быть {settings.llm.concise_sentences_min}–{settings.llm.concise_sentences_max} коротких предложений."
+        if not expanded
+        else "Можно ответить подробнее, но только на основе контекста."
+    )
+    weak_context = bool(retrieval.get("weak"))
+    weak_hint = ""
+    if weak_context:
+        weak_hint = (
+            "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
+            "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
+        )
+    user_prompt = (
+        "Ответь строго на основе следующих фрагментов базы знаний. "
+        "Если ответа нет — верни точный отказ.\n\n"
+        f"{memory_block}{length_hint}\n\n"
+        f"{weak_hint}{context_block}\n\nВопрос клиента: {message}"
+    )
+
+    # Resolve model and base_url — prefer per-request brain_model override
+    effective_model = brain_model or (
+        settings.llm.fast_model if settings.llm.fast_model else settings.llm.model
+    )
+    effective_base_url = settings.llm.fast_base_url if settings.llm.fast_base_url else settings.llm.base_url
+
+    # Stream LLM tokens, capture first-token timestamp via time.time()
+    first_token_time: float | None = None
+    streamed_parts: list[str] = []
+    try:
+        stream_iter = iter_openai_compatible_stream_events(
+            base_url=effective_base_url,
+            model=effective_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=settings.llm.temperature,
+            max_tokens=settings.llm.fast_max_tokens,
+            timeout_sec=settings.llm.timeout_sec,
+        )
+        for event in stream_iter:
+            choice = (event.get("choices") or [{}])[0]
+            delta = choice.get("delta") or {}
+            text_chunk = delta.get("content") or ""
+            if text_chunk:
+                if first_token_time is None:
+                    first_token_time = time.time()
+                streamed_parts.append(text_chunk)
+    except Exception as exc:
+        state.log({"event": "llm_error", "error": str(exc), "session_id": session_id, "path": "voice_streaming"})
+
+    t_llm_first_token = first_token_time or t_retrieval_done
+    answer_text = clean_answer("".join(streamed_parts)) or settings.app.strict_refusal_text
+
+    used_knowledge = [
+        {"text": c["text"], "chunk_id": c.get("chunk_id")} for c in final_chunks
+    ]
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "backend": backend,
+        "answer": answer_text,
+        "used_knowledge": used_knowledge,
+        "citations": [],
+        "timings": timings,
+        "conversation_ref": {},
+        "can_barge_in": True,
+        "t_retrieval_done": t_retrieval_done,
+        "t_llm_first_token": t_llm_first_token,
+    }
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {"ok": True, "kb": str(settings.app.kb_markdown_path)}
@@ -754,23 +914,16 @@ async def voice_ws(websocket: WebSocket) -> None:
                     continue
                 for action in session.on_transcript_final(text):
                     await websocket.send_json(action)
-                response = await chat(
-                    ChatRequest(
-                        message=text,
-                        session_id=session_id,
-                        stream=False,
-                        fast=True,
-                        mode="voice_fast",
-                        backend=session.backend,
-                        brain_model=session.brain_model,
-                    ),
-                    stream=False,
+                voice_result = await asyncio.to_thread(
+                    _voice_chat_streaming_sync,
+                    message=text,
+                    session_id=session_id,
+                    backend=session.backend,
+                    brain_model=session.brain_model,
                 )
-
-                t_retrieval_done = time.time()
-                # Conservative approximation for non-streaming path.
-                # TODO: extract first_token_at from streaming chat() in Phase 3
-                t_llm_first_token = t_retrieval_done
+                t_retrieval_done = voice_result.get("t_retrieval_done") or time.time()
+                t_llm_first_token = voice_result.get("t_llm_first_token") or t_retrieval_done
+                response = voice_result
 
                 if isinstance(response, dict):
                     for action in session.on_provider_response(response):
