@@ -10,3 +10,6 @@ dist/
 
 # Env files
 .env
+
+# Benchmark result files (per D-12)
+results/
