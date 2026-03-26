@@ -1,0 +1,10 @@
+# Qwen3-Omni sidecar dependencies. Install in venvs/omni/, NEVER in the shared .venv (transformers pin conflict).
+transformers==4.57.3
+accelerate
+qwen-omni-utils>=0.0.9
+torch>=2.0.0
+fastapi==0.115.6
+uvicorn==0.30.6
+pydantic>=2.10.0
+soundfile
+numpy
