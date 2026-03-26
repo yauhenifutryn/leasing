@@ -12,7 +12,7 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 
 - [ ] **Phase 1: Instrumentation and UI Switching** - Wire six per-turn latency milestones into voice_session.py, emit structured JSON logs, and expose UI selectors for all pipeline variables with stack_id tagging
 - [x] **Phase 2: Voice Provider Adapters** - Build Qwen3-TTS sidecar + adapter, Qwen3-ASR sidecar + adapter, and Voxtral adapter; all pass contract tests and appear in the frontend selector (completed 2026-03-25)
-- [ ] **Phase 3: Brain Upgrade and Benchmark Framework** - Make brain model switchable via UI and env var, create the 80+ question Russian fixture, build the benchmark runner CLI and comparison script, and write per-stack env profiles
+- [x] **Phase 3: Brain Upgrade and Benchmark Framework** - Make brain model switchable via UI and env var, create the 80+ question Russian fixture, build the benchmark runner CLI and comparison script, and write per-stack env profiles (completed 2026-03-26)
 - [ ] **Phase 4: Qwen3-Omni Hybrid** - Implement the Omni hybrid adapter with RAG context injection, register it as a UI provider option, and confirm it uses the same log format as the split pipeline
 - [ ] **Phase 5: Server Deployment and Benchmarks** - Provision the GPU server from a fresh VM, validate with smoke test, then run the full benchmark matrix in smart order on the server
 
@@ -58,11 +58,11 @@ Plans:
   3. The benchmark runner CLI executes the full question set against the active configuration and writes a JSONL results file where every line contains question_id, stack_id, transcript, answer, retrieved chunks, and all timing fields; the first three turns per stack are flagged as warmup
   4. The comparison script reads two JSONL files and outputs a side-by-side markdown table of latency and quality metrics (mean/p50/p95 for primary KPI and llm_ttfb_ms)
   5. Per-stack env profile files exist for every benchmark configuration: baseline, qwen3_tts, qwen3_asr, voxtral, brain_upgrade, omni_hybrid, dify_rag
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 03-01-PLAN.md — Brain model routing fix + streaming LLM first-token timing
 - [x] 03-02-PLAN.md — 80+ question Russian fixture + 7 env profiles
-- [ ] 03-03-PLAN.md — Benchmark runner CLI + comparison script + TTS endpoint
+- [x] 03-03-PLAN.md — Benchmark runner CLI + comparison script + TTS endpoint
 
 ### Phase 4: Qwen3-Omni Hybrid
 **Goal**: Qwen3-Omni hybrid mode retrieves context via the existing RAG engine, injects it into the Omni prompt, is accessible as a UI provider option, and produces JSONL output directly comparable with split pipeline results
@@ -104,6 +104,6 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 |-------|----------------|--------|-----------|
 | 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
 | 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
-| 3. Brain Upgrade and Benchmark Framework | 2/3 | In Progress|  |
+| 3. Brain Upgrade and Benchmark Framework | 3/3 | Complete   | 2026-03-26 |
 | 4. Qwen3-Omni Hybrid | 0/TBD | Not started | - |
 | 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |

@@ -22,9 +22,9 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 ### Benchmark
 
 - [x] **BENCH-01**: Fixed Russian test question set with 80+ questions across 5 categories (short factual, long factual, KB-grounded, ambiguous, out-of-scope)
-- [ ] **BENCH-02**: Benchmark runner executes the full question set against the currently active configuration and writes JSONL results
-- [ ] **BENCH-03**: Each result includes question_id, stack_id, transcript, answer, retrieved chunks, timing breakdown
-- [ ] **BENCH-04**: Comparison script shows side-by-side latency and quality metrics across stacks
+- [x] **BENCH-02**: Benchmark runner executes the full question set against the currently active configuration and writes JSONL results
+- [x] **BENCH-03**: Each result includes question_id, stack_id, transcript, answer, retrieved chunks, timing breakdown
+- [x] **BENCH-04**: Comparison script shows side-by-side latency and quality metrics across stacks
 
 ### Voice Providers
 
@@ -110,9 +110,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VPROV-05 | Phase 2 | Complete |
 | BRAIN-01 | Phase 3 | Complete |
 | BENCH-01 | Phase 3 | Complete |
-| BENCH-02 | Phase 3 | Pending |
-| BENCH-03 | Phase 3 | Pending |
-| BENCH-04 | Phase 3 | Pending |
+| BENCH-02 | Phase 3 | Complete |
+| BENCH-03 | Phase 3 | Complete |
+| BENCH-04 | Phase 3 | Complete |
 | DEPLOY-01 | Phase 3 | Complete |
 | OMNI-01 | Phase 4 | Pending |
 | OMNI-02 | Phase 4 | Pending |

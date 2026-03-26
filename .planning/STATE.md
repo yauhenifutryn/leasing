@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-26T11:53:27.801Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-03-26T12:02:03.585Z"
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -53,6 +53,7 @@ Plan: 3 of 3
 | Phase 02 P02 | 2 | 3 tasks | 6 files |
 | Phase 03 P02 | 4 | 2 tasks | 9 files |
 | Phase 03-brain-upgrade-and-benchmark-framework P01 | 4 | 2 tasks | 2 files |
+| Phase 03 P03 | 5 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting current work:
 - [Phase 03-brain-upgrade-and-benchmark-framework]: Per-request brain_model override via ChatRequest field, not settings mutation: avoids race conditions on module-level singleton
 - [Phase 03-brain-upgrade-and-benchmark-framework]: _voice_chat_streaming_sync is synchronous (requests-based streaming); wrapped in asyncio.to_thread() to avoid blocking the FastAPI event loop during voice turns
 - [Phase 03-brain-upgrade-and-benchmark-framework]: dify_rag backend falls back to non-streaming with t_llm_first_token = t_retrieval_done — Dify manages its own API, streaming extraction not possible
+- [Phase Phase 03]: POST /api/tts as REST proxy for benchmark runner: runner must not need direct sidecar access; backend routes TTS via synthesize_audio_with_provider
+- [Phase Phase 03]: Fresh WS connection per benchmark question: prevents session brain_model/provider state from contaminating next question result
+- [Phase Phase 03]: statistics.quantiles(n=100, method='inclusive') for p50/p95: returns interpolated values not element values; p50 of [1..100] = 50.5 with this method
 
 ### Pending Todos
 
@@ -107,6 +111,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T11:53:27.798Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-03-26T12:02:03.582Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file: None
