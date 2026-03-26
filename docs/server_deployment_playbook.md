@@ -274,11 +274,59 @@ sudo docker stop qdrant
 
 Then go to TensorDock dashboard and stop/destroy the VM.
 
-### 5.3 Next Steps
+### 5.3 Branch Strategy (Do Not Merge Experiment to Main)
 
-- If results confirm value: merge `claude/qwen-voice-next` to main
-- If results are mixed: keep the branch, iterate on the weak components
-- If Omni won: consider the pure realtime path (currently out of scope)
+The benchmarking system is an experiment, not a product feature. Do not merge the full `claude/qwen-voice-next` branch to main. Instead, use a three-branch model:
+
+**Branch 1: `main`**
+The production product. Untouched until you deliberately bring proven pieces in.
+
+**Branch 2: `claude/qwen-voice-next`**
+Stays as-is permanently. The full experiment with all 5 phases, benchmarking infrastructure, all adapters (winners and losers), provisioning scripts, orchestrator, fixture questions. This is your reference. You can always come back to re-run benchmarks or test new models later.
+
+**Branch 3: New branch off main (e.g. `feature/voice-pipeline`)**
+Created after benchmarks. Cherry-pick only the winning components. Clean, no experimental baggage.
+
+### 5.4 What to Cherry-Pick (After Benchmarks)
+
+Based on which combination won, cherry-pick only these into branch 3:
+
+| Component | Cherry-pick if... |
+|-----------|-------------------|
+| Winning TTS adapter + sidecar (e.g. qwen3_tts_sidecar.py) | That TTS provider won the benchmark |
+| Winning STT adapter + sidecar | That STT provider won |
+| Brain model routing code (ChatRequest.brain_model field) | You want switchable brain models in production |
+| Timing instrumentation (voice_session.py timestamps, structured JSON logs) | You want latency monitoring in production |
+| Voice session dataclass (VoiceSession with stack_id) | Always; it is the foundation |
+| UI selectors (brain model, STT, TTS dropdowns) | You want runtime switching in the production UI |
+| Omni hybrid adapter + sidecar | Omni proved viable in benchmarks |
+
+**Do NOT cherry-pick:**
+- Benchmark runner, comparison scripts, fixture questions (test harness only)
+- 7 env profiles for A/B testing (benchmarking only)
+- Provisioning script, orchestrator (server deployment tooling)
+- Adapters that lost the benchmark (dead code)
+- `.planning/` directory (internal planning artifacts)
+
+### 5.5 Cherry-Pick Workflow
+
+```bash
+# 1. Create the clean branch off main
+git checkout main
+git checkout -b feature/voice-pipeline
+
+# 2. Identify the commits you need from the experiment branch
+git log --oneline claude/qwen-voice-next -- rag_demo_system/backend/voice_session.py
+git log --oneline claude/qwen-voice-next -- rag_demo_system/backend/voice_adapters.py
+# ... etc for each winning component
+
+# 3. Cherry-pick them (use -n to stage without committing, then review)
+git cherry-pick -n <commit-hash>
+# Review staged changes, remove anything experimental
+git commit -m "feat: add winning voice pipeline components from benchmark"
+
+# 4. Test on main before merging
+```
 
 ---
 
