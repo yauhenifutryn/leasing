@@ -47,10 +47,10 @@ Accurate, low-latency Russian voice answers grounded in the company knowledge ba
 - Benchmark runner CLI: WebSocket-based, full pipeline, warmup flagging, JSONL output (Validated in Phase 3)
 - Benchmark comparison script: side-by-side markdown table with p50/p95 and winner highlighting (Validated in Phase 3)
 - Per-stack env profiles for all 7 benchmark configurations as incremental overrides (Validated in Phase 3)
+- Qwen3-Omni hybrid adapter with RAG context injection, UI provider option, and JSONL-comparable output (Validated in Phase 4: Qwen3-Omni Hybrid)
 
 ### Active
 
-- [ ] Qwen3-Omni hybrid adapter (prompt-injected retrieved context)
 - [ ] Controlled benchmark execution and results comparison
 
 ### Out of Scope
@@ -110,4 +110,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after Phase 3 completion*
+*Last updated: 2026-03-26 after Phase 4 completion*
