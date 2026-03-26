@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-26T11:52:46.931Z"
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-26T11:53:27.801Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-25)
 ## Current Position
 
 Phase: 03 (brain-upgrade-and-benchmark-framework) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Plan: 2 of 3
 | Phase 02-voice-provider-adapters P01 | 2 | 3 tasks | 3 files |
 | Phase 02 P02 | 2 | 3 tasks | 6 files |
 | Phase 03 P02 | 4 | 2 tasks | 9 files |
+| Phase 03-brain-upgrade-and-benchmark-framework P01 | 4 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase 03]: JSONL fixture format with question_id/category/text_ru/expected_keywords; category prefix encoding sf/lf/kb/amb/oos
 - [Phase 03]: .env.bench overlay pattern: profiles contain only overriding variables; runner loads base .env then applies profile with load_dotenv(override=True)
 - [Phase 03]: Sidecar BASE_URLs embedded in voice provider profiles to prevent hard-fail RuntimeError at benchmark runtime
+- [Phase 03-brain-upgrade-and-benchmark-framework]: Per-request brain_model override via ChatRequest field, not settings mutation: avoids race conditions on module-level singleton
+- [Phase 03-brain-upgrade-and-benchmark-framework]: _voice_chat_streaming_sync is synchronous (requests-based streaming); wrapped in asyncio.to_thread() to avoid blocking the FastAPI event loop during voice turns
+- [Phase 03-brain-upgrade-and-benchmark-framework]: dify_rag backend falls back to non-streaming with t_llm_first_token = t_retrieval_done — Dify manages its own API, streaming extraction not possible
 
 ### Pending Todos
 
@@ -103,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T11:52:46.928Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-03-26T11:53:27.798Z
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None

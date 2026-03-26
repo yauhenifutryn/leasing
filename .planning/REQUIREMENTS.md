@@ -36,7 +36,7 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 
 ### Brain
 
-- [ ] **BRAIN-01**: Brain model switchable between Qwen3-30B-A3B (fallback) and Qwen3.5-35B-A3B (target) via UI selector or env var
+- [x] **BRAIN-01**: Brain model switchable between Qwen3-30B-A3B (fallback) and Qwen3.5-35B-A3B (target) via UI selector or env var
 
 ### Qwen3-Omni
 
@@ -108,7 +108,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VPROV-03 | Phase 2 | Complete |
 | VPROV-04 | Phase 2 | Complete |
 | VPROV-05 | Phase 2 | Complete |
-| BRAIN-01 | Phase 3 | Pending |
+| BRAIN-01 | Phase 3 | Complete |
 | BENCH-01 | Phase 3 | Complete |
 | BENCH-02 | Phase 3 | Pending |
 | BENCH-03 | Phase 3 | Pending |

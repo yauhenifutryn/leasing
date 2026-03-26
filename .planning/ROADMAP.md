@@ -58,9 +58,9 @@ Plans:
   3. The benchmark runner CLI executes the full question set against the active configuration and writes a JSONL results file where every line contains question_id, stack_id, transcript, answer, retrieved chunks, and all timing fields; the first three turns per stack are flagged as warmup
   4. The comparison script reads two JSONL files and outputs a side-by-side markdown table of latency and quality metrics (mean/p50/p95 for primary KPI and llm_ttfb_ms)
   5. Per-stack env profile files exist for every benchmark configuration: baseline, qwen3_tts, qwen3_asr, voxtral, brain_upgrade, omni_hybrid, dify_rag
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 Plans:
-- [ ] 03-01-PLAN.md — Brain model routing fix + streaming LLM first-token timing
+- [x] 03-01-PLAN.md — Brain model routing fix + streaming LLM first-token timing
 - [x] 03-02-PLAN.md — 80+ question Russian fixture + 7 env profiles
 - [ ] 03-03-PLAN.md — Benchmark runner CLI + comparison script + TTS endpoint
 
@@ -104,6 +104,6 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 |-------|----------------|--------|-----------|
 | 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
 | 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
-| 3. Brain Upgrade and Benchmark Framework | 0/3 | Not started | - |
+| 3. Brain Upgrade and Benchmark Framework | 2/3 | In Progress|  |
 | 4. Qwen3-Omni Hybrid | 0/TBD | Not started | - |
 | 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |
