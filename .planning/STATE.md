@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-26T12:35:11.155Z"
+status: Ready to execute
+stopped_at: Completed 04-qwen3-omni-hybrid/04-01-PLAN.md
+last_updated: "2026-03-26T13:06:35.743Z"
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 10
+  completed_plans: 9
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Accurate, low-latency Russian voice answers grounded in the company knowledge base, with full on-premises control over every pipeline component
-**Current focus:** Phase 03 — brain-upgrade-and-benchmark-framework
+**Current focus:** Phase 04 — qwen3-omni-hybrid
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
+Phase: 04 (qwen3-omni-hybrid) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: Not started
 | Phase 03 P02 | 4 | 2 tasks | 9 files |
 | Phase 03-brain-upgrade-and-benchmark-framework P01 | 4 | 2 tasks | 2 files |
 | Phase 03 P03 | 5 | 2 tasks | 5 files |
+| Phase 04-qwen3-omni-hybrid P01 | 3 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Recent decisions affecting current work:
 - [Phase Phase 03]: POST /api/tts as REST proxy for benchmark runner: runner must not need direct sidecar access; backend routes TTS via synthesize_audio_with_provider
 - [Phase Phase 03]: Fresh WS connection per benchmark question: prevents session brain_model/provider state from contaminating next question result
 - [Phase Phase 03]: statistics.quantiles(n=100, method='inclusive') for p50/p95: returns interpolated values not element values; p50 of [1..100] = 50.5 with this method
+- [Phase 04-qwen3-omni-hybrid]: Deferred imports of Qwen3OmniMoeForConditionalGeneration inside Qwen3OmniInference.__init__ so the module is importable in the shared test environment without GPU or transformers==4.57.3 present
+- [Phase 04-qwen3-omni-hybrid]: xfail contract tests on normalizer and voice_statuses document Plan 02 requirements without blocking CI green state
 
 ### Pending Todos
 
@@ -111,6 +114,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T12:35:11.145Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-qwen3-omni-hybrid/04-CONTEXT.md
+Last session: 2026-03-26T13:06:35.740Z
+Stopped at: Completed 04-qwen3-omni-hybrid/04-01-PLAN.md
+Resume file: None

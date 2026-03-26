@@ -72,9 +72,9 @@ Plans:
   1. Selecting Qwen3-Omni in the UI routes the voice turn through the Omni hybrid path; the existing RAG engine retrieves chunks first and they are injected into the Omni prompt before inference
   2. Out-of-scope questions (category 5 from the benchmark fixture) return a refusal or out-of-scope response rather than hallucinated answers, confirming the injected context is being respected
   3. Omni JSONL output contains the same fields as split pipeline output (question_id, stack_id, transcript, answer, retrieved chunks, all timing fields) so the comparison script can process both without modification
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
-- [ ] 04-01-PLAN.md — Omni sidecar server + requirements + contract tests
+- [x] 04-01-PLAN.md — Omni sidecar server + requirements + contract tests
 - [ ] 04-02-PLAN.md — Backend dispatch, frontend dropdown, env profile, supervisord
 
 ### Phase 5: Server Deployment and Benchmarks
@@ -108,5 +108,5 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 | 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
 | 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
 | 3. Brain Upgrade and Benchmark Framework | 3/3 | Complete   | 2026-03-26 |
-| 4. Qwen3-Omni Hybrid | 0/2 | Planned | - |
+| 4. Qwen3-Omni Hybrid | 1/2 | In Progress|  |
 | 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |
