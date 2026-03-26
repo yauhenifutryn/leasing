@@ -1,0 +1,85 @@
+{"question_id": "sf-01", "category": "short_factual", "text_ru": "Какой минимальный аванс нужен для лизинга?", "expected_keywords": ["аванс", "10%"]}
+{"question_id": "sf-02", "category": "short_factual", "text_ru": "На сколько месяцев можно взять авто в лизинг?", "expected_keywords": ["месяцев", "срок"]}
+{"question_id": "sf-03", "category": "short_factual", "text_ru": "Можно ли взять б/у машину в лизинг?", "expected_keywords": ["б/у", "подержанный"]}
+{"question_id": "sf-04", "category": "short_factual", "text_ru": "Сколько времени рассматривают заявку?", "expected_keywords": ["день", "рассмотрение"]}
+{"question_id": "sf-05", "category": "short_factual", "text_ru": "Нужен ли залог при оформлении лизинга?", "expected_keywords": ["залог", "не нужен"]}
+{"question_id": "sf-06", "category": "short_factual", "text_ru": "В какой валюте можно оформить лизинг?", "expected_keywords": ["USD", "EUR", "BYN"]}
+{"question_id": "sf-07", "category": "short_factual", "text_ru": "Кто является собственником предмета лизинга во время договора?", "expected_keywords": ["лизинговая компания", "собственник"]}
+{"question_id": "sf-08", "category": "short_factual", "text_ru": "Можно ли выехать за границу на машине из лизинга?", "expected_keywords": ["граница", "можно"]}
+{"question_id": "sf-09", "category": "short_factual", "text_ru": "Когда можно досрочно выкупить предмет лизинга?", "expected_keywords": ["досрочно", "12 месяцев"]}
+{"question_id": "sf-10", "category": "short_factual", "text_ru": "Нужно ли страховать авто, взятое в лизинг?", "expected_keywords": ["страхование", "КАСКО"]}
+{"question_id": "sf-11", "category": "short_factual", "text_ru": "Какой максимальный срок лизингового договора?", "expected_keywords": ["7 лет", "84 месяца"]}
+{"question_id": "sf-12", "category": "short_factual", "text_ru": "Можно ли в лизинг купить мотоцикл?", "expected_keywords": ["мотоцикл", "мототехника"]}
+{"question_id": "sf-13", "category": "short_factual", "text_ru": "Платежи по лизингу — только в белорусских рублях?", "expected_keywords": ["белорусские рубли", "курс"]}
+{"question_id": "sf-14", "category": "short_factual", "text_ru": "Можно ли выбрать самому продавца для лизинга?", "expected_keywords": ["продавец", "любой"]}
+{"question_id": "sf-15", "category": "short_factual", "text_ru": "Чем лизинг отличается от кредита?", "expected_keywords": ["аренда", "выкуп"]}
+{"question_id": "sf-16", "category": "short_factual", "text_ru": "Можно ли изменить или модернизировать авто из лизинга?", "expected_keywords": ["согласование", "изменения"]}
+{"question_id": "sf-17", "category": "short_factual", "text_ru": "Как оплатить лизинговый платёж через интернет?", "expected_keywords": ["ЕРИП", "интернет-банкинг"]}
+{"question_id": "sf-18", "category": "short_factual", "text_ru": "Что входит в ежемесячный лизинговый платёж?", "expected_keywords": ["инвестиционные расходы", "вознаграждение"]}
+{"question_id": "sf-19", "category": "short_factual", "text_ru": "Можно ли оформить лизинг без подтверждения дохода?", "expected_keywords": ["аванс", "30%"]}
+{"question_id": "sf-20", "category": "short_factual", "text_ru": "Какая минимальная стоимость предмета лизинга?", "expected_keywords": ["2000 USD", "минимальная сумма"]}
+{"question_id": "lf-01", "category": "long_factual", "text_ru": "Как работает схема возвратного лизинга и в каких ситуациях это выгодно?", "expected_keywords": ["возвратный лизинг", "продажа", "оборотные средства", "договор"]}
+{"question_id": "lf-02", "category": "long_factual", "text_ru": "Расскажите подробно про лизинг авто для физических лиц, работающих за границей.", "expected_keywords": ["физическое лицо", "аванс", "срок", "доход"]}
+{"question_id": "lf-03", "category": "long_factual", "text_ru": "Как оформляется лизинговый договор — что нужно сделать шаг за шагом?", "expected_keywords": ["заявка", "документы", "решение", "аванс"]}
+{"question_id": "lf-04", "category": "long_factual", "text_ru": "Расскажи про лизинг строительной и специальной техники: условия, авансы, сроки.", "expected_keywords": ["спецтехника", "аванс", "срок", "оборудование"]}
+{"question_id": "lf-05", "category": "long_factual", "text_ru": "Что происходит при полной гибели автомобиля, взятого в лизинг?", "expected_keywords": ["страховая", "аукцион", "долг", "остатки"]}
+{"question_id": "lf-06", "category": "long_factual", "text_ru": "Каковы преимущества лизинга перед кредитом для бизнеса?", "expected_keywords": ["залог", "налоги", "затраты", "гибкость"]}
+{"question_id": "lf-07", "category": "long_factual", "text_ru": "Расскажи про лизинг оборудования для юридических лиц — виды, сроки, условия.", "expected_keywords": ["оборудование", "юридическое лицо", "срок", "аванс"]}
+{"question_id": "lf-08", "category": "long_factual", "text_ru": "Что такое лизинг коммерческой недвижимости и каковы его условия?", "expected_keywords": ["недвижимость", "коммерческая", "срок", "аванс"]}
+{"question_id": "lf-09", "category": "long_factual", "text_ru": "Как работает страхование предметов лизинга и кто получает страховое возмещение?", "expected_keywords": ["страхование", "КАСКО", "возмещение", "компания"]}
+{"question_id": "lf-10", "category": "long_factual", "text_ru": "Расскажи подробнее об облигациях и токенах компании Микро Лизинг для инвесторов.", "expected_keywords": ["облигации", "токены", "ставка", "выпуск"]}
+{"question_id": "lf-11", "category": "long_factual", "text_ru": "Как платить по лизинговому договору если стандартный способ не работает?", "expected_keywords": ["ЕРИП", "платёж", "реквизиты", "счёт"]}
+{"question_id": "lf-12", "category": "long_factual", "text_ru": "Что можно и чего нельзя делать с оборудованием, взятым в лизинг?", "expected_keywords": ["использовать", "продать", "согласование", "передать"]}
+{"question_id": "lf-13", "category": "long_factual", "text_ru": "Каков порядок действий при страховом случае с автомобилем в лизинге?", "expected_keywords": ["страховой случай", "возмещение", "ремонт", "страховая"]}
+{"question_id": "lf-14", "category": "long_factual", "text_ru": "Как бизнесу обновить технику и автопарк без кредита и залога с помощью лизинга?", "expected_keywords": ["лизинг", "бизнес", "залог", "технику"]}
+{"question_id": "lf-15", "category": "long_factual", "text_ru": "Расскажи про лизинг мотоциклов и мотоцикл какой стоимости можно взять?", "expected_keywords": ["мотоцикл", "мототехника", "аванс", "срок"]}
+{"question_id": "kb-01", "category": "kb_grounded", "text_ru": "Какой рейтинг надёжности присвоило компании агентство Fitch?", "expected_keywords": ["Fitch", "B-", "рейтинг"]}
+{"question_id": "kb-02", "category": "kb_grounded", "text_ru": "В каком году компания Микро Лизинг была основана?", "expected_keywords": ["2009", "основана"]}
+{"question_id": "kb-03", "category": "kb_grounded", "text_ru": "Сколько договоров заключила компания Микро Лизинг?", "expected_keywords": ["23 500", "договоров"]}
+{"question_id": "kb-04", "category": "kb_grounded", "text_ru": "Под управлением какой компании работает Микро Лизинг?", "expected_keywords": ["Mikro Kapital", "Люксембург"]}
+{"question_id": "kb-05", "category": "kb_grounded", "text_ru": "В скольких странах работает группа Mikro Kapital?", "expected_keywords": ["Люксембург", "страна"]}
+{"question_id": "kb-06", "category": "kb_grounded", "text_ru": "Какое место занимает Микро Лизинг по финансовой устойчивости за 2023 год?", "expected_keywords": ["первое место", "финансовая устойчивость", "2023"]}
+{"question_id": "kb-07", "category": "kb_grounded", "text_ru": "Какой телефон офиса в Гомеле?", "expected_keywords": ["Гомель", "телефон", "31 81 81"]}
+{"question_id": "kb-08", "category": "kb_grounded", "text_ru": "По какому адресу минский офис Микро Лизинг?", "expected_keywords": ["Минск", "Победителей", "57"]}
+{"question_id": "kb-09", "category": "kb_grounded", "text_ru": "Когда работает колл-центр по субботам?", "expected_keywords": ["суббота", "10:00", "16:00"]}
+{"question_id": "kb-10", "category": "kb_grounded", "text_ru": "Какой УНП у компании Микро Лизинг?", "expected_keywords": ["490849929", "УНП"]}
+{"question_id": "kb-11", "category": "kb_grounded", "text_ru": "Какова стоимость переданных в лизинг предметов в евро?", "expected_keywords": ["294 000 000", "EUR"]}
+{"question_id": "kb-12", "category": "kb_grounded", "text_ru": "Какой диплом получила компания за 2020 год от Ассоциации лизингодателей?", "expected_keywords": ["диплом", "второй степени", "2020"]}
+{"question_id": "kb-13", "category": "kb_grounded", "text_ru": "Какова минимальная стоимость авто для лизинга работающим за рубежом?", "expected_keywords": ["2 000 USD", "НБРБ"]}
+{"question_id": "kb-14", "category": "kb_grounded", "text_ru": "Какой максимальный срок лизинга авто для физлиц, работающих за границей?", "expected_keywords": ["84 месяца", "срок"]}
+{"question_id": "kb-15", "category": "kb_grounded", "text_ru": "При какой стоимости авто КАСКО не обязательно?", "expected_keywords": ["30 000 EUR", "КАСКО"]}
+{"question_id": "kb-16", "category": "kb_grounded", "text_ru": "Какой адрес офиса в Гродно?", "expected_keywords": ["Гродно", "Будённого", "30"]}
+{"question_id": "kb-17", "category": "kb_grounded", "text_ru": "Какой телефон для Минска на горячей линии?", "expected_keywords": ["Минск", "323 77 00"]}
+{"question_id": "kb-18", "category": "kb_grounded", "text_ru": "Какой процент по токенам третьего выпуска Микро Лизинг?", "expected_keywords": ["7%", "токены", "ставка"]}
+{"question_id": "kb-19", "category": "kb_grounded", "text_ru": "Какой объём эмиссии токенов третьего выпуска?", "expected_keywords": ["1 500 000", "USD", "токены"]}
+{"question_id": "kb-20", "category": "kb_grounded", "text_ru": "По каким партнёрам компания предлагает лизинг авто?", "expected_keywords": ["партнёр", "дилер", "БелГАЗавтосервис"]}
+{"question_id": "amb-01", "category": "ambiguous", "text_ru": "Хочу взять в лизинг что-нибудь недорогое, что вы посоветуете?", "expected_keywords": ["лизинг", "условия", "аванс"]}
+{"question_id": "amb-02", "category": "ambiguous", "text_ru": "Мне нужна машина, как лучше — лизинг или как-то по-другому?", "expected_keywords": ["лизинг", "кредит", "условия"]}
+{"question_id": "amb-03", "category": "ambiguous", "text_ru": "Я хочу расширить бизнес, чем можете помочь?", "expected_keywords": ["лизинг", "оборудование", "финансирование"]}
+{"question_id": "amb-04", "category": "ambiguous", "text_ru": "Насколько это выгодно?", "expected_keywords": ["лизинг", "выгода", "условия"]}
+{"question_id": "amb-05", "category": "ambiguous", "text_ru": "Можно ли как-то снизить платёж?", "expected_keywords": ["платёж", "аванс", "срок"]}
+{"question_id": "amb-06", "category": "ambiguous", "text_ru": "Что нужно, чтобы вы одобрили?", "expected_keywords": ["заявка", "документы", "одобрение"]}
+{"question_id": "amb-07", "category": "ambiguous", "text_ru": "У меня маленький доход, дадите лизинг?", "expected_keywords": ["доход", "платежеспособность", "условия"]}
+{"question_id": "amb-08", "category": "ambiguous", "text_ru": "Это выгоднее, чем в банке?", "expected_keywords": ["банк", "лизинг", "условия"]}
+{"question_id": "amb-09", "category": "ambiguous", "text_ru": "Как давно вы работаете?", "expected_keywords": ["опыт", "лет", "история"]}
+{"question_id": "amb-10", "category": "ambiguous", "text_ru": "Вы надёжная компания?", "expected_keywords": ["надёжность", "рейтинг", "Fitch"]}
+{"question_id": "amb-11", "category": "ambiguous", "text_ru": "Хочу что-то взять для работы, но не знаю что точно.", "expected_keywords": ["техника", "оборудование", "транспорт"]}
+{"question_id": "amb-12", "category": "ambiguous", "text_ru": "Есть ли у вас скидки или акции сейчас?", "expected_keywords": ["акция", "скидка", "предложение"]}
+{"question_id": "amb-13", "category": "ambiguous", "text_ru": "Что если я не смогу платить?", "expected_keywords": ["платёж", "просрочка", "договор"]}
+{"question_id": "amb-14", "category": "ambiguous", "text_ru": "А как у вас с документами — много бумаг?", "expected_keywords": ["документы", "пакет", "оформление"]}
+{"question_id": "amb-15", "category": "ambiguous", "text_ru": "Могу ли я получить лизинг быстро?", "expected_keywords": ["быстро", "день", "срок"]}
+{"question_id": "oos-01", "category": "out_of_scope", "text_ru": "Какая сегодня погода в Минске?", "expected_keywords": []}
+{"question_id": "oos-02", "category": "out_of_scope", "text_ru": "Кто выиграл чемпионат мира по футболу в 2022 году?", "expected_keywords": []}
+{"question_id": "oos-03", "category": "out_of_scope", "text_ru": "Как приготовить борщ?", "expected_keywords": []}
+{"question_id": "oos-04", "category": "out_of_scope", "text_ru": "Сколько стоит биткоин сейчас?", "expected_keywords": []}
+{"question_id": "oos-05", "category": "out_of_scope", "text_ru": "Расскажи анекдот.", "expected_keywords": []}
+{"question_id": "oos-06", "category": "out_of_scope", "text_ru": "Когда открывается Макдоналдс?", "expected_keywords": []}
+{"question_id": "oos-07", "category": "out_of_scope", "text_ru": "Как перевести деньги в Россию?", "expected_keywords": []}
+{"question_id": "oos-08", "category": "out_of_scope", "text_ru": "Кто такой Путин?", "expected_keywords": []}
+{"question_id": "oos-09", "category": "out_of_scope", "text_ru": "Переведи слово car на русский язык.", "expected_keywords": []}
+{"question_id": "oos-10", "category": "out_of_scope", "text_ru": "Расскажи про историю Беларуси.", "expected_keywords": []}
+{"question_id": "sf-21", "category": "short_factual", "text_ru": "Нужно ли страховать мотоцикл, взятый в лизинг?", "expected_keywords": ["страхование", "КАСКО", "возраст"]}
+{"question_id": "sf-22", "category": "short_factual", "text_ru": "Для кого доступен лизинг — только для юридических лиц?", "expected_keywords": ["физические лица", "юридические лица", "ИП"]}
+{"question_id": "lf-16", "category": "long_factual", "text_ru": "Расскажи подробнее про лизинг для юридических лиц: какие условия и документы нужны.", "expected_keywords": ["юридическое лицо", "документы", "анкета", "условия"]}
+{"question_id": "kb-21", "category": "kb_grounded", "text_ru": "По какому адресу находится офис в Бресте?", "expected_keywords": ["Брест", "Машерова"]}
+{"question_id": "amb-16", "category": "ambiguous", "text_ru": "Хочу инвестировать в вашу компанию, как это сделать?", "expected_keywords": ["облигации", "токены", "инвестор"]}
