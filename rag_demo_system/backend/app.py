@@ -9,6 +9,8 @@ from typing import Any
 
 import json
 
+import requests as _requests
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -813,6 +815,10 @@ async def voice_ws(websocket: WebSocket) -> None:
                 if session.voice_provider == "yandex_realtime":
                     session.stt_provider = "yandex_realtime"
                     session.tts_provider = "yandex_realtime"
+                if session.voice_provider == "qwen3_omni":
+                    session.brain_model = "Qwen/Qwen3-Omni-30B-A3B"
+                    session.stt_provider = "omni"
+                    session.tts_provider = "omni"
                 if session.voice_provider == "yandex_realtime":
                     if yandex_relay is None:
                         yandex_relay = YandexRealtimeRelay(websocket)
@@ -914,6 +920,85 @@ async def voice_ws(websocket: WebSocket) -> None:
                     continue
                 for action in session.on_transcript_final(text):
                     await websocket.send_json(action)
+                if session.voice_provider == "qwen3_omni":
+                    # --- Omni hybrid path (D-01, D-02): audio-in, audio-out ---
+                    omni_base_url = os.getenv("QWEN3_OMNI_BASE_URL")
+                    if not omni_base_url:
+                        raise RuntimeError(
+                            "Qwen3-Omni sidecar unavailable: QWEN3_OMNI_BASE_URL not set"
+                        )
+                    # Retrieve chunks using existing RAG engine (D-04: same settings as voice_fast)
+                    retrieval = engine.retrieve(
+                        text, fast=True, voice_fast=True, session_id=session_id
+                    )
+                    t_retrieval_done = time.time()
+                    final_chunks = retrieval.get("final") or []
+                    chunk_texts = [
+                        c.get("text", "") for c in final_chunks if isinstance(c, dict)
+                    ]
+                    # Call Omni sidecar: audio_b64 is the original user audio, NOT the transcript (D-02)
+                    omni_resp = _requests.post(
+                        omni_base_url.rstrip("/") + "/chat",
+                        json={
+                            "audio_b64": audio_b64,
+                            "context_chunks": chunk_texts,
+                        },
+                        timeout=120,
+                    )
+                    omni_resp.raise_for_status()
+                    omni_data = omni_resp.json()
+                    # Collapsed timing: llm_first_token == tts_first_chunk == Omni first audio (D-06)
+                    t_omni_first_audio = omni_data.get("t_omni_first_audio", time.time())
+                    t_llm_first_token = t_omni_first_audio
+                    t_tts_first_chunk = t_omni_first_audio
+                    answer_text = omni_data.get("text", "")
+                    omni_audio_b64 = omni_data.get("audio_b64", "")
+                    # Send text to UI
+                    await websocket.send_json({
+                        "type": "response.output_text.delta",
+                        "session_id": session_id,
+                        "delta": answer_text,
+                    })
+                    # Send audio to browser
+                    if omni_audio_b64:
+                        await websocket.send_json({
+                            "type": "response.output_audio.delta",
+                            "session_id": session_id,
+                            "delta": omni_audio_b64,
+                            "sample_rate_hz": omni_data.get("sample_rate_hz", 24000),
+                        })
+                        t_playback_started = time.time()
+                    else:
+                        t_playback_started = t_tts_first_chunk
+                    # Log JSONL with same fields as split pipeline (OMNI-03, D-07)
+                    primary_kpi_ms = (t_playback_started - t_speech_stopped) * 1000
+                    state.log({
+                        "event": "voice_turn",
+                        "question_id": question_id,
+                        "stack_id": session.stack_id,
+                        "session_id": session.session_id,
+                        "backend": session.backend,
+                        "brain_model": session.brain_model,
+                        "stt_provider": session.stt_provider,
+                        "tts_provider": session.tts_provider,
+                        "transcript": text,
+                        "speech_stopped": t_speech_stopped,
+                        "stt_done": t_stt_done,
+                        "retrieval_done": t_retrieval_done,
+                        "llm_first_token": t_llm_first_token,
+                        "tts_first_chunk": t_tts_first_chunk,
+                        "playback_started": t_playback_started,
+                        "primary_kpi_ms": primary_kpi_ms,
+                    })
+                    await websocket.send_json({
+                        "type": "response.done",
+                        "session_id": session_id,
+                        "backend": session.backend,
+                        "used_knowledge": [c.get("text", "")[:100] for c in final_chunks if isinstance(c, dict)],
+                        "citations": [],
+                        "timings": retrieval.get("timings", {}),
+                    })
+                    continue  # skip the split pipeline path below
                 voice_result = await asyncio.to_thread(
                     _voice_chat_streaming_sync,
                     message=text,

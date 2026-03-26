@@ -20,7 +20,7 @@ def normalize_voice_provider(value: str | None) -> str:
     provider = (value or "local").strip().lower()
     if provider == "yandex":
         return "yandex_realtime"
-    if provider not in {"local", "yandex_realtime", "yandex_speechkit", "oss_russian"}:
+    if provider not in {"local", "yandex_realtime", "yandex_speechkit", "oss_russian", "qwen3_omni"}:
         return "local"
     return provider
 

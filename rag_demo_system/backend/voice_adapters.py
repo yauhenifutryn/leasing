@@ -47,6 +47,7 @@ def build_voice_statuses() -> dict[str, dict[str, Any]]:
         "qwen3_asr": _service_status("qwen3_asr", os.getenv("QWEN3_ASR_BASE_URL")),
         "qwen3_tts": _service_status("qwen3_tts", os.getenv("QWEN3_TTS_BASE_URL")),
         "voxtral": _service_status("voxtral", os.getenv("VOXTRAL_BASE_URL")),
+        "qwen3_omni": _service_status("qwen3_omni", os.getenv("QWEN3_OMNI_BASE_URL")),
     }
 
 
