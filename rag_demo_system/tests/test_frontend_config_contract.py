@@ -27,3 +27,4 @@ def test_frontend_exposes_voice_provider_selector_contract() -> None:
     assert "voiceProviderSelect" in index_html
     assert "yandex_speechkit" in index_html
     assert "oss_russian" in index_html
+    assert "qwen3_omni" in index_html

@@ -90,7 +90,6 @@ def _call_omni_sidecar(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="allowlist updated in Plan 02")
 def test_omni_voice_provider_in_normalizer_allowlist() -> None:
     """normalize_voice_provider must pass 'qwen3_omni' through unchanged.
 
@@ -119,7 +118,6 @@ def test_omni_stack_id_format() -> None:
     assert session.stack_id == "our_rag__Qwen3-Omni-30B-A3B__omni__omni"
 
 
-@pytest.mark.xfail(reason="health entry added in Plan 02")
 def test_build_voice_statuses_includes_qwen3_omni() -> None:
     """build_voice_statuses() must return a dict containing a 'qwen3_omni' key.
 
