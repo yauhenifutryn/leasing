@@ -65,6 +65,7 @@ class ChatRequest(BaseModel):
     fast: bool = False
     mode: str | None = None
     backend: str | None = None
+    brain_model: str | None = None
 
 
 class VoiceChatRequest(BaseModel):
@@ -394,7 +395,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
 
     from .llm import call_openai_compatible, iter_openai_compatible_stream_events
 
-    model = settings.llm.fast_model if fast and settings.llm.fast_model else settings.llm.model
+    effective_model = payload.brain_model or (settings.llm.fast_model if fast and settings.llm.fast_model else settings.llm.model)
     base_url = settings.llm.fast_base_url if fast and settings.llm.fast_base_url else settings.llm.base_url
     max_tokens = settings.llm.fast_max_tokens if fast else settings.llm.max_tokens
 
@@ -410,7 +411,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                     nonlocal finish_reason
                     stream_iter = iter_openai_compatible_stream_events(
                     base_url=base_url,
-                    model=model,
+                    model=effective_model,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
                         temperature=settings.llm.temperature,
@@ -517,7 +518,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         llm_start = time.perf_counter()
         llm_resp = call_openai_compatible(
             base_url=base_url,
-            model=model,
+            model=effective_model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=settings.llm.temperature,
@@ -761,6 +762,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                         fast=True,
                         mode="voice_fast",
                         backend=session.backend,
+                        brain_model=session.brain_model,
                     ),
                     stream=False,
                 )
