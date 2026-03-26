@@ -41,7 +41,7 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 ### Qwen3-Omni
 
 - [x] **OMNI-01**: Qwen3-Omni hybrid adapter retrieves chunks via existing RAG engine and injects them into Omni prompt
-- [ ] **OMNI-02**: Omni hybrid mode accessible as a voice provider option in the UI alongside split pipeline providers
+- [x] **OMNI-02**: Omni hybrid mode accessible as a voice provider option in the UI alongside split pipeline providers
 - [x] **OMNI-03**: Omni results use the same log format so they are directly comparable with split pipeline results
 
 ### Deployment
@@ -115,7 +115,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BENCH-04 | Phase 3 | Complete |
 | DEPLOY-01 | Phase 3 | Complete |
 | OMNI-01 | Phase 4 | Complete |
-| OMNI-02 | Phase 4 | Pending |
+| OMNI-02 | Phase 4 | Complete |
 | OMNI-03 | Phase 4 | Complete |
 | DEPLOY-02 | Phase 5 | Pending |
 | DEPLOY-03 | Phase 5 | Pending |

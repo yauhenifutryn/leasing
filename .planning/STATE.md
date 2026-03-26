@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 04-qwen3-omni-hybrid/04-01-PLAN.md
-last_updated: "2026-03-26T13:06:35.743Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 04-qwen3-omni-hybrid/04-02-PLAN.md
+last_updated: "2026-03-26T13:12:00.101Z"
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -55,6 +55,7 @@ Plan: 2 of 2
 | Phase 03-brain-upgrade-and-benchmark-framework P01 | 4 | 2 tasks | 2 files |
 | Phase 03 P03 | 5 | 2 tasks | 5 files |
 | Phase 04-qwen3-omni-hybrid P01 | 3 | 2 tasks | 3 files |
+| Phase 04-qwen3-omni-hybrid P02 | 20 | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,9 @@ Recent decisions affecting current work:
 - [Phase Phase 03]: statistics.quantiles(n=100, method='inclusive') for p50/p95: returns interpolated values not element values; p50 of [1..100] = 50.5 with this method
 - [Phase 04-qwen3-omni-hybrid]: Deferred imports of Qwen3OmniMoeForConditionalGeneration inside Qwen3OmniInference.__init__ so the module is importable in the shared test environment without GPU or transformers==4.57.3 present
 - [Phase 04-qwen3-omni-hybrid]: xfail contract tests on normalizer and voice_statuses document Plan 02 requirements without blocking CI green state
+- [Phase 04-qwen3-omni-hybrid]: import requests aliased as _requests in app.py to avoid shadowing the local audio_b64 variable reused in the split pipeline path
+- [Phase 04-qwen3-omni-hybrid]: Omni dispatch uses continue to skip the split pipeline voice_result/TTS path after logging JSONL
+- [Phase 04-qwen3-omni-hybrid]: autostart=false in supervisord qwen3_omni entry: Omni and split pipeline brain model cannot co-host on A100 80GB
 
 ### Pending Todos
 
@@ -114,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T13:06:35.740Z
-Stopped at: Completed 04-qwen3-omni-hybrid/04-01-PLAN.md
+Last session: 2026-03-26T13:12:00.098Z
+Stopped at: Completed 04-qwen3-omni-hybrid/04-02-PLAN.md
 Resume file: None

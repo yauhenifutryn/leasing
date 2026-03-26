@@ -13,7 +13,7 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 - [ ] **Phase 1: Instrumentation and UI Switching** - Wire six per-turn latency milestones into voice_session.py, emit structured JSON logs, and expose UI selectors for all pipeline variables with stack_id tagging
 - [x] **Phase 2: Voice Provider Adapters** - Build Qwen3-TTS sidecar + adapter, Qwen3-ASR sidecar + adapter, and Voxtral adapter; all pass contract tests and appear in the frontend selector (completed 2026-03-25)
 - [x] **Phase 3: Brain Upgrade and Benchmark Framework** - Make brain model switchable via UI and env var, create the 80+ question Russian fixture, build the benchmark runner CLI and comparison script, and write per-stack env profiles (completed 2026-03-26)
-- [ ] **Phase 4: Qwen3-Omni Hybrid** - Implement the Omni hybrid adapter with RAG context injection, register it as a UI provider option, and confirm it uses the same log format as the split pipeline
+- [x] **Phase 4: Qwen3-Omni Hybrid** - Implement the Omni hybrid adapter with RAG context injection, register it as a UI provider option, and confirm it uses the same log format as the split pipeline (completed 2026-03-26)
 - [ ] **Phase 5: Server Deployment and Benchmarks** - Provision the GPU server from a fresh VM, validate with smoke test, then run the full benchmark matrix in smart order on the server
 
 ## Phase Details
@@ -72,10 +72,10 @@ Plans:
   1. Selecting Qwen3-Omni in the UI routes the voice turn through the Omni hybrid path; the existing RAG engine retrieves chunks first and they are injected into the Omni prompt before inference
   2. Out-of-scope questions (category 5 from the benchmark fixture) return a refusal or out-of-scope response rather than hallucinated answers, confirming the injected context is being respected
   3. Omni JSONL output contains the same fields as split pipeline output (question_id, stack_id, transcript, answer, retrieved chunks, all timing fields) so the comparison script can process both without modification
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 04-01-PLAN.md — Omni sidecar server + requirements + contract tests
-- [ ] 04-02-PLAN.md — Backend dispatch, frontend dropdown, env profile, supervisord
+- [x] 04-02-PLAN.md — Backend dispatch, frontend dropdown, env profile, supervisord
 
 ### Phase 5: Server Deployment and Benchmarks
 **Goal**: The GPU server is provisioned from a fresh VM, all services pass the smoke test, and the benchmark matrix is executed in smart order — RAG comparison first, brain comparison second, Omni hybrid third (the most promising experiment, now with a baseline to compare against), and full STT/TTS matrix only as a fallback if Omni does not perform well enough
@@ -108,5 +108,5 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 | 1. Instrumentation and UI Switching | 1/3 | In Progress|  |
 | 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
 | 3. Brain Upgrade and Benchmark Framework | 3/3 | Complete   | 2026-03-26 |
-| 4. Qwen3-Omni Hybrid | 1/2 | In Progress|  |
+| 4. Qwen3-Omni Hybrid | 2/2 | Complete   | 2026-03-26 |
 | 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |
