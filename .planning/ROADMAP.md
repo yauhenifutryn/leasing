@@ -14,7 +14,7 @@ This milestone extends an already-working split pipeline (SenseVoice STT, Qdrant
 - [x] **Phase 2: Voice Provider Adapters** - Build Qwen3-TTS sidecar + adapter, Qwen3-ASR sidecar + adapter, and Voxtral adapter; all pass contract tests and appear in the frontend selector (completed 2026-03-25)
 - [x] **Phase 3: Brain Upgrade and Benchmark Framework** - Make brain model switchable via UI and env var, create the 80+ question Russian fixture, build the benchmark runner CLI and comparison script, and write per-stack env profiles (completed 2026-03-26)
 - [x] **Phase 4: Qwen3-Omni Hybrid** - Implement the Omni hybrid adapter with RAG context injection, register it as a UI provider option, and confirm it uses the same log format as the split pipeline (completed 2026-03-26)
-- [ ] **Phase 5: Server Deployment and Benchmarks** - Provision the GPU server from a fresh VM, validate with smoke test, then run the full benchmark matrix in smart order on the server
+- [x] **Phase 5: Server Deployment and Benchmarks** - Provision the GPU server from a fresh VM, validate with smoke test, then run the full benchmark matrix in smart order on the server (completed 2026-03-26)
 
 ## Phase Details
 
@@ -87,10 +87,10 @@ Plans:
   3. The brain comparison benchmark (Qwen3-30B-A3B vs. Qwen3.5-35B-A3B, winning RAG, same providers) completes on the server with VRAM confirmed below 80 GB limit via nvidia-smi before each model load
   4. The Omni hybrid benchmark completes on the server using the winning RAG and brain; Omni results and the best split pipeline results exist as JSONL files and the comparison script produces a valid side-by-side table
   5. If Omni does not meet quality/latency bar: STT/TTS provider comparison (Qwen3-ASR, Qwen3-TTS, Voxtral vs. baseline providers) runs as fallback and produces JSONL result files for each provider permutation
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 05-01-PLAN.md — Provisioning script + infrastructure prerequisites (supervisord entries, gitignore, env template)
-- [ ] 05-02-PLAN.md — Extended smoke test + benchmark orchestrator
+- [x] 05-02-PLAN.md — Extended smoke test + benchmark orchestrator
 
 ## Progress
 
@@ -112,4 +112,4 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 | 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
 | 3. Brain Upgrade and Benchmark Framework | 3/3 | Complete   | 2026-03-26 |
 | 4. Qwen3-Omni Hybrid | 2/2 | Complete   | 2026-03-26 |
-| 5. Server Deployment and Benchmarks | 1/2 | In Progress|  |
+| 5. Server Deployment and Benchmarks | 2/2 | Complete   | 2026-03-26 |

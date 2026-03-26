@@ -48,7 +48,7 @@ Requirements for milestone v1.0: Voice Stack Upgrade and Benchmark. Each maps to
 
 - [x] **DEPLOY-01**: Env profile files for each benchmark stack (baseline, qwen3_tts, qwen3_asr, voxtral, brain_upgrade, omni_hybrid, dify_rag)
 - [x] **DEPLOY-02**: Server deployment script that provisions the stack from a fresh GPU VM
-- [ ] **DEPLOY-03**: Smoke test script validates all services are healthy before benchmark execution
+- [x] **DEPLOY-03**: Smoke test script validates all services are healthy before benchmark execution
 
 ## v2 Requirements
 
@@ -118,7 +118,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OMNI-02 | Phase 4 | Complete |
 | OMNI-03 | Phase 4 | Complete |
 | DEPLOY-02 | Phase 5 | Complete |
-| DEPLOY-03 | Phase 5 | Pending |
+| DEPLOY-03 | Phase 5 | Complete |
 
 **Coverage:**
 - v1.0 requirements: 22 total

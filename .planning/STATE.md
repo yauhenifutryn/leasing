@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-26T17:02:15.498Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-26T17:03:37.439Z"
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -57,6 +57,7 @@ Plan: 2 of 2
 | Phase 04-qwen3-omni-hybrid P01 | 3 | 2 tasks | 3 files |
 | Phase 04-qwen3-omni-hybrid P02 | 20 | 2 tasks | 8 files |
 | Phase 05 P01 | 10 | 2 tasks | 5 files |
+| Phase 05 P02 | 15 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,9 @@ Recent decisions affecting current work:
 - [Phase 05]: exit 1 after ubuntu-drivers install: GPU device node requires reboot; script re-entrant so safe to re-run
 - [Phase 05]: autostart=false for qwen3_tts, qwen3_asr, voxtral: GPU memory prevents co-hosting all sidecars; orchestrator controls active set per test profile
 - [Phase 05]: local-dir-use-symlinks False on all HF downloads prevents symlink caching that defeats HF_HOME volume placement
+- [Phase 05]: smoke_test.sh appended rather than rewritten: preserves original 62-line checks verbatim per D-07; new blocks start after line 62
+- [Phase 05]: BEST_SPLIT_RESULT variable tracks best result across Steps 1-2: ensures Omni is compared against the strongest split pipeline result, not the initial baseline
+- [Phase 05]: vLLM check skipped for omni_hybrid profile: Omni uses port 8002, not vLLM on 8001; checking vLLM would give false confidence about Omni readiness
 
 ### Pending Todos
 
@@ -123,6 +127,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T17:02:15.494Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-03-26T17:03:37.436Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None
