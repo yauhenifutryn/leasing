@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-26T13:41:29.299Z"
+status: Ready to execute
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-26T17:02:15.498Z"
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Accurate, low-latency Russian voice answers grounded in the company knowledge base, with full on-premises control over every pipeline component
-**Current focus:** Phase 04 — qwen3-omni-hybrid
+**Current focus:** Phase 05 — server-deployment-and-benchmarks
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
+Phase: 05 (server-deployment-and-benchmarks) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Plan: Not started
 | Phase 03 P03 | 5 | 2 tasks | 5 files |
 | Phase 04-qwen3-omni-hybrid P01 | 3 | 2 tasks | 3 files |
 | Phase 04-qwen3-omni-hybrid P02 | 20 | 2 tasks | 8 files |
+| Phase 05 P01 | 10 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,10 @@ Recent decisions affecting current work:
 - [Phase 04-qwen3-omni-hybrid]: import requests aliased as _requests in app.py to avoid shadowing the local audio_b64 variable reused in the split pipeline path
 - [Phase 04-qwen3-omni-hybrid]: Omni dispatch uses continue to skip the split pipeline voice_result/TTS path after logging JSONL
 - [Phase 04-qwen3-omni-hybrid]: autostart=false in supervisord qwen3_omni entry: Omni and split pipeline brain model cannot co-host on A100 80GB
+- [Phase 05]: install_all_venvs before download_models: backend venv provides huggingface-cli binary required for model downloads
+- [Phase 05]: exit 1 after ubuntu-drivers install: GPU device node requires reboot; script re-entrant so safe to re-run
+- [Phase 05]: autostart=false for qwen3_tts, qwen3_asr, voxtral: GPU memory prevents co-hosting all sidecars; orchestrator controls active set per test profile
+- [Phase 05]: local-dir-use-symlinks False on all HF downloads prevents symlink caching that defeats HF_HOME volume placement
 
 ### Pending Todos
 
@@ -118,6 +123,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T13:41:29.290Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-server-deployment-and-benchmarks/05-CONTEXT.md
+Last session: 2026-03-26T17:02:15.494Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None
