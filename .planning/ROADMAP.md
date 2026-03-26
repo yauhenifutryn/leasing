@@ -87,7 +87,10 @@ Plans:
   3. The brain comparison benchmark (Qwen3-30B-A3B vs. Qwen3.5-35B-A3B, winning RAG, same providers) completes on the server with VRAM confirmed below 80 GB limit via nvidia-smi before each model load
   4. The Omni hybrid benchmark completes on the server using the winning RAG and brain; Omni results and the best split pipeline results exist as JSONL files and the comparison script produces a valid side-by-side table
   5. If Omni does not meet quality/latency bar: STT/TTS provider comparison (Qwen3-ASR, Qwen3-TTS, Voxtral vs. baseline providers) runs as fallback and produces JSONL result files for each provider permutation
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 05-01-PLAN.md — Provisioning script + infrastructure prerequisites (supervisord entries, gitignore, env template)
+- [ ] 05-02-PLAN.md — Extended smoke test + benchmark orchestrator
 
 ## Progress
 
@@ -109,4 +112,4 @@ Phase 5 depends on Phase 2, Phase 3, and Phase 4.
 | 2. Voice Provider Adapters | 2/2 | Complete   | 2026-03-25 |
 | 3. Brain Upgrade and Benchmark Framework | 3/3 | Complete   | 2026-03-26 |
 | 4. Qwen3-Omni Hybrid | 2/2 | Complete   | 2026-03-26 |
-| 5. Server Deployment and Benchmarks | 0/TBD | Not started | - |
+| 5. Server Deployment and Benchmarks | 0/2 | Not started | - |
