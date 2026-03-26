@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-25T22:29:48.191Z"
+status: Ready to execute
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-26T11:52:46.931Z"
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 8
+  completed_plans: 6
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-25)
 
 **Core value:** Accurate, low-latency Russian voice answers grounded in the company knowledge base, with full on-premises control over every pipeline component
-**Current focus:** Phase 02 — voice-provider-adapters
+**Current focus:** Phase 03 — brain-upgrade-and-benchmark-framework
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 03 (brain-upgrade-and-benchmark-framework) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Plan: Not started
 | Phase 01-instrumentation-and-ui-switching P02 | 8 | 2 tasks | 3 files |
 | Phase 02-voice-provider-adapters P01 | 2 | 3 tasks | 3 files |
 | Phase 02 P02 | 2 | 3 tasks | 6 files |
+| Phase 03 P02 | 4 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Qwen3-TTS language='Russian' hardcoded in generate_voice_clone call: qwen-tts API uses full language names, not ISO codes
 - [Phase 02]: Voxtral batch/offline API only (processor->generate->batch_decode); streaming API excluded per Pitfall 6 to avoid instability
 - [Phase 02]: Voxtral _target_sr from processor.feature_extractor.sampling_rate (dynamic, not hardcoded) for forward-compatibility
+- [Phase 03]: JSONL fixture format with question_id/category/text_ru/expected_keywords; category prefix encoding sf/lf/kb/amb/oos
+- [Phase 03]: .env.bench overlay pattern: profiles contain only overriding variables; runner loads base .env then applies profile with load_dotenv(override=True)
+- [Phase 03]: Sidecar BASE_URLs embedded in voice provider profiles to prevent hard-fail RuntimeError at benchmark runtime
 
 ### Pending Todos
 
@@ -99,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T22:29:48.188Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-brain-upgrade-and-benchmark-framework/03-CONTEXT.md
+Last session: 2026-03-26T11:52:46.928Z
+Stopped at: Completed 03-02-PLAN.md
+Resume file: None

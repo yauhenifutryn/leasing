@@ -61,7 +61,7 @@ Plans:
 **Plans:** 3 plans
 Plans:
 - [ ] 03-01-PLAN.md — Brain model routing fix + streaming LLM first-token timing
-- [ ] 03-02-PLAN.md — 80+ question Russian fixture + 7 env profiles
+- [x] 03-02-PLAN.md — 80+ question Russian fixture + 7 env profiles
 - [ ] 03-03-PLAN.md — Benchmark runner CLI + comparison script + TTS endpoint
 
 ### Phase 4: Qwen3-Omni Hybrid
