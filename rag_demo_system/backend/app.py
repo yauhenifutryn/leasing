@@ -1028,6 +1028,35 @@ async def voice_status() -> JSONResponse:
     )
 
 
+class TTSRequest(BaseModel):
+    text: str
+    tts_provider: str = "cosyvoice"
+
+
+@app.post("/api/tts")
+async def tts_endpoint(payload: TTSRequest) -> JSONResponse:
+    """
+    Synthesize text to audio using the specified TTS provider.
+    Returns base64-encoded PCM audio and the sample rate.
+
+    Used by the benchmark runner to convert question text into audio
+    before sending over the voice WebSocket (avoids the runner needing
+    direct access to a TTS sidecar).
+    """
+    result = synthesize_audio_with_provider(
+        text=payload.text,
+        session_id="benchmark",
+        preferred=payload.tts_provider,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "audio_b64": result.get("audio_b64", ""),
+            "sample_rate_hz": result.get("sample_rate_hz"),
+        },
+    )
+
+
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
