@@ -51,7 +51,9 @@ Accurate, low-latency Russian voice answers grounded in the company knowledge ba
 
 ### Active
 
-- [ ] Controlled benchmark execution and results comparison
+- [x] Server provisioning script for TensorDock A100 80GB VM with automated driver detection, venv creation, model downloads, and stack launch (Validated in Phase 5: Server Deployment and Benchmarks)
+- [x] Profile-aware smoke test with sidecar health, vLLM readiness, and VRAM headroom checks (Validated in Phase 5)
+- [x] Benchmark orchestrator with 4-step sequential execution, interactive winner selection, and automatic comparison reports (Validated in Phase 5)
 
 ### Out of Scope
 
@@ -110,4 +112,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-26 after Phase 4 completion*
+*Last updated: 2026-03-26 after Phase 5 completion (all milestone phases complete)*
