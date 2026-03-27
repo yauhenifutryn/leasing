@@ -1,41 +1,68 @@
 # Server Deployment Playbook
 
-Step-by-step guide for deploying the voice AI benchmark stack to a TensorDock A100 80GB VM, running the benchmark matrix, and doing manual voice quality testing.
+Step-by-step guide for deploying the voice AI benchmark stack to a GPU server, running the benchmark matrix, and doing manual voice quality testing.
+
+The provisioning script auto-detects its environment and adapts:
+- **VM providers** (TensorDock, Lambda, your own physical server): installs Docker, NVIDIA drivers if needed, runs Qdrant in a Docker container (production-grade, auto-restarts)
+- **Container providers** (RunPod, Vast.ai): skips Docker/driver install, downloads Qdrant as a binary (same engine, same port, same results)
+
+Both paths produce identical benchmark output.
 
 ---
 
-## Part 1: TensorDock VM Setup
+## Part 1: GPU Server Setup
 
-### 1.1 Create the VM
+### 1.1 Choose a Provider
 
-1. Go to [tensordock.com](https://tensordock.com) and log in
-2. Deploy a new VM:
-   - **GPU:** 1x A100 80GB
-   - **CPU:** 16 vCPUs recommended (8 minimum; runs ~8 concurrent processes: vLLM, backend, sidecars, Qdrant, benchmark runner)
-   - **RAM:** 64GB+ (128GB recommended for comfort)
-   - **Disk:** 512GB+ (models alone are ~200GB)
-   - **OS:** Ubuntu 24 ML Everything (preferred; comes with NVIDIA drivers and CUDA pre-installed, so provisioning skips driver step). Ubuntu 24.04 LTS also works but may need driver install + reboot.
-   - **Region:** pick what's available
+| Provider | Type | A100 80GB price | Docker available | Notes |
+|----------|------|-----------------|------------------|-------|
+| **RunPod** (recommended) | Container | ~$1.20-1.50/hr | No (auto-detected, Qdrant runs as binary) | Simple dashboard, reliable SSH, good availability |
+| TensorDock | VM | ~$1.18/hr | Yes (Qdrant runs in Docker) | Real VM, but availability issues |
+| Lambda Cloud | VM | ~$1.29/hr | Yes | Often sold out |
+| Vast.ai | Container | ~$0.80-1.20/hr | No (auto-detected) | Cheapest, variable host quality |
+| Your own server | VM | N/A | Yes | Full control, use for production after benchmarks |
 
-3. After creation, note the **IP address** and **SSH port** from the dashboard
+### 1.2 Create the Instance
 
-### 1.2 SSH Access
+**Minimum specs:**
+- **GPU:** 1x A100 80GB (SXM preferred over PCIe for higher memory bandwidth)
+- **CPU:** 16 vCPUs recommended (8 minimum; runs ~8 concurrent processes)
+- **RAM:** 64GB+ (128GB recommended)
+- **Disk/Volume:** 500GB+ (models are ~200GB, venvs ~30GB, repo + results need space)
+- **Ports:** expose internal port 8000 (for browser-based voice testing later)
 
-You have two options:
+**RunPod setup:**
+1. Create a GPU Pod (not Serverless)
+2. Select A100 SXM 80GB
+3. Template: `Ubuntu 22.04` (`runpod/base:1.0.3-ubuntu2204`)
+4. Container disk: 20GB (default)
+5. Volume disk: **500GB** (increase from default)
+6. Enable SSH terminal access
+7. Add your SSH key in RunPod settings (Settings > SSH Keys)
 
-**Option A: SSH from your Mac (recommended)**
+**TensorDock setup:**
+1. Deploy a VM: A100 80GB, 16 vCPU, 128GB RAM, 600GB disk
+2. OS: Ubuntu 24 ML Everything (pre-installed NVIDIA drivers, skip driver step)
+3. Request port 8000 in port forwarding
+
+### 1.3 SSH Access
+
+Always SSH from your Mac terminal (not the provider's web terminal). You need copy-paste, multiple tabs, and scp.
 
 ```bash
-ssh root@<IP> -p <PORT>
+# Generate SSH key (once, on your Mac)
+ssh-keygen -t ed25519 -C "gpu-server" -f ~/.ssh/id_ed25519_gpu -N ""
+cat ~/.ssh/id_ed25519_gpu.pub
+# Paste the output into your provider's SSH key settings
+
+# RunPod (check pod dashboard for exact command)
+ssh <pod-id>@ssh.runpod.io -i ~/.ssh/id_ed25519_gpu
+
+# TensorDock / Lambda / other VM providers
+ssh root@<IP> -p <PORT> -i ~/.ssh/id_ed25519_gpu
 ```
 
-This is better because you can copy-paste commands, run multiple terminal tabs, and scp files back easily.
-
-**Option B: TensorDock web terminal**
-
-Works in a pinch but no copy-paste support and no scp. Use only if SSH is blocked.
-
-### 1.3 Get a HuggingFace Token
+### 1.4 Get a HuggingFace Token
 
 You need an HF token with access to gated models (Qwen, Mistral):
 
@@ -46,7 +73,7 @@ You need an HF token with access to gated models (Qwen, Mistral):
    - `Qwen/Qwen3.5-35B-A3B`
    - `Qwen/Qwen3-TTS-12Hz-1.7B-Base`
    - `Qwen/Qwen3-ASR-1.7B`
-   - `Qwen/Qwen3-Omni-30B-A3B`
+   - `Qwen/Qwen3-Omni-30B-A3B-Instruct`
    - `mistralai/Voxtral-Mini-4B-Realtime-2602`
    - `FunAudioLLM/SenseVoiceSmall`
 
@@ -55,13 +82,6 @@ You need an HF token with access to gated models (Qwen, Mistral):
 ## Part 2: Provisioning (One Command)
 
 SSH into the server and run:
-
-```bash
-export HF_TOKEN=hf_YOUR_TOKEN_HERE
-curl -fsSL https://raw.githubusercontent.com/yauhenifutryn/leasing/claude/qwen-voice-next/rag_demo_system/scripts/provision_server.sh | bash
-```
-
-Or if you prefer to clone first:
 
 ```bash
 export HF_TOKEN=hf_YOUR_TOKEN_HERE
@@ -75,16 +95,16 @@ bash rag_demo_system/scripts/provision_server.sh
 
 | Step | What happens | Time estimate |
 |------|-------------|---------------|
-| 1 | Installs apt packages (git, curl, python3, docker, jq) | 1-2 min |
-| 2 | Checks nvidia-smi; installs GPU driver if missing (exits with "REBOOT REQUIRED" if driver was installed; re-run after reboot) | 0-5 min |
+| 1 | Installs apt packages (git, curl, python3, jq; Docker only on VMs) | 1-2 min |
+| 2 | Checks nvidia-smi; on VMs installs driver if missing (exits with "REBOOT REQUIRED"); in containers just verifies GPU is visible | 0-5 min |
 | 3 | Clones the repo (or pulls if already exists) | 1 min |
 | 4-5 | Creates 6 isolated Python venvs (backend, voice-oss, qwen3-tts, qwen3-asr, voxtral, qwen3-omni) | 10-15 min |
 | 6 | Downloads 7 HuggingFace models (~200GB total; resume-safe) | 30-90 min |
-| 7 | Starts Qdrant vector DB in Docker | 30 sec |
+| 7 | Starts Qdrant: Docker container on VMs, binary download on containers | 30 sec |
 | 8 | Generates .env with all service URLs and vLLM config | instant |
 | 9 | Starts the supervisor stack (backend + vLLM + sidecars) | 2-5 min |
 
-**If the script exits with "REBOOT REQUIRED":**
+**If the script exits with "REBOOT REQUIRED" (VMs only, never happens on RunPod/Vast.ai):**
 
 ```bash
 sudo reboot
@@ -94,7 +114,7 @@ cd /workspace/leasing
 bash rag_demo_system/scripts/provision_server.sh
 ```
 
-The script is idempotent; it skips what's already done.
+The script is idempotent; it skips what is already done.
 
 **If model download gets interrupted:** just re-run the script. `huggingface-cli download` resumes automatically.
 
@@ -134,7 +154,7 @@ bash scripts/benchmark_orchestrator.sh
 - **Asks you:** "Brain winner (baseline/brain_upgrade):" -- type your answer
 
 ### Step 3: Omni Hybrid (~15-20 min)
-- Stops vLLM, starts Qwen3-Omni sidecar (different model entirely)
+- Stops vLLM, starts Qwen3-Omni-Instruct sidecar (different model entirely)
 - Runs 85 questions through the Omni hybrid path
 - Prints comparison: Omni vs best split pipeline result from Steps 1-2
 - **Asks you:** "continue" (run Step 4) or "skip" (finish)
@@ -153,7 +173,11 @@ bash scripts/benchmark_orchestrator.sh
 After the orchestrator finishes, it prints a final scp command. On your Mac:
 
 ```bash
-scp -P <PORT> root@<IP>:/workspace/leasing/rag_demo_system/results/* ./benchmark_results/
+# RunPod (use their proxy)
+scp -i ~/.ssh/id_ed25519_gpu <pod-id>@ssh.runpod.io:/workspace/leasing/rag_demo_system/results/* ./benchmark_results/
+
+# VM providers (direct)
+scp -P <PORT> -i ~/.ssh/id_ed25519_gpu root@<IP>:/workspace/leasing/rag_demo_system/results/* ./benchmark_results/
 ```
 
 ---
@@ -164,10 +188,14 @@ The benchmark measures latency and keyword accuracy automatically, but it cannot
 
 ### 4.1 Access the Web UI
 
-The UI runs on port 8000. To access it from your Mac, set up an SSH tunnel:
+The UI runs on port 8000.
+
+**RunPod:** If you exposed port 8000 during setup, RunPod assigns an external URL. Check the pod dashboard under "Connect" for the HTTP URL on port 8000. Open it directly in your browser.
+
+**VM providers:** Set up an SSH tunnel from your Mac:
 
 ```bash
-ssh -L 8000:localhost:8000 -p <PORT> root@<IP> -N
+ssh -L 8000:localhost:8000 -p <PORT> -i ~/.ssh/id_ed25519_gpu root@<IP> -N
 ```
 
 Then open `http://localhost:8000` in your browser.
@@ -262,18 +290,17 @@ Based on benchmark numbers + voice quality impressions:
 3. **Is Omni viable?** Better/worse/comparable to split pipeline?
 4. **If Omni lost:** which STT/TTS combination was best?
 
-### 5.2 Shut Down the VM
+### 5.2 Shut Down the Server
 
-TensorDock charges by the hour. When done:
+Providers charge by the hour. When done:
 
 ```bash
 # On the server: stop the stack
 cd /workspace/leasing/rag_demo_system
 bash scripts/stack.sh down
-sudo docker stop qdrant
 ```
 
-Then go to TensorDock dashboard and stop/destroy the VM.
+Then go to your provider's dashboard and stop/destroy the instance.
 
 ### 5.3 Branch Strategy (Do Not Merge Experiment to Main)
 
