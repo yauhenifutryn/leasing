@@ -293,6 +293,13 @@ ENVEOF
 # Step 9: Start baseline stack via stack.sh
 # ---------------------------------------------------------------------------
 start_stack() {
+  # Kill stale processes from previous runs that may hold ports
+  log "Cleaning up stale processes"
+  pkill -f supervisord 2>/dev/null || true
+  pkill -f "uvicorn backend.app" 2>/dev/null || true
+  pkill -f "vllm.entrypoints" 2>/dev/null || true
+  sleep 2
+
   log "Starting stack via stack.sh"
   cd "$APP_DIR"
   bash scripts/stack.sh up
