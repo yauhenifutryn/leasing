@@ -183,8 +183,8 @@ download_models() {
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
-  log "  Qwen3-Omni-30B-A3B (Omni hybrid sidecar)"
-  "$hf_cli" download Qwen/Qwen3-Omni-30B-A3B \
+  log "  Qwen3-Omni-30B-A3B-Instruct (Omni hybrid sidecar)"
+  "$hf_cli" download Qwen/Qwen3-Omni-30B-A3B-Instruct \
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
