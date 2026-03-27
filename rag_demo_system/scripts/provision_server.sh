@@ -135,14 +135,21 @@ install_all_venvs() {
     python3 -m venv "$APP_DIR/.venv"
   fi
   "$APP_DIR/.venv/bin/pip" install --upgrade pip wheel
-  # Install backend requirements first, then vLLM last.
-  # vLLM 0.18+ needs pydantic>=2.12, transformers>=4.56, starlette>=0.49
-  # but requirements.txt pins older versions. Installing vLLM last lets pip
-  # upgrade the conflicting packages to vLLM-compatible versions.
-  log "  Installing backend requirements.txt"
-  "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
-  log "  Installing vLLM + supervisor + hf_transfer (overrides conflicting pins)"
+  # Install vLLM FIRST. It pulls torch, transformers, pydantic, fastapi, etc.
+  # Then install only the small backend-specific packages that vLLM does not
+  # already provide. This avoids installing torch/transformers twice
+  # (requirements.txt pins old versions that vLLM would overwrite anyway).
+  log "  Installing vLLM + supervisor + hf_transfer (big install, includes torch)"
   "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer
+  log "  Installing backend-only packages (small, no duplicates)"
+  "$APP_DIR/.venv/bin/pip" install \
+    uvicorn \
+    pyyaml \
+    requests \
+    qdrant-client \
+    sentence-transformers \
+    rank-bm25 \
+    pytest
 
   log "Installing OSS voice venv (.venv-voice-oss) -- sensevoice, cosyvoice, whisper"
   ensure_venv "$APP_DIR/.venv-voice-oss" "$APP_DIR/requirements-voice-oss.txt"
