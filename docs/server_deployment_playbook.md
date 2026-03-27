@@ -91,6 +91,29 @@ cd leasing
 bash rag_demo_system/scripts/provision_server.sh
 ```
 
+### 2.0 Upload Knowledge Base Files (before or after provisioning)
+
+The knowledge base files are gitignored (proprietary data). You must upload them manually from your Mac:
+
+```bash
+# Create the directory on the server
+ssh <your-ssh-command> "mkdir -p /workspace/leasing/knowledge_base"
+
+# Upload the main KB file (required)
+scp -i ~/.ssh/id_ed25519_runpod knowledge_base/kb_faq_ru.md <pod-id>@ssh.runpod.io:/workspace/leasing/knowledge_base/
+
+# Upload the scraped website KB (optional, for richer answers)
+scp -i ~/.ssh/id_ed25519_runpod experiments/yandex_realtime_voice/mikro_leasing_site_unified_dedup.md <pod-id>@ssh.runpod.io:/workspace/leasing/knowledge_base/
+```
+
+After upload, rebuild the index on the server:
+
+```bash
+curl -s -X POST http://localhost:8000/api/index -H 'Content-Type: application/json' -d '{"rebuild":true}'
+```
+
+Without these files, the smoke test will fail at "Index KB" with "KB not found".
+
 **What this does (9 steps, fully automated):**
 
 | Step | What happens | Time estimate |
