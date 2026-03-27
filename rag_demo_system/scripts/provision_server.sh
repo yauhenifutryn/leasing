@@ -274,14 +274,14 @@ STACK_MODE=docker
 RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
-STACK_QWEN_CMD=./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-30B-A3B --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 8192 --download-dir ${MODELS_DIR}
-STACK_SENSEVOICE_CMD=./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50000
-STACK_COSYVOICE_CMD=./.venv-voice-oss/bin/python -m uvicorn services.vosk_tts_server:app --host 0.0.0.0 --port 50001
-STACK_WHISPER_CMD=./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002
-STACK_QWEN3_TTS_CMD=./.venv-qwen3-tts/bin/python -m uvicorn services.qwen3_tts_server:app --host 0.0.0.0 --port 50003
-STACK_QWEN3_ASR_CMD=./.venv-qwen3-asr/bin/python -m uvicorn services.qwen3_asr_server:app --host 0.0.0.0 --port 50004
-STACK_VOXTRAL_CMD=./.venv-voxtral/bin/python -m uvicorn services.voxtral_server:app --host 0.0.0.0 --port 50005
-STACK_QWEN3_OMNI_CMD=./.venv-qwen3-omni/bin/python -m uvicorn services.qwen3_omni_server:app --host 0.0.0.0 --port 8002
+STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-30B-A3B --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 8192 --download-dir ${MODELS_DIR}"
+STACK_SENSEVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50000"
+STACK_COSYVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.vosk_tts_server:app --host 0.0.0.0 --port 50001"
+STACK_WHISPER_CMD="./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
+STACK_QWEN3_TTS_CMD="./.venv-qwen3-tts/bin/python -m uvicorn services.qwen3_tts_server:app --host 0.0.0.0 --port 50003"
+STACK_QWEN3_ASR_CMD="./.venv-qwen3-asr/bin/python -m uvicorn services.qwen3_asr_server:app --host 0.0.0.0 --port 50004"
+STACK_VOXTRAL_CMD="./.venv-voxtral/bin/python -m uvicorn services.voxtral_server:app --host 0.0.0.0 --port 50005"
+STACK_QWEN3_OMNI_CMD="./.venv-qwen3-omni/bin/python -m uvicorn services.qwen3_omni_server:app --host 0.0.0.0 --port 8002"
 
 HF_HOME=${MODELS_DIR}
 ENVEOF
