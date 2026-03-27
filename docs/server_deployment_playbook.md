@@ -11,6 +11,7 @@ Step-by-step guide for deploying the voice AI benchmark stack to a TensorDock A1
 1. Go to [tensordock.com](https://tensordock.com) and log in
 2. Deploy a new VM:
    - **GPU:** 1x A100 80GB
+   - **CPU:** 16 vCPUs recommended (8 minimum; runs ~8 concurrent processes: vLLM, backend, sidecars, Qdrant, benchmark runner)
    - **RAM:** 64GB+ (128GB recommended for comfort)
    - **Disk:** 512GB+ (models alone are ~200GB)
    - **OS:** Ubuntu 22.04
