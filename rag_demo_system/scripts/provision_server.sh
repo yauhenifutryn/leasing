@@ -293,21 +293,53 @@ ENVEOF
 # Step 9: Start baseline stack via stack.sh
 # ---------------------------------------------------------------------------
 start_stack() {
-  # Kill stale processes from previous runs that may hold ports
-  log "Cleaning up stale processes"
-  pkill -f supervisord 2>/dev/null || true
-  sleep 1
-  # Force-kill anything holding the ports we need
+  # --- Clean shutdown of any previous stack ---
+  # Step 1: Try graceful supervisorctl shutdown (waits for children to exit)
+  log "Stopping any existing stack"
+  local supervisorctl_bin="$APP_DIR/.venv/bin/supervisorctl"
+  local supervisor_conf="$APP_DIR/scripts/supervisord.conf"
+  if [ -f "$supervisorctl_bin" ]; then
+    "$supervisorctl_bin" -c "$supervisor_conf" shutdown 2>/dev/null || true
+    log "  Waiting for supervisor children to exit..."
+    sleep 5
+  fi
+
+  # Step 2: Force-kill any remaining supervisord and its children
+  pkill -9 -f supervisord 2>/dev/null || true
+  pkill -9 -f "uvicorn backend" 2>/dev/null || true
+  pkill -9 -f "vllm" 2>/dev/null || true
+  pkill -9 -f "uvicorn services" 2>/dev/null || true
+  sleep 2
+
+  # Step 3: Verify all service ports are free; kill stragglers
+  log "Verifying ports are free"
+  local all_free=true
   for port in 8000 8001 8002 50000 50001 50002 50003 50004 50005; do
     local pid
     pid=$(lsof -ti :"$port" 2>/dev/null || true)
     if [ -n "$pid" ]; then
-      log "  Killing PID $pid on port $port"
+      log "  Port $port still held by PID $pid -- force killing"
       kill -9 $pid 2>/dev/null || true
+      all_free=false
     fi
   done
-  sleep 2
+  if [ "$all_free" = false ]; then
+    sleep 3
+    # Final check
+    for port in 8000 8001; do
+      if lsof -ti :"$port" >/dev/null 2>&1; then
+        log "ERROR: Port $port still occupied after cleanup. Cannot start stack."
+        log "Run: lsof -i :$port   to investigate manually."
+        exit 1
+      fi
+    done
+  fi
+  log "All ports free"
 
+  # Step 4: Remove stale pidfile and socket
+  rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
+
+  # Step 5: Start the stack
   log "Starting stack via stack.sh"
   cd "$APP_DIR"
   bash scripts/stack.sh up
