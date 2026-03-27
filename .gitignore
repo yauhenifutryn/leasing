@@ -34,7 +34,7 @@ transcripts_clean/
 insights_per_call/
 insights_batches/
 insights_global/
-knowledge_base/
+# knowledge_base/ -- temporarily un-ignored for server provisioning. Re-add this line before merging to main.
 nlu_output/
 corrections/
 
