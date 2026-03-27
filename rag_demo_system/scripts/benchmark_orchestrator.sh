@@ -33,7 +33,7 @@ SMOKE_TEST="$SCRIPT_DIR/smoke_test.sh"
 
 WS_URL="ws://localhost:8000/ws/voice"
 BACKEND_URL="http://localhost:8000"
-VLLM_PORT=8001
+VLLM_PORT=8787  # Avoid 8001 which RunPod reserves internally
 VRAM_LIMIT_GB=75
 HEALTH_TIMEOUT=300
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

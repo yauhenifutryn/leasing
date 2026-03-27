@@ -49,7 +49,19 @@ wait_for_url() {
     if [ "$elapsed" -ge "$max_wait" ]; then
       fail "$label -- not ready after ${max_wait}s (last HTTP code: $code)"
     fi
-    echo "[smoke]       ...waiting (${elapsed}s/${max_wait}s, last: HTTP $code)"
+    # Show GPU memory progress if available (useful for vLLM model loading)
+    local gpu_info=""
+    if nvidia-smi &>/dev/null; then
+      local used_mib
+      used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+      local total_mib
+      total_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+      if [ -n "$used_mib" ] && [ -n "$total_mib" ]; then
+        local pct=$((used_mib * 100 / total_mib))
+        gpu_info=" | GPU: ${used_mib}/${total_mib}MiB (${pct}%)"
+      fi
+    fi
+    echo "[smoke]       ...waiting (${elapsed}s/${max_wait}s, HTTP $code${gpu_info})"
     sleep "$interval"
   done
 }
@@ -70,7 +82,7 @@ wait_for_url "Qdrant" "http://localhost:6333/healthz" 30 5
 # Step 1: Check vLLM is loaded (can take 3-5 min on first start)
 BENCH_PROFILE="${BENCH_PROFILE:-baseline}"
 if [ "$BENCH_PROFILE" != "omni_hybrid" ]; then
-  VLLM_BASE="${RAG_LLM_BASE_URL:-http://127.0.0.1:8001/v1}"
+  VLLM_BASE="${RAG_LLM_BASE_URL:-http://127.0.0.1:8787/v1}"
   VLLM_HEALTH="${VLLM_BASE%/v1}/health"
   wait_for_url "vLLM model loading" "$VLLM_HEALTH" 600 15
 fi
@@ -190,7 +202,7 @@ fi
 
 # vLLM trivial completion (skip for omni_hybrid)
 if [ "$BENCH_PROFILE" != "omni_hybrid" ]; then
-  VLLM_BASE="${RAG_LLM_BASE_URL:-http://127.0.0.1:8001/v1}"
+  VLLM_BASE="${RAG_LLM_BASE_URL:-http://127.0.0.1:8787/v1}"
   VLLM_MODEL="${RAG_LLM_MODEL:-Qwen/Qwen3-30B-A3B}"
   info "vLLM trivial completion (timeout: 30s)..."
   VLLM_RESP=$(curl -s --max-time 30 -X POST "$VLLM_BASE/completions" \

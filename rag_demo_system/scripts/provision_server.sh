@@ -29,7 +29,7 @@ MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 # Fail-fast: HF_TOKEN is required before any network work (Pitfall 3)
 HF_TOKEN="${HF_TOKEN:?ERROR: HF_TOKEN env var is required for gated model downloads. Export it before running this script.}"
 
-VLLM_PORT=8001
+VLLM_PORT=8787  # Avoid 8001 which RunPod reserves internally
 BACKEND_PORT=8000
 
 # ---------------------------------------------------------------------------
