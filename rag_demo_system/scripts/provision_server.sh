@@ -233,8 +233,10 @@ start_qdrant() {
     fi
     log "Starting Qdrant binary in background"
     mkdir -p "$WORKSPACE/qdrant_storage"
-    nohup "$QDRANT_DIR/qdrant" --storage-path "$WORKSPACE/qdrant_storage" > "$WORKSPACE/qdrant.log" 2>&1 &
-    sleep 3
+    # Qdrant binary uses env vars for config, not CLI flags
+    QDRANT__STORAGE__STORAGE_PATH="$WORKSPACE/qdrant_storage" \
+      nohup "$QDRANT_DIR/qdrant" > "$WORKSPACE/qdrant.log" 2>&1 &
+    sleep 5
     if curl -fsS http://localhost:6333/healthz >/dev/null 2>&1; then
       log "Qdrant running on port 6333"
     else
