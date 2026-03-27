@@ -129,11 +129,20 @@ ensure_venv() {
 install_all_venvs() {
   log "=== Installing virtualenvs ==="
 
-  log "Installing backend venv (.venv) with supervisor + hf_transfer"
-  ensure_venv "$APP_DIR/.venv" "$APP_DIR/requirements.txt"
-  # supervisor is installed into the backend venv so stack.sh can use it
-  # hf_transfer is needed because some cloud images set HF_HUB_ENABLE_HF_TRANSFER=1 globally
-  "$APP_DIR/.venv/bin/pip" install supervisor hf_transfer vllm
+  log "Installing backend venv (.venv)"
+  if [ ! -d "$APP_DIR/.venv" ]; then
+    log "Creating venv: $APP_DIR/.venv"
+    python3 -m venv "$APP_DIR/.venv"
+  fi
+  "$APP_DIR/.venv/bin/pip" install --upgrade pip wheel
+  # Install backend requirements first, then vLLM last.
+  # vLLM 0.18+ needs pydantic>=2.12, transformers>=4.56, starlette>=0.49
+  # but requirements.txt pins older versions. Installing vLLM last lets pip
+  # upgrade the conflicting packages to vLLM-compatible versions.
+  log "  Installing backend requirements.txt"
+  "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
+  log "  Installing vLLM + supervisor + hf_transfer (overrides conflicting pins)"
+  "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer
 
   log "Installing OSS voice venv (.venv-voice-oss) -- sensevoice, cosyvoice, whisper"
   ensure_venv "$APP_DIR/.venv-voice-oss" "$APP_DIR/requirements-voice-oss.txt"
