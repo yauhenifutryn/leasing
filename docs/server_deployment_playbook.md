@@ -139,6 +139,8 @@ bash rag_demo_system/scripts/provision_server.sh
 | Model download interrupted | Network timeout, SSH disconnect | Re-run provisioning. `huggingface-cli download` resumes from where it stopped. |
 | `nvidia-smi not found inside container` | GPU not attached to the container | Select a GPU-enabled template/instance on your provider. |
 | `REBOOT REQUIRED` (VMs only) | Fresh driver install needs reboot for GPU device node | `sudo reboot`, SSH back in, re-run provisioning. Never happens on RunPod/Vast.ai. |
+| `No module named 'vllm'` / `qwen: ERROR (spawn error)` | vLLM not installed in backend venv | `.venv/bin/pip install vllm`, then re-run provisioning. Already fixed in latest script. If pip install fails (CUDA mismatch), check `nvidia-smi` CUDA version and install matching vllm: `pip install vllm==0.8.x`. |
+| `does not include supervisorctl section` | supervisord.conf missing control sections | Pull latest (`git pull`) and re-run. Already fixed in latest script. |
 | Qdrant `WARNING: may not have started` | Binary needs a moment longer to start | Check `curl http://localhost:6333/healthz`. If it returns OK, continue. If not: `cat /workspace/qdrant.log` for details. |
 
 ### 2.2 Verify Everything Works
