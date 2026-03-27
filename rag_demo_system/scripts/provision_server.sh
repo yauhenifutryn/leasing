@@ -133,7 +133,7 @@ install_all_venvs() {
   ensure_venv "$APP_DIR/.venv" "$APP_DIR/requirements.txt"
   # supervisor is installed into the backend venv so stack.sh can use it
   # hf_transfer is needed because some cloud images set HF_HUB_ENABLE_HF_TRANSFER=1 globally
-  "$APP_DIR/.venv/bin/pip" install supervisor hf_transfer
+  "$APP_DIR/.venv/bin/pip" install supervisor hf_transfer vllm
 
   log "Installing OSS voice venv (.venv-voice-oss) -- sensevoice, cosyvoice, whisper"
   ensure_venv "$APP_DIR/.venv-voice-oss" "$APP_DIR/requirements-voice-oss.txt"
