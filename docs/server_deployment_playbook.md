@@ -91,29 +91,6 @@ cd leasing
 bash rag_demo_system/scripts/provision_server.sh
 ```
 
-### 2.0 Upload Knowledge Base Files (before or after provisioning)
-
-The knowledge base files are gitignored (proprietary data). You must upload them manually from your Mac:
-
-```bash
-# Create the directory on the server
-ssh <your-ssh-command> "mkdir -p /workspace/leasing/knowledge_base"
-
-# Upload the main KB file (required)
-scp -i ~/.ssh/id_ed25519_runpod knowledge_base/kb_faq_ru.md <pod-id>@ssh.runpod.io:/workspace/leasing/knowledge_base/
-
-# Upload the scraped website KB (optional, for richer answers)
-scp -i ~/.ssh/id_ed25519_runpod experiments/yandex_realtime_voice/mikro_leasing_site_unified_dedup.md <pod-id>@ssh.runpod.io:/workspace/leasing/knowledge_base/
-```
-
-After upload, rebuild the index on the server:
-
-```bash
-curl -s -X POST http://localhost:8000/api/index -H 'Content-Type: application/json' -d '{"rebuild":true}'
-```
-
-Without these files, the smoke test will fail at "Index KB" with "KB not found".
-
 **What this does (9 steps, fully automated):**
 
 | Step | What happens | Time estimate |
@@ -172,7 +149,8 @@ After provisioning completes, run the smoke test:
 
 ```bash
 cd /workspace/leasing/rag_demo_system
-bash scripts/smoke_test.sh
+bash 
+
 ```
 
 This checks: UI, backend health, Qdrant indexing, chat stream, sidecar health, vLLM readiness, and VRAM. You should see `=== Smoke test PASSED ===`.
@@ -384,7 +362,18 @@ Based on which combination won, cherry-pick only these into branch 3:
 - Adapters that lost the benchmark (dead code)
 - `.planning/` directory (internal planning artifacts)
 
-### 5.5 Cherry-Pick Workflow
+### 5.5 Re-add knowledge_base/ to .gitignore
+
+The `knowledge_base/` directory was temporarily un-ignored on the experiment branch so that `git clone` brings the KB files to the server automatically. **Before merging anything to main or creating the clean production branch**, re-add it:
+
+```bash
+# In .gitignore, replace the comment line with the original ignore rule:
+sed -i 's/^# knowledge_base.*/knowledge_base\//' .gitignore
+git add .gitignore
+git commit -m "chore: re-add knowledge_base/ to .gitignore"
+```
+
+### 5.6 Cherry-Pick Workflow
 
 ```bash
 # 1. Create the clean branch off main
