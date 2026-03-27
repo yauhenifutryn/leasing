@@ -53,12 +53,15 @@ install_apt_packages() {
     python3 \
     python3-venv \
     python3-pip \
-    docker.io \
-    docker-compose-plugin \
-    ubuntu-drivers-common \
     jq
-  # Allow the current user to run Docker commands without sudo
-  sudo usermod -aG docker "$USER" || true
+
+  # Install Docker and ubuntu-drivers only if not in a container (RunPod containers lack both)
+  if [ -f /proc/1/cgroup ] && grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null || [ -f /.dockerenv ]; then
+    log "Running inside a container -- skipping docker.io and ubuntu-drivers-common"
+  else
+    sudo apt-get install -y docker.io docker-compose-plugin ubuntu-drivers-common || true
+    sudo usermod -aG docker "$USER" || true
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -70,6 +73,13 @@ check_nvidia_driver() {
   if nvidia-smi &>/dev/null; then
     log "NVIDIA driver OK: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
     return 0
+  fi
+
+  # In a container, drivers come from the host; we cannot install them
+  if [ -f /.dockerenv ] || grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null; then
+    log "ERROR: nvidia-smi not found inside container. The host must have NVIDIA drivers installed."
+    log "If using RunPod/Vast.ai, select a GPU-enabled template."
+    exit 1
   fi
 
   log "NVIDIA driver not found -- installing via ubuntu-drivers"
@@ -199,16 +209,37 @@ download_models() {
 # ---------------------------------------------------------------------------
 # Step 7: Start Qdrant vector database via Docker
 # ---------------------------------------------------------------------------
-start_docker_qdrant() {
-  log "Starting Qdrant via Docker"
-  sudo docker run -d \
-    --name qdrant \
-    --restart unless-stopped \
-    -p 6333:6333 \
-    -p 6334:6334 \
-    -v "$WORKSPACE/qdrant_storage:/qdrant/storage" \
-    qdrant/qdrant:latest \
-    || log "Qdrant container may already exist -- skipping"
+start_qdrant() {
+  if command -v docker &>/dev/null; then
+    log "Starting Qdrant via Docker"
+    sudo docker run -d \
+      --name qdrant \
+      --restart unless-stopped \
+      -p 6333:6333 \
+      -p 6334:6334 \
+      -v "$WORKSPACE/qdrant_storage:/qdrant/storage" \
+      qdrant/qdrant:latest \
+      || log "Qdrant container may already exist -- skipping"
+  else
+    log "Docker not available -- installing Qdrant via pip into backend venv"
+    "$APP_DIR/.venv/bin/pip" install qdrant-client
+    # Download and run Qdrant binary
+    local QDRANT_DIR="$WORKSPACE/qdrant"
+    if [ ! -f "$QDRANT_DIR/qdrant" ]; then
+      mkdir -p "$QDRANT_DIR"
+      log "Downloading Qdrant binary"
+      curl -fsSL "https://github.com/qdrant/qdrant/releases/latest/download/qdrant-x86_64-unknown-linux-musl.tar.gz" | tar xz -C "$QDRANT_DIR"
+    fi
+    log "Starting Qdrant binary in background"
+    mkdir -p "$WORKSPACE/qdrant_storage"
+    nohup "$QDRANT_DIR/qdrant" --storage-path "$WORKSPACE/qdrant_storage" > "$WORKSPACE/qdrant.log" 2>&1 &
+    sleep 3
+    if curl -fsS http://localhost:6333/healthz >/dev/null 2>&1; then
+      log "Qdrant running on port 6333"
+    else
+      log "WARNING: Qdrant may not have started. Check $WORKSPACE/qdrant.log"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -281,7 +312,7 @@ main() {
   clone_repo                 # Step 3: clone / pull repo
   install_all_venvs          # Step 4+5: 6 venvs (before download_models -- Pitfall 2)
   download_models            # Step 6: HF model downloads (needs backend venv -- Pitfall 2)
-  start_docker_qdrant        # Step 7: Qdrant vector DB
+  start_qdrant               # Step 7: Qdrant vector DB (Docker or binary)
   write_env_file             # Step 8: generate .env
   start_stack                # Step 9: launch supervisor stack
 
