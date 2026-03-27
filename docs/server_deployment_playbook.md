@@ -14,7 +14,7 @@ Step-by-step guide for deploying the voice AI benchmark stack to a TensorDock A1
    - **CPU:** 16 vCPUs recommended (8 minimum; runs ~8 concurrent processes: vLLM, backend, sidecars, Qdrant, benchmark runner)
    - **RAM:** 64GB+ (128GB recommended for comfort)
    - **Disk:** 512GB+ (models alone are ~200GB)
-   - **OS:** Ubuntu 22.04
+   - **OS:** Ubuntu 24 ML Everything (preferred; comes with NVIDIA drivers and CUDA pre-installed, so provisioning skips driver step). Ubuntu 24.04 LTS also works but may need driver install + reboot.
    - **Region:** pick what's available
 
 3. After creation, note the **IP address** and **SSH port** from the dashboard
