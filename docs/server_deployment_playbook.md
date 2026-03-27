@@ -116,9 +116,32 @@ bash rag_demo_system/scripts/provision_server.sh
 
 The script is idempotent; it skips what is already done.
 
-**If model download gets interrupted:** just re-run the script. `huggingface-cli download` resumes automatically.
+### 2.1 Troubleshooting Provisioning
 
-### 2.1 Verify Everything Works
+The provisioning script is designed to be re-run safely. If any step fails, fix the issue and re-run the same command. It skips completed steps automatically.
+
+**General rule: if something fails, just re-run provisioning.** Most failures are transient (network, pip timeouts, download interruptions).
+
+```bash
+# Pull latest fixes and re-run
+cd /workspace/leasing && git pull
+bash rag_demo_system/scripts/provision_server.sh
+```
+
+**Common issues:**
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `hf_transfer package not available` | RunPod/cloud images set `HF_HUB_ENABLE_HF_TRANSFER=1` globally | `pip install hf_transfer` in backend venv, then re-run. Already fixed in latest script. |
+| `Unable to locate package docker-compose-plugin` | Running in a container (RunPod, Vast.ai) where Docker is not available | Already handled: script auto-detects containers and skips Docker. Pull latest and re-run. |
+| `-m: command not found` on .env sourcing | STACK_*_CMD values in .env were not quoted | Already fixed in latest script. Pull and re-run to regenerate .env. |
+| `Cannot change ownership` during Qdrant tar extract | Container does not allow chown | Harmless; the binary still extracts. Verify: `ls -la /workspace/qdrant/qdrant`. If file exists, re-run provisioning. |
+| Model download interrupted | Network timeout, SSH disconnect | Re-run provisioning. `huggingface-cli download` resumes from where it stopped. |
+| `nvidia-smi not found inside container` | GPU not attached to the container | Select a GPU-enabled template/instance on your provider. |
+| `REBOOT REQUIRED` (VMs only) | Fresh driver install needs reboot for GPU device node | `sudo reboot`, SSH back in, re-run provisioning. Never happens on RunPod/Vast.ai. |
+| Qdrant `WARNING: may not have started` | Binary needs a moment longer to start | Check `curl http://localhost:6333/healthz`. If it returns OK, continue. If not: `cat /workspace/qdrant.log` for details. |
+
+### 2.2 Verify Everything Works
 
 After provisioning completes, run the smoke test:
 
