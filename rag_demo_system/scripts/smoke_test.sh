@@ -19,7 +19,7 @@ info "Voice status check..."
 curl -fsS "$BASE_URL/api/voice/status" >/dev/null
 
 info "Index KB (if Qdrant running)..."
-if ! curl -fsS -X POST "$BASE_URL/api/index" >/dev/null; then
+if ! curl -fsS -X POST "$BASE_URL/api/index" -H 'Content-Type: application/json' -d '{"rebuild":false}' >/dev/null; then
   warn "Index failed (Qdrant may be down). Skipping chat checks."
   exit 0
 fi
