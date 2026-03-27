@@ -296,8 +296,16 @@ start_stack() {
   # Kill stale processes from previous runs that may hold ports
   log "Cleaning up stale processes"
   pkill -f supervisord 2>/dev/null || true
-  pkill -f "uvicorn backend.app" 2>/dev/null || true
-  pkill -f "vllm.entrypoints" 2>/dev/null || true
+  sleep 1
+  # Force-kill anything holding the ports we need
+  for port in 8000 8001 8002 50000 50001 50002 50003 50004 50005; do
+    local pid
+    pid=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [ -n "$pid" ]; then
+      log "  Killing PID $pid on port $port"
+      kill -9 $pid 2>/dev/null || true
+    fi
+  done
   sleep 2
 
   log "Starting stack via stack.sh"
