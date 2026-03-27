@@ -35,9 +35,9 @@ RESP=$(curl -fsS -N -X POST "$BASE_URL/api/chat?stream=1" \
   -d '{"message":"Какие требования к лизингу грузового транспорта?","backend":"our_rag"}')
 
 JSON_LINE=$(echo "$RESP" | sed -n 's/^data: //p' | tail -n 1)
-python - <<PY
+echo "$JSON_LINE" | python3 -c "
 import json, sys
-raw = sys.argv[1]
+raw = sys.stdin.read().strip()
 try:
     data = json.loads(raw)
 except Exception as e:
@@ -51,9 +51,9 @@ if not used[0].get('chunk_id'):
     print('[smoke][error] missing chunk_id')
     sys.exit(1)
 print('[smoke] OK')
-PY "$JSON_LINE"
+"
 
-if curl -fsS "$BASE_URL/api/backends" | rg -q '"dify_rag":\{"name":"dify_rag","available":true'; then
+if curl -fsS "$BASE_URL/api/backends" | grep -q '"dify_rag".*"available":true'; then
   info "Dify backend check..."
   curl -fsS -X POST "$BASE_URL/api/chat" \
     -H 'Content-Type: application/json' \
