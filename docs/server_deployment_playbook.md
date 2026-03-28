@@ -316,7 +316,20 @@ Based on benchmark numbers + voice quality impressions:
 3. **Is Omni viable?** Better/worse/comparable to split pipeline?
 4. **If Omni lost:** which STT/TTS combination was best?
 
-### 5.2 Shut Down the Server
+### 5.2 Known Issues for Production (Post-Benchmark)
+
+These are tracked for implementation after benchmarks confirm the winning stack:
+
+| Issue | Current State | Production Fix |
+|-------|---------------|----------------|
+| **STT baseline** | whisper_server.py (Codex-era multi-backend wrapper) | Replace with dedicated FunAudioLLM SenseVoice official server |
+| **RAG latency** | Embedding + reranker on CPU (~1-2s per query, 10s cold start) | Move to CUDA on physical server with vLLM at 0.75 GPU utilization |
+| **UI polish** | Developer-oriented; no button animations, exposed Index KB button | Add click/hold animations, hide admin features |
+| **Whisper on CPU** | Runs on CPU because vLLM takes 85% GPU | On physical server, allocate GPU budget: vLLM 0.75 + whisper/sensevoice |
+
+These do not block benchmarking. The benchmark runner bypasses the browser UI entirely and tests latency/quality programmatically.
+
+### 5.3 Shut Down the Server
 
 Providers charge by the hour. When done:
 
@@ -328,7 +341,7 @@ bash scripts/stack.sh down
 
 Then go to your provider's dashboard and stop/destroy the instance.
 
-### 5.3 Branch Strategy (Do Not Merge Experiment to Main)
+### 5.4 Branch Strategy (Do Not Merge Experiment to Main)
 
 The benchmarking system is an experiment, not a product feature. Do not merge the full `claude/qwen-voice-next` branch to main. Instead, use a three-branch model:
 
@@ -341,7 +354,7 @@ Stays as-is permanently. The full experiment with all 5 phases, benchmarking inf
 **Branch 3: New branch off main (e.g. `feature/voice-pipeline`)**
 Created after benchmarks. Cherry-pick only the winning components. Clean, no experimental baggage.
 
-### 5.4 What to Cherry-Pick (After Benchmarks)
+### 5.5 What to Cherry-Pick (After Benchmarks)
 
 Based on which combination won, cherry-pick only these into branch 3:
 
@@ -362,7 +375,7 @@ Based on which combination won, cherry-pick only these into branch 3:
 - Adapters that lost the benchmark (dead code)
 - `.planning/` directory (internal planning artifacts)
 
-### 5.5 Re-add knowledge_base/ to .gitignore
+### 5.6 Re-add knowledge_base/ to .gitignore
 
 The `knowledge_base/` directory was temporarily un-ignored on the experiment branch so that `git clone` brings the KB files to the server automatically. **Before merging anything to main or creating the clean production branch**, re-add it:
 
@@ -373,7 +386,7 @@ git add .gitignore
 git commit -m "chore: re-add knowledge_base/ to .gitignore"
 ```
 
-### 5.6 Cherry-Pick Workflow
+### 5.7 Cherry-Pick Workflow
 
 ```bash
 # 1. Create the clean branch off main
