@@ -894,7 +894,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                 stt_provider = session.stt_provider
                 tts_provider = session.tts_provider
                 try:
-                    transcript = transcribe_audio(audio_b64, session_id=session_id)
+                    transcript = transcribe_audio(audio_b64, session_id=session_id, preferred=stt_provider)
                 except Exception as exc:  # noqa: BLE001
                     await websocket.send_json(
                         {
