@@ -889,7 +889,12 @@ async def voice_ws(websocket: WebSocket) -> None:
                 question_id = str(uuid.uuid4())
                 t_speech_stopped = time.time()
 
-                audio_b64 = "".join(audio_chunks)
+                # Decode each base64 chunk, concatenate raw bytes, re-encode.
+                # Individual chunks are base64-encoded separately by the browser;
+                # simple string concatenation produces invalid base64.
+                import base64 as _b64mod
+                raw_audio = b"".join(_b64mod.b64decode(c) for c in audio_chunks)
+                audio_b64 = _b64mod.b64encode(raw_audio).decode()
                 audio_chunks.clear()
                 stt_provider = session.stt_provider
                 tts_provider = session.tts_provider
