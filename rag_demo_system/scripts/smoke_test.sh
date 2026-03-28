@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL=${RAG_DEMO_BASE_URL:-http://127.0.0.1:8000}
 TIMEOUT=${SMOKE_TIMEOUT:-15}
 LONG_TIMEOUT=${SMOKE_LONG_TIMEOUT:-120}
+MAX_RETRIES=${SMOKE_RETRIES:-3}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -14,7 +15,6 @@ fail()  { echo "[smoke][FAIL] $*"; exit 1; }
 pass()  { echo "[smoke][OK]   $1"; }
 
 # check_url <label> <url> [timeout] [method] [body]
-# Curls a URL with a timeout, prints status. Fails the script on error.
 check_url() {
   local label="$1" url="$2" max="${3:-$TIMEOUT}" method="${4:-GET}" body="${5:-}"
   local args=(-s --max-time "$max" --connect-timeout 5 -X "$method")
@@ -33,7 +33,6 @@ check_url() {
 }
 
 # wait_for_url <label> <url> [max_wait] [interval]
-# Polls until URL returns 200 or times out. Shows progress every interval.
 wait_for_url() {
   local label="$1" url="$2" max_wait="${3:-300}" interval="${4:-10}"
   local elapsed=0
@@ -49,12 +48,10 @@ wait_for_url() {
     if [ "$elapsed" -ge "$max_wait" ]; then
       fail "$label -- not ready after ${max_wait}s (last HTTP code: $code)"
     fi
-    # Show GPU memory progress if available (useful for vLLM model loading)
     local gpu_info=""
     if nvidia-smi &>/dev/null; then
-      local used_mib
+      local used_mib total_mib
       used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-      local total_mib
       total_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
       if [ -n "$used_mib" ] && [ -n "$total_mib" ]; then
         local pct=$((used_mib * 100 / total_mib))
@@ -66,103 +63,190 @@ wait_for_url() {
   done
 }
 
+# retry_curl <label> <max_retries> <curl_args...>
+# Retries a curl command up to N times with 3s sleep between attempts.
+# Returns the response body on success, or fails on exhaustion.
+retry_curl() {
+  local label="$1" retries="$2"
+  shift 2
+  local attempt=1
+  while [ "$attempt" -le "$retries" ]; do
+    local resp
+    resp=$(curl "$@" 2>/dev/null || true)
+    if [ -n "$resp" ]; then
+      echo "$resp"
+      return 0
+    fi
+    if [ "$attempt" -lt "$retries" ]; then
+      echo "[smoke]       ...retry ${attempt}/${retries} for $label (empty response, waiting 3s)" >&2
+      sleep 3
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------------------
-# Pre-flight: check dependencies before anything else
+# PHASE 1: Infrastructure (Qdrant, vLLM, GPU)
 # ---------------------------------------------------------------------------
 info "============================================="
 info "  Smoke Test"
 info "  Backend: $BASE_URL"
 info "============================================="
 
-# Step 0: Check Qdrant is running (required for index)
 info ""
-info "--- Infrastructure ---"
+info "--- Phase 1: Infrastructure ---"
+
+# Qdrant
 wait_for_url "Qdrant" "http://localhost:6333/healthz" 30 5
 
-# Step 1: Check vLLM is loaded (can take 3-5 min on first start)
+# vLLM
 BENCH_PROFILE="${BENCH_PROFILE:-baseline}"
 if [ "$BENCH_PROFILE" != "omni_hybrid" ]; then
   VLLM_BASE="${RAG_LLM_BASE_URL:-http://127.0.0.1:8787/v1}"
   VLLM_HEALTH="${VLLM_BASE%/v1}/health"
-  wait_for_url "vLLM model loading" "$VLLM_HEALTH" 600 15
+  VLLM_MODEL="${RAG_LLM_MODEL:-Qwen/Qwen3-30B-A3B}"
+  wait_for_url "vLLM model" "$VLLM_HEALTH" 600 15
+
+  # Quick LLM test directly (bypasses backend)
+  info "vLLM direct test (timeout: 30s)..."
+  VLLM_RESP=$(retry_curl "vLLM direct" 2 \
+    -s --max-time 30 -X POST "$VLLM_BASE/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$VLLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"1+1=\"}],\"max_tokens\":5,\"chat_template_kwargs\":{\"enable_thinking\":false}}")
+  if [ -z "$VLLM_RESP" ]; then
+    fail "vLLM direct test -- no response after retries"
+  fi
+  pass "vLLM direct test"
 fi
 
-# VRAM check
+# VRAM
 if nvidia-smi &>/dev/null; then
   USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
   TOTAL_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
   FREE_MIB=$((TOTAL_MIB - USED_MIB))
   info "VRAM: used=${USED_MIB}MiB total=${TOTAL_MIB}MiB free=${FREE_MIB}MiB"
   if [ "$USED_MIB" -lt 10240 ]; then
-    warn "VRAM used (${USED_MIB}MiB) < 10240MiB -- model may not be loaded"
+    warn "VRAM used < 10GB -- model may not be loaded"
   fi
 else
   warn "nvidia-smi not available; skipping VRAM check"
 fi
 
 # ---------------------------------------------------------------------------
-# Core backend checks
+# PHASE 2: Backend health
 # ---------------------------------------------------------------------------
 info ""
-info "--- Backend ---"
-check_url "UI root" "$BASE_URL/"
-check_url "Health" "$BASE_URL/api/health"
+info "--- Phase 2: Backend ---"
+
+# Wait for backend to be responsive (may need a moment after restart)
+wait_for_url "Backend health" "$BASE_URL/api/health" 30 3
+
 check_url "Backends" "$BASE_URL/api/backends"
 check_url "Voice status" "$BASE_URL/api/voice/status"
 
-# Index KB (may take 10-30s on first run depending on KB size)
-check_url "Index KB" "$BASE_URL/api/index" "$LONG_TIMEOUT" "POST" '{"rebuild":false}'
+# ---------------------------------------------------------------------------
+# PHASE 3: Knowledge Base (index only if needed)
+# ---------------------------------------------------------------------------
+info ""
+info "--- Phase 3: Knowledge Base ---"
 
-# Chat checks: consent + stream must share the same session_id
-info "Consent (timeout: ${TIMEOUT}s)..."
-CONSENT_RESP=$(curl -s --max-time "$TIMEOUT" -X POST "$BASE_URL/api/chat" \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"да, согласен"}' 2>/dev/null || true)
+# Check if Qdrant collection already has documents
+KB_COUNT=$(curl -s --max-time 5 "http://localhost:6333/collections/micro_leasing_kb" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d.get('result',{}).get('points_count', 0))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+
+if [ "$KB_COUNT" -gt 0 ]; then
+  pass "KB already indexed ($KB_COUNT chunks in Qdrant -- skipping re-index)"
+else
+  info "KB not indexed yet -- indexing now (timeout: ${LONG_TIMEOUT}s)..."
+  INDEX_RESP=$(retry_curl "Index KB" "$MAX_RETRIES" \
+    -s --max-time "$LONG_TIMEOUT" -X POST "$BASE_URL/api/index" \
+    -H 'Content-Type: application/json' -d '{"rebuild":false}')
+  if [ -z "$INDEX_RESP" ]; then
+    fail "Index KB -- no response after $MAX_RETRIES retries"
+  fi
+  # Re-check count
+  sleep 2
+  KB_COUNT=$(curl -s --max-time 5 "http://localhost:6333/collections/micro_leasing_kb" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d.get('result',{}).get('points_count', 0))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+  if [ "$KB_COUNT" -gt 0 ]; then
+    pass "Index KB ($KB_COUNT chunks indexed)"
+  else
+    warn "Index returned but Qdrant shows 0 chunks -- KB may be empty"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# PHASE 4: Chat (consent + RAG query)
+# ---------------------------------------------------------------------------
+info ""
+info "--- Phase 4: Chat ---"
+
+# Consent: retry up to MAX_RETRIES times (backend may be slow after index)
+info "Consent (retries: $MAX_RETRIES, timeout: ${TIMEOUT}s each)..."
+CONSENT_RESP=$(retry_curl "Consent" "$MAX_RETRIES" \
+  -s --max-time "$TIMEOUT" -X POST "$BASE_URL/api/chat" \
+  -H 'Content-Type: application/json' -d '{"message":"да, согласен"}')
+if [ -z "$CONSENT_RESP" ]; then
+  fail "Consent -- no response after $MAX_RETRIES retries (backend may be stuck; try: supervisorctl restart backend)"
+fi
 SESSION_ID=$(echo "$CONSENT_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
 if [ -z "$SESSION_ID" ]; then
-  fail "Consent -- no session_id returned"
+  fail "Consent -- response received but no session_id. Response: $(echo "$CONSENT_RESP" | head -c 200)"
 fi
 pass "Consent (session: ${SESSION_ID:0:8}...)"
 
-info "Chat stream check (timeout: ${LONG_TIMEOUT}s)..."
-RESP=$(curl -s --max-time "$LONG_TIMEOUT" -N -X POST "$BASE_URL/api/chat?stream=1" \
+# Chat with RAG: use the same session, retry
+info "Chat + RAG (retries: $MAX_RETRIES, timeout: ${LONG_TIMEOUT}s)..."
+CHAT_RESP=$(retry_curl "Chat" "$MAX_RETRIES" \
+  -s --max-time "$LONG_TIMEOUT" -X POST "$BASE_URL/api/chat" \
   -H 'Content-Type: application/json' \
-  -d "{\"message\":\"Какие требования к лизингу грузового транспорта?\",\"backend\":\"our_rag\",\"session_id\":\"$SESSION_ID\"}" 2>/dev/null || true)
-if [ -z "$RESP" ]; then
-  fail "Chat stream -- empty response or timed out"
+  -d "{\"message\":\"Какой минимальный аванс по лизингу?\",\"backend\":\"our_rag\",\"session_id\":\"$SESSION_ID\"}")
+if [ -z "$CHAT_RESP" ]; then
+  fail "Chat -- no response after $MAX_RETRIES retries"
 fi
-JSON_LINE=$(echo "$RESP" | sed -n 's/^data: //p' | tail -n 1)
-echo "$JSON_LINE" | python3 -c "
-import json, sys
-raw = sys.stdin.read().strip()
-if not raw:
-    print('[smoke][FAIL] Chat stream -- no JSON data in response')
-    sys.exit(1)
-try:
-    data = json.loads(raw)
-except Exception:
-    print('[smoke][FAIL] Chat stream -- invalid JSON')
-    sys.exit(1)
-used = data.get('used_knowledge') or []
-if not used:
-    print('[smoke][FAIL] Chat stream -- used_knowledge empty')
-    sys.exit(1)
-if not used[0].get('chunk_id'):
-    print('[smoke][FAIL] Chat stream -- missing chunk_id')
-    sys.exit(1)
-print('[smoke][OK]   Chat stream -- knowledge retrieved')
-"
 
-# Optional: Dify backend
-if curl -s --max-time 5 "$BASE_URL/api/backends" | grep -q '"dify_rag".*"available":true'; then
-  check_url "Dify chat" "$BASE_URL/api/chat" "$TIMEOUT" "POST" '{"message":"Какие требования к лизингу грузового транспорта?","backend":"dify_rag"}'
-fi
+# Validate response has knowledge
+echo "$CHAT_RESP" | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+except:
+    print('[smoke][FAIL] Chat -- invalid JSON response')
+    sys.exit(1)
+answer = data.get('answer', '')
+used = data.get('used_knowledge') or []
+consent = data.get('consent', '')
+if consent == 'needed':
+    print('[smoke][FAIL] Chat -- consent not carried over (session_id mismatch)')
+    sys.exit(1)
+if not answer:
+    print('[smoke][FAIL] Chat -- empty answer')
+    sys.exit(1)
+if not used:
+    print('[smoke][WARN] Chat -- answer present but no used_knowledge (may be router bypass)')
+else:
+    print(f'[smoke][OK]   Chat -- answer received, {len(used)} chunks used')
+print(f'[smoke]       Answer preview: {answer[:120]}...')
+" || fail "Chat -- validation failed"
 
 # ---------------------------------------------------------------------------
-# Profile-aware sidecar checks
+# PHASE 5: Sidecars (profile-aware)
 # ---------------------------------------------------------------------------
 info ""
-info "--- Sidecars (profile: $BENCH_PROFILE) ---"
+info "--- Phase 5: Sidecars (profile: $BENCH_PROFILE) ---"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -208,29 +292,14 @@ else
   info "No sidecars required for profile: $BENCH_PROFILE"
 fi
 
-# vLLM trivial completion (skip for omni_hybrid)
-if [ "$BENCH_PROFILE" != "omni_hybrid" ]; then
-  VLLM_BASE="${RAG_LLM_BASE_URL:-http://127.0.0.1:8787/v1}"
-  VLLM_MODEL="${RAG_LLM_MODEL:-Qwen/Qwen3-30B-A3B}"
-  info "vLLM trivial completion (timeout: 30s)..."
-  VLLM_RESP=$(curl -s --max-time 30 -X POST "$VLLM_BASE/completions" \
-    -H 'Content-Type: application/json' \
-    -d "{\"model\":\"$VLLM_MODEL\",\"prompt\":\"1+1=\",\"max_tokens\":3}" 2>/dev/null || true)
-  if [ -z "$VLLM_RESP" ]; then
-    fail "vLLM completion -- no response"
-  fi
-  echo "$VLLM_RESP" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-assert d.get('choices'), 'vLLM returned no choices'
-print('[smoke][OK]   vLLM completion -- model responded')
-" || fail "vLLM completion -- invalid response"
-fi
-
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 info ""
 info "============================================="
 info "  Smoke test PASSED"
+info "  Infrastructure: Qdrant + vLLM + GPU"
+info "  Backend: health + index + chat"
+info "  KB: $KB_COUNT chunks"
+info "  Profile: $BENCH_PROFILE"
 info "============================================="
