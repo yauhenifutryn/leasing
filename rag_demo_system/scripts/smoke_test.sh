@@ -113,13 +113,21 @@ check_url "Voice status" "$BASE_URL/api/voice/status"
 # Index KB (may take 10-30s on first run depending on KB size)
 check_url "Index KB" "$BASE_URL/api/index" "$LONG_TIMEOUT" "POST" '{"rebuild":false}'
 
-# Chat checks
-check_url "Consent" "$BASE_URL/api/chat" "$TIMEOUT" "POST" '{"message":"да, согласен"}'
+# Chat checks: consent + stream must share the same session_id
+info "Consent (timeout: ${TIMEOUT}s)..."
+CONSENT_RESP=$(curl -s --max-time "$TIMEOUT" -X POST "$BASE_URL/api/chat" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"да, согласен"}' 2>/dev/null || true)
+SESSION_ID=$(echo "$CONSENT_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
+if [ -z "$SESSION_ID" ]; then
+  fail "Consent -- no session_id returned"
+fi
+pass "Consent (session: ${SESSION_ID:0:8}...)"
 
 info "Chat stream check (timeout: ${LONG_TIMEOUT}s)..."
 RESP=$(curl -s --max-time "$LONG_TIMEOUT" -N -X POST "$BASE_URL/api/chat?stream=1" \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Какие требования к лизингу грузового транспорта?","backend":"our_rag"}' 2>/dev/null || true)
+  -d "{\"message\":\"Какие требования к лизингу грузового транспорта?\",\"backend\":\"our_rag\",\"session_id\":\"$SESSION_ID\"}" 2>/dev/null || true)
 if [ -z "$RESP" ]; then
   fail "Chat stream -- empty response or timed out"
 fi
