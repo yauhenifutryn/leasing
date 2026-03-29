@@ -1329,6 +1329,12 @@ async def root() -> _FileResponse:
     return _FileResponse(FRONTEND_DIR / "demo.html")
 
 
+@app.get("/index.html")
+async def block_index() -> _FileResponse:
+    """Block direct access to dev UI via index.html. Serve demo instead."""
+    return _FileResponse(FRONTEND_DIR / "demo.html")
+
+
 @app.get("/dev")
 async def dev_ui() -> _FileResponse:
     """Dev UI for internal use."""
