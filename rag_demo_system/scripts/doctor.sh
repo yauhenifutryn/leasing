@@ -91,19 +91,24 @@ fi
 echo ""
 echo "=== 3. Supervisor ==="
 
+SUPERVISOR_OK=false
 if [ ! -f "$SUPERVISORCTL" ]; then
   fail "supervisorctl not found at $SUPERVISORCTL"
 else
-  if "$SUPERVISORCTL" -c "$CONF" status >/dev/null 2>&1; then
-    ok "supervisord running"
+  # supervisorctl status returns non-zero if ANY program is STOPPED.
+  # Use 'pid' which only fails if supervisord itself is unreachable.
+  if "$SUPERVISORCTL" -c "$CONF" pid >/dev/null 2>&1; then
+    ok "supervisord running (pid $("$SUPERVISORCTL" -c "$CONF" pid 2>/dev/null))"
+    SUPERVISOR_OK=true
   else
     fail "supervisord not running"
     info "Attempting to start supervisor..."
     rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
     cd "$APP_DIR" && bash scripts/stack.sh up && cd - >/dev/null
     sleep 3
-    if "$SUPERVISORCTL" -c "$CONF" status >/dev/null 2>&1; then
+    if "$SUPERVISORCTL" -c "$CONF" pid >/dev/null 2>&1; then
       fix "supervisord started"
+      SUPERVISOR_OK=true
     else
       fail "supervisord still not running"
     fi
@@ -156,18 +161,28 @@ echo ""
 echo "=== 5. Voice sidecars ==="
 
 check_sidecar() {
-  local name="$1" port="$2"
+  local name="$1" port="$2" prog="$3"
   CODE=$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" "http://localhost:$port/health" 2>/dev/null || echo "000")
   if [ "$CODE" = "200" ]; then
     ok "$name :$port"
   else
-    fail "$name :$port (HTTP $CODE)"
+    # Check if supervisor even has it configured to run
+    if [ "$SUPERVISOR_OK" = true ]; then
+      STATUS=$("$SUPERVISORCTL" -c "$CONF" status "$prog" 2>/dev/null | awk '{print $2}' || echo "UNKNOWN")
+      if [ "$STATUS" = "STOPPED" ]; then
+        info "$name :$port not started (STOPPED in supervisor, may need STACK_*_CMD in .env)"
+      else
+        fail "$name :$port (HTTP $CODE, supervisor status: $STATUS)"
+      fi
+    else
+      fail "$name :$port (HTTP $CODE)"
+    fi
   fi
 }
 
-check_sidecar "SenseVoice" 50000
-check_sidecar "CosyVoice"  50001
-check_sidecar "Whisper"    50002
+check_sidecar "SenseVoice" 50000 sensevoice
+check_sidecar "CosyVoice"  50001 cosyvoice
+check_sidecar "Whisper"    50002 whisper
 
 # -----------------------------------------------------------------------
 # 6. Qwen3-TTS venv integrity
@@ -210,6 +225,9 @@ else
     fi
   fi
 
+  # Re-read torch version (may have been upgraded above)
+  TORCH_VER=$("$TTS_VENV/bin/python" -c "import torch; print(torch.__version__)" 2>/dev/null || echo "missing")
+
   # Check torchaudio matches torch
   TA_VER=$("$TTS_VENV/bin/python" -c "import torchaudio; print(torchaudio.__version__)" 2>/dev/null || echo "missing")
   TORCH_BASE=$(echo "$TORCH_VER" | grep -oP '^\d+\.\d+')
@@ -245,8 +263,10 @@ fi
 echo ""
 echo "=== 7. Qwen3-TTS service ==="
 
+# Check port first; fall back to supervisor status
+TTS_HTTP=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" http://localhost:50003/health 2>/dev/null || echo "000")
 TTS_STATUS=$("$SUPERVISORCTL" -c "$CONF" status qwen3_tts 2>/dev/null | awk '{print $2}' || echo "UNKNOWN")
-if [ "$TTS_STATUS" = "RUNNING" ]; then
+if [ "$TTS_HTTP" = "200" ] || [ "$TTS_STATUS" = "RUNNING" ]; then
   CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" http://localhost:50003/health 2>/dev/null || echo "000")
   if [ "$CODE" = "200" ]; then
     HEALTH=$(curl -s --max-time 5 http://localhost:50003/health 2>/dev/null)
