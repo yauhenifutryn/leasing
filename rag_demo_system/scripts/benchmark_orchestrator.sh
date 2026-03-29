@@ -28,6 +28,7 @@ RESULTS_DIR="$APP_DIR/results"
 FIXTURE="$APP_DIR/fixtures/bench_questions_ru.jsonl"
 SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl -c $APP_DIR/scripts/supervisord.conf"
 BENCHMARK_RUNNER="$APP_DIR/.venv/bin/python $APP_DIR/scripts/benchmark_runner.py"
+BENCHMARK_TEXT="$APP_DIR/.venv/bin/python $APP_DIR/scripts/benchmark_text.py"
 BENCHMARK_COMPARE="$APP_DIR/.venv/bin/python $APP_DIR/scripts/benchmark_compare.py"
 SMOKE_TEST="$SCRIPT_DIR/smoke_test.sh"
 
@@ -139,6 +140,33 @@ run_benchmark() {
   echo "$output_file"
 }
 
+# run_text_benchmark <profile>
+# Text-only benchmark via /api/chat. No STT/TTS needed.
+# Much faster for RAG and brain comparison (~2-5s per question).
+run_text_benchmark() {
+  local profile="$1"
+  local output_file="$RESULTS_DIR/text_${profile}_${TIMESTAMP}.jsonl"
+
+  log "Running text benchmark: profile=$profile output=$output_file"
+
+  export BENCH_PROFILE="$profile"
+  if [ -f "$APP_DIR/.env.bench.$profile" ]; then
+    set -a
+    source "$APP_DIR/.env.bench.$profile"
+    set +a
+  fi
+
+  $BENCHMARK_TEXT \
+    --profile "$profile" \
+    --output "$output_file" \
+    --backend-url "$BACKEND_URL" \
+    --warmup 2 \
+    >&2
+
+  log "Text benchmark complete: $output_file"
+  echo "$output_file"
+}
+
 # run_comparison <file_a> <file_b> <label>
 # Invokes benchmark_compare.py and tees output to both stdout and a file.
 # Per D-11.
@@ -191,7 +219,7 @@ main() {
   log "  Dify RAG comparison skipped (no DIFY_API_KEY configured)"
   log "============================================="
 
-  RESULT_BASELINE=$(run_benchmark "baseline")
+  RESULT_BASELINE=$(run_text_benchmark "baseline")
   print_scp "step1" "$RESULT_BASELINE"
 
   WINNING_RAG="baseline"
@@ -234,7 +262,7 @@ main() {
   wait_healthy "http://127.0.0.1:$VLLM_PORT/health" "$HEALTH_TIMEOUT"
   check_vram "post-brain-upgrade"
 
-  RESULT_BRAIN_UPGRADE=$(run_benchmark "brain_upgrade")
+  RESULT_BRAIN_UPGRADE=$(run_text_benchmark "brain_upgrade")
   run_comparison "$RESULT_FOR_BRAIN_COMPARE" "$RESULT_BRAIN_UPGRADE" "brain"
   print_scp "step2" "$RESULT_BRAIN_UPGRADE"
 
