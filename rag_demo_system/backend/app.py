@@ -310,6 +310,208 @@ def _voice_chat_streaming_sync(
     }
 
 
+async def _stream_voice_response(
+    *,
+    websocket: Any,
+    session: Any,
+    session_id: str,
+    message: str,
+    tts_provider: str,
+    t_speech_stopped: float,
+    t_stt_done: float,
+    question_id: str,
+) -> None:
+    """Async voice response with sentence-level LLM->TTS streaming.
+
+    As the LLM generates tokens, sentences are detected and sent to TTS
+    immediately. Audio chunks are streamed to the browser via WebSocket.
+    Supports barge-in: if session.interrupted is set, both LLM and TTS stop.
+    """
+    from .llm import iter_openai_compatible_stream_events
+    from .sentence_detector import SentenceDetector
+
+    backend = session.backend
+    brain_model = session.brain_model
+
+    # --- RAG retrieval ---
+    retrieval = await asyncio.to_thread(
+        engine.retrieve, message, True, True, session_id,
+    )
+    t_retrieval_done = time.time()
+    timings: dict[str, Any] = dict(retrieval.get("timings") or {})
+    final_chunks = retrieval.get("final") or []
+
+    if not retrieval.get("ok") or not final_chunks:
+        answer = settings.app.strict_refusal_text
+        await websocket.send_json({
+            "type": "response.output_text.delta",
+            "session_id": session_id,
+            "delta": answer,
+        })
+        try:
+            audio_resp = await asyncio.to_thread(
+                synthesize_audio_with_provider, answer, session_id, tts_provider,
+            )
+            if audio_resp.get("audio_b64"):
+                await websocket.send_json({
+                    "type": "response.output_audio.delta",
+                    "session_id": session_id,
+                    "delta": audio_resp["audio_b64"],
+                    "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+        t_now = time.time()
+        state.log({
+            "event": "voice_turn", "question_id": question_id,
+            "stack_id": session.stack_id, "session_id": session_id,
+            "backend": backend, "brain_model": brain_model,
+            "stt_provider": session.stt_provider, "tts_provider": tts_provider,
+            "transcript": message, "speech_stopped": t_speech_stopped,
+            "stt_done": t_stt_done, "retrieval_done": t_retrieval_done,
+            "llm_first_token": t_retrieval_done, "tts_first_chunk": t_now,
+            "playback_started": t_now,
+            "primary_kpi_ms": (t_now - t_speech_stopped) * 1000,
+        })
+        await websocket.send_json({
+            "type": "response.done", "session_id": session_id,
+            "backend": backend, "used_knowledge": [],
+            "citations": [], "timings": timings,
+        })
+        return
+
+    # --- Build prompt ---
+    system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    system_prompt += "\n\nСогласие на обработку данных уже получено, не запрашивай его."
+    chat_session = state.get(session_id) or state.create(session_id)
+    memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
+    context_block = "\n\n".join(
+        [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
+    )
+    expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
+    length_hint = (
+        f"Ответ должен быть {settings.llm.concise_sentences_min}-{settings.llm.concise_sentences_max} коротких предложений."
+        if not expanded
+        else "Можно ответить подробнее, но только на основе контекста."
+    )
+    weak_context = bool(retrieval.get("weak"))
+    weak_hint = (
+        "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
+        "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
+    ) if weak_context else ""
+    user_prompt = (
+        "Ответь строго на основе следующих фрагментов базы знаний. "
+        "Если ответа нет - верни точный отказ.\n\n"
+        f"{memory_block}{length_hint}\n\n"
+        f"{weak_hint}{context_block}\n\nВопрос клиента: {message}"
+    )
+    effective_model = brain_model or settings.llm.fast_model or settings.llm.model
+    effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
+
+    # --- Sentence queue: LLM produces, TTS consumes ---
+    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
+    t_llm_first_token: float | None = None
+    t_tts_first_chunk: float | None = None
+    t_playback_started: float | None = None
+
+    async def llm_producer() -> None:
+        nonlocal t_llm_first_token
+        detector = SentenceDetector()
+        try:
+            stream = iter_openai_compatible_stream_events(
+                base_url=effective_base_url, model=effective_model,
+                system_prompt=system_prompt, user_prompt=user_prompt,
+                temperature=settings.llm.temperature,
+                max_tokens=settings.llm.fast_max_tokens,
+                timeout_sec=settings.llm.timeout_sec,
+            )
+            for event in stream:
+                if session.interrupted:
+                    break
+                choice = (event.get("choices") or [{}])[0]
+                token = (choice.get("delta") or {}).get("content") or ""
+                if not token:
+                    continue
+                if t_llm_first_token is None:
+                    t_llm_first_token = time.time()
+                for sentence in detector.feed(token):
+                    cleaned = clean_answer(sentence)
+                    if cleaned:
+                        await sentence_queue.put(cleaned)
+        except Exception as exc:  # noqa: BLE001
+            state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
+        finally:
+            remaining = detector.flush()
+            if remaining and not session.interrupted:
+                cleaned = clean_answer(remaining)
+                if cleaned:
+                    await sentence_queue.put(cleaned)
+            await sentence_queue.put(None)
+
+    async def tts_consumer() -> None:
+        nonlocal t_tts_first_chunk, t_playback_started
+        while True:
+            if session.interrupted:
+                break
+            sentence = await sentence_queue.get()
+            if sentence is None:
+                break
+            await websocket.send_json({
+                "type": "response.output_text.delta",
+                "session_id": session_id,
+                "delta": sentence + " ",
+            })
+            try:
+                audio_resp = await asyncio.to_thread(
+                    synthesize_audio_with_provider, sentence, session_id, tts_provider,
+                )
+                audio_b64 = audio_resp.get("audio_b64") or ""
+                if audio_b64:
+                    if t_tts_first_chunk is None:
+                        t_tts_first_chunk = time.time()
+                    await websocket.send_json({
+                        "type": "response.output_audio.delta",
+                        "session_id": session_id,
+                        "delta": audio_b64,
+                        "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+                    })
+                    t_playback_started = time.time()
+            except Exception as exc:  # noqa: BLE001
+                await websocket.send_json({
+                    "type": "warning", "session_id": session_id,
+                    "message": f"tts_failed: {exc}",
+                })
+
+    session.assistant_speaking = True
+    session.interrupted = False
+    producer_task = asyncio.create_task(llm_producer())
+    consumer_task = asyncio.create_task(tts_consumer())
+    await asyncio.gather(producer_task, consumer_task)
+    session.assistant_speaking = False
+
+    t_now = time.time()
+    used_knowledge = [
+        {"text": c["text"], "chunk_id": c.get("chunk_id")} for c in final_chunks
+    ]
+    state.log({
+        "event": "voice_turn", "question_id": question_id,
+        "stack_id": session.stack_id, "session_id": session_id,
+        "backend": backend, "brain_model": brain_model,
+        "stt_provider": session.stt_provider, "tts_provider": tts_provider,
+        "transcript": message, "speech_stopped": t_speech_stopped,
+        "stt_done": t_stt_done, "retrieval_done": t_retrieval_done,
+        "llm_first_token": t_llm_first_token or t_retrieval_done,
+        "tts_first_chunk": t_tts_first_chunk or t_now,
+        "playback_started": t_playback_started or t_now,
+        "primary_kpi_ms": ((t_playback_started or t_now) - t_speech_stopped) * 1000,
+    })
+    await websocket.send_json({
+        "type": "response.done", "session_id": session_id,
+        "backend": backend, "used_knowledge": used_knowledge,
+        "citations": [], "timings": timings,
+    })
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {"ok": True, "kb": str(settings.app.kb_markdown_path)}
@@ -1004,86 +1206,16 @@ async def voice_ws(websocket: WebSocket) -> None:
                         "timings": retrieval.get("timings", {}),
                     })
                     continue  # skip the split pipeline path below
-                voice_result = await asyncio.to_thread(
-                    _voice_chat_streaming_sync,
-                    message=text,
+                await _stream_voice_response(
+                    websocket=websocket,
+                    session=session,
                     session_id=session_id,
-                    backend=session.backend,
-                    brain_model=session.brain_model,
+                    message=text,
+                    tts_provider=tts_provider,
+                    t_speech_stopped=t_speech_stopped,
+                    t_stt_done=t_stt_done,
+                    question_id=question_id,
                 )
-                t_retrieval_done = voice_result.get("t_retrieval_done") or time.time()
-                t_llm_first_token = voice_result.get("t_llm_first_token") or t_retrieval_done
-                response = voice_result
-
-                if isinstance(response, dict):
-                    for action in session.on_provider_response(response):
-                        await websocket.send_json(action)
-                    answer_text = response.get("answer", "")
-                    if answer_text:
-                        await websocket.send_json(
-                            {
-                                "type": "response.output_text.delta",
-                                "session_id": session_id,
-                                "delta": answer_text,
-                            }
-                        )
-                    try:
-                        audio_response = synthesize_audio_with_provider(answer_text, session_id=session_id, preferred=tts_provider)
-                        t_tts_first_chunk = time.time()
-                        audio_b64 = audio_response.get("audio_b64") or ""
-                        if audio_b64:
-                            await websocket.send_json(
-                                {
-                                    "type": "response.output_audio.delta",
-                                    "session_id": session_id,
-                                    "delta": audio_b64,
-                                    "sample_rate_hz": audio_response.get("sample_rate_hz"),
-                                }
-                            )
-                            t_playback_started = time.time()
-                        else:
-                            t_playback_started = t_tts_first_chunk
-                    except Exception as exc:  # noqa: BLE001
-                        t_tts_first_chunk = time.time()
-                        t_playback_started = t_tts_first_chunk
-                        await websocket.send_json(
-                            {
-                                "type": "warning",
-                                "session_id": session_id,
-                                "message": f"tts_failed: {exc}",
-                            }
-                        )
-
-                    primary_kpi_ms = (t_playback_started - t_speech_stopped) * 1000
-                    state.log({
-                        "event": "voice_turn",
-                        "question_id": question_id,
-                        "stack_id": session.stack_id,
-                        "session_id": session.session_id,
-                        "backend": session.backend,
-                        "brain_model": session.brain_model,
-                        "stt_provider": session.stt_provider,
-                        "tts_provider": session.tts_provider,
-                        "transcript": text,
-                        "speech_stopped": t_speech_stopped,
-                        "stt_done": t_stt_done,
-                        "retrieval_done": t_retrieval_done,
-                        "llm_first_token": t_llm_first_token,
-                        "tts_first_chunk": t_tts_first_chunk,
-                        "playback_started": t_playback_started,
-                        "primary_kpi_ms": primary_kpi_ms,
-                    })
-
-                    await websocket.send_json(
-                        {
-                            "type": "response.done",
-                            "session_id": session_id,
-                            "backend": response.get("backend"),
-                            "used_knowledge": response.get("used_knowledge", []),
-                            "citations": response.get("citations", []),
-                            "timings": response.get("timings", {}),
-                        }
-                    )
             elif event_type == "response.cancel":
                 session.assistant_speaking = False
                 session.interrupted = True
