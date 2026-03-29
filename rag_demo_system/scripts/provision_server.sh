@@ -155,7 +155,19 @@ install_all_venvs() {
   ensure_venv "$APP_DIR/.venv-voice-oss" "$APP_DIR/requirements-voice-oss.txt"
 
   log "Installing Qwen3-TTS venv (.venv-qwen3-tts)"
-  ensure_venv "$APP_DIR/.venv-qwen3-tts" "$APP_DIR/requirements-qwen3-tts.txt"
+  # qwen-tts requires torch>=2.7 which dropped cu124. Install torch+torchaudio
+  # from cu126 index first, then install remaining deps from requirements file.
+  if [ ! -d "$APP_DIR/.venv-qwen3-tts" ]; then
+    log "Creating venv: $APP_DIR/.venv-qwen3-tts"
+    python3 -m venv "$APP_DIR/.venv-qwen3-tts"
+  fi
+  "$APP_DIR/.venv-qwen3-tts/bin/pip" install --upgrade pip wheel
+  log "  Installing torch>=2.7 + torchaudio from cu126 index"
+  "$APP_DIR/.venv-qwen3-tts/bin/pip" install \
+    "torch>=2.7.0" "torchaudio>=2.7.0" \
+    --index-url https://download.pytorch.org/whl/cu126
+  log "  Installing remaining qwen3-tts deps"
+  "$APP_DIR/.venv-qwen3-tts/bin/pip" install -r "$APP_DIR/requirements-qwen3-tts.txt"
 
   log "Installing Qwen3-ASR venv (.venv-qwen3-asr)"
   ensure_venv "$APP_DIR/.venv-qwen3-asr" "$APP_DIR/requirements-qwen3-asr.txt"

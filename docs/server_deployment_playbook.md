@@ -410,6 +410,7 @@ Issues encountered during deployment and their permanent fixes:
 | Script | Purpose | When to use |
 |--------|---------|-------------|
 | `provision_server.sh` | Full server setup from scratch | First time only |
+| `doctor.sh` | Diagnose and auto-fix: GPU, Qdrant, supervisor, venvs, TTS | After provision, or whenever something is broken |
 | `restart_all.sh` | Clean restart with GPU leak detection | After instance reboot, or when things are stuck |
 | `regenerate_env_and_restart.sh` | Reset .env to production values + restart | After git pull with config changes |
 | `smoke_test.sh` | 5-phase health check (infra, backend, KB, chat, sidecars) | After any restart |
