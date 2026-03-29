@@ -9,7 +9,7 @@ app:
 embedding:
   model_name: "intfloat/multilingual-e5-large"
   batch_size: 32
-  device: "cpu"  # set to "cuda" if available
+  device: "cuda"
   max_characters: 6000
   chunk_size_tokens: 700
   chunk_overlap_tokens: 120
@@ -49,7 +49,7 @@ llm:
 reranker:
   enabled: true
   model_name: "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-  device: "cpu"
+  device: "cuda"
   batch_size: 16
   allow_no_rerank: false
 
