@@ -1335,9 +1335,15 @@ async def block_index() -> _FileResponse:
     return _FileResponse(FRONTEND_DIR / "demo.html")
 
 
+from fastapi import Request as _Request
+
+
 @app.get("/dev")
-async def dev_ui() -> _FileResponse:
-    """Dev UI for internal use."""
+async def dev_ui(request: _Request) -> Any:
+    """Dev UI for internal use. Only accessible from localhost."""
+    host = request.client.host if request.client else ""
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        return _FileResponse(FRONTEND_DIR / "demo.html")
     return _FileResponse(FRONTEND_DIR / "index.html")
 
 
