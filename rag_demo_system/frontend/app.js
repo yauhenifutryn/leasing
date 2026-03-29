@@ -345,10 +345,17 @@ function b64ToInt16(b64) {
 }
 
 function playPcm(int16, sampleRate = 24000) {
+  // Always use the standard browser sample rate (usually 44100 or 48000).
+  // Create buffer at the TTS sample rate, AudioContext resamples automatically.
   if (!playCtx) {
-    playCtx = new AudioContext({ sampleRate });
+    playCtx = new AudioContext();
     nextPlayTime = playCtx.currentTime + 0.05;
   }
+  if (nextPlayTime < playCtx.currentTime) {
+    nextPlayTime = playCtx.currentTime + 0.02;
+  }
+  // Create buffer at the actual TTS sample rate. The AudioContext
+  // automatically resamples to its own rate for playback.
   const buffer = playCtx.createBuffer(1, int16.length, sampleRate);
   const channel = buffer.getChannelData(0);
   for (let i = 0; i < int16.length; i++) channel[i] = int16[i] / 0x8000;
