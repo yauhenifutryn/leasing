@@ -1007,8 +1007,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                     bm = str(event["brain_model"]).strip()
                     session.brain_model = (
                         bm
-                        if bm in ("Qwen/Qwen3-30B-A3B", "Qwen/Qwen3.5-35B-A3B")
-                        else "Qwen/Qwen3-30B-A3B"
+                        if bm in ("Qwen/Qwen3-30B-A3B", "Qwen/Qwen3.5-35B-A3B", "Qwen/Qwen3.5-35B-A3B-FP8")
+                        else "Qwen/Qwen3.5-35B-A3B-FP8"
                     )
                 if "stt_provider" in event:
                     session.stt_provider = str(event["stt_provider"]).strip().lower()
