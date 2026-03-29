@@ -210,8 +210,13 @@ download_models() {
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
-  log "  Qwen3-TTS-12Hz-1.7B-CustomVoice (TTS sidecar)"
+  log "  Qwen3-TTS-12Hz-1.7B-CustomVoice (TTS preset voices)"
   "$hf_cli" download Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+    --token "$HF_TOKEN" \
+    --local-dir-use-symlinks False
+
+  log "  Qwen3-TTS-12Hz-1.7B-Base (TTS voice clone)"
+  "$hf_cli" download Qwen/Qwen3-TTS-12Hz-1.7B-Base \
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
@@ -302,6 +307,12 @@ WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
 
 QWEN3_TTS_BASE_URL=http://127.0.0.1:50003
+# Voice clone mode: set MODEL_ID to Base, provide ref audio + transcript.
+# To use preset voices instead, set MODEL_ID to CustomVoice and clear REF_AUDIO.
+QWEN3_TTS_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+QWEN3_TTS_REF_AUDIO=./config/ref_voice_ru.wav
+QWEN3_TTS_REF_TEXT=
+QWEN3_TTS_SPEAKER=Vivian
 QWEN3_ASR_BASE_URL=http://127.0.0.1:50004
 VOXTRAL_BASE_URL=http://127.0.0.1:50005
 QWEN3_OMNI_BASE_URL=http://127.0.0.1:8002
