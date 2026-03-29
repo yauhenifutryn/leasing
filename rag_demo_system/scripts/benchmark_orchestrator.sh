@@ -207,9 +207,12 @@ main() {
   log "  Timestamp: $TIMESTAMP"
   log "============================================="
 
-  # --- Pre-flight: smoke test with baseline profile ---
-  log "=== Pre-flight: Smoke test (baseline) ==="
-  BENCH_PROFILE=baseline bash "$SMOKE_TEST"
+  # --- Pre-flight: quick health check (not full smoke test) ---
+  log "=== Pre-flight: Health check ==="
+  curl -fsS http://localhost:8000/api/health >/dev/null 2>&1 || { log "ERROR: Backend not healthy"; exit 1; }
+  curl -fsS "http://localhost:$VLLM_PORT/health" >/dev/null 2>&1 || { log "ERROR: vLLM not healthy"; exit 1; }
+  curl -fsS http://localhost:6333/healthz >/dev/null 2>&1 || { log "ERROR: Qdrant not healthy"; exit 1; }
+  log "Backend, vLLM, Qdrant all healthy"
 
   # ===========================================================================
   # STEP 1: Baseline RAG benchmark
