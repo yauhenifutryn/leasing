@@ -142,6 +142,7 @@ def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoi
     for fallback in ("sensevoice", "whisper"):
         if fallback not in order:
             order.append(fallback)
+    print(f"[stt] preferred={preferred} order={order} audio_len={len(audio_b64)}", flush=True)
     for name in order:
         if name == "yandex_speechkit":
             data = transcribe_with_yandex_speechkit(audio_b64, sample_rate_hz=24000)
@@ -150,6 +151,7 @@ def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoi
             continue
         base_url = os.getenv(f"{name.upper()}_BASE_URL")
         if not base_url:
+            print(f"[stt] {name}: no BASE_URL, skip", flush=True)
             continue
         try:
             if name == "sensevoice" and _sensevoice_api_style() == "official":
@@ -175,8 +177,9 @@ def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoi
             if data.get("text"):
                 data.setdefault("provider", name)
                 return data
-        except Exception:  # noqa: BLE001
-            continue  # Provider unavailable, try next in fallback order
+        except Exception as exc:  # noqa: BLE001
+            print(f"[stt] {name}: error: {exc}", flush=True)
+            continue
     raise RuntimeError("No STT service configured")
 
 
