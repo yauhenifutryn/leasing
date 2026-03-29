@@ -40,10 +40,10 @@ llm:
   max_tokens: 420
   fast_base_url: ""
   fast_model: ""
-  fast_max_tokens: 120
+  fast_max_tokens: 180
   timeout_sec: 60
   concise_sentences_min: 2
-  concise_sentences_max: 3
+  concise_sentences_max: 4
   expand_triggers: ["подробнее", "детально", "поясните", "раскройте", "разверните"]
 
 reranker:
