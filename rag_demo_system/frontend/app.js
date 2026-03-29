@@ -492,8 +492,11 @@ function stopTalking() {
 function _appendToHistory(role, text) {
   const history = $("#transcript");
   const prefix = role === "user" ? "Вы: " : "Ассистент: ";
-  if (history.textContent) history.textContent += "\n";
-  history.textContent += prefix + text;
+  const entry = document.createElement("div");
+  entry.style.marginBottom = "6px";
+  entry.style.color = role === "user" ? "#4fc3f7" : "#e0e0e0";
+  entry.textContent = prefix + text;
+  history.appendChild(entry);
   history.scrollTop = history.scrollHeight;
 }
 
