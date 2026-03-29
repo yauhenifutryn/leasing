@@ -85,6 +85,19 @@ echo "[35b] Health checks..."
 echo -n "[35b]   Backend: "; curl -s --max-time 5 http://localhost:8000/api/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[35b]   vLLM:    "; curl -s --max-time 5 "http://localhost:$VLLM_PORT/health" >/dev/null && echo "OK" || echo "FAILED"
 
+# --- Ensure KB is indexed ---
+echo ""
+echo "[35b] Checking KB index..."
+KB_COUNT=$(curl -s http://localhost:6333/collections/micro_leasing_kb 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('result',{}).get('points_count',0))" 2>/dev/null || echo "0")
+if [ "$KB_COUNT" -lt 3000 ]; then
+  echo "[35b]   KB has $KB_COUNT points, indexing..."
+  curl -s --max-time 600 -X POST http://localhost:8000/api/index -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1
+  KB_COUNT=$(curl -s http://localhost:6333/collections/micro_leasing_kb 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('result',{}).get('points_count',0))" 2>/dev/null || echo "0")
+  echo "[35b]   KB indexed: $KB_COUNT points"
+else
+  echo "[35b]   KB already indexed: $KB_COUNT points"
+fi
+
 # --- Run benchmark ---
 echo ""
 echo "[35b] Running benchmark..."
