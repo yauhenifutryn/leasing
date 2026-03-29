@@ -151,29 +151,32 @@ def transcribe_audio(audio_b64: str, session_id: str, preferred: str = "sensevoi
         base_url = os.getenv(f"{name.upper()}_BASE_URL")
         if not base_url:
             continue
-        if name == "sensevoice" and _sensevoice_api_style() == "official":
-            wav_bytes = _pcm16_b64_to_wav_bytes(audio_b64)
+        try:
+            if name == "sensevoice" and _sensevoice_api_style() == "official":
+                wav_bytes = _pcm16_b64_to_wav_bytes(audio_b64)
+                resp = requests.post(
+                    base_url.rstrip("/") + "/api/v1/asr",
+                    files=[("files", (f"{session_id}.wav", wav_bytes, "audio/wav"))],
+                    data={"keys": session_id, "lang": "auto"},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                text = _parse_sensevoice_response(resp.json())
+                if text:
+                    return {"text": text, "provider": name}
+                continue
             resp = requests.post(
-                base_url.rstrip("/") + "/api/v1/asr",
-                files=[("files", (f"{session_id}.wav", wav_bytes, "audio/wav"))],
-                data={"keys": session_id, "lang": "auto"},
-                timeout=60,
+                base_url.rstrip("/") + "/transcribe",
+                json={"audio_b64": audio_b64, "session_id": session_id, "language": "ru", "sample_rate_hz": 24000},
+                timeout=30,
             )
             resp.raise_for_status()
-            text = _parse_sensevoice_response(resp.json())
-            if text:
-                return {"text": text, "provider": name}
-            continue
-        resp = requests.post(
-            base_url.rstrip("/") + "/transcribe",
-            json={"audio_b64": audio_b64, "session_id": session_id, "language": "ru", "sample_rate_hz": 24000},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("text"):
-            data.setdefault("provider", name)
-            return data
+            data = resp.json()
+            if data.get("text"):
+                data.setdefault("provider", name)
+                return data
+        except Exception:  # noqa: BLE001
+            continue  # Provider unavailable, try next in fallback order
     raise RuntimeError("No STT service configured")
 
 
