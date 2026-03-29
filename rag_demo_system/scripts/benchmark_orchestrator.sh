@@ -123,6 +123,8 @@ run_benchmark() {
     set +a
   fi
 
+  # Runner progress goes to stderr (visible in terminal).
+  # Only the output file path goes to stdout (captured by caller).
   $BENCHMARK_RUNNER \
     --fixture "$FIXTURE" \
     --profile "$profile" \
@@ -130,7 +132,8 @@ run_benchmark() {
     --ws-url "$WS_URL" \
     --backend-url "$BACKEND_URL" \
     --timeout 30 \
-    --warmup 3
+    --warmup 3 \
+    >&2
 
   log "Benchmark complete: $output_file"
   echo "$output_file"
