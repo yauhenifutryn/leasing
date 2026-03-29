@@ -46,6 +46,7 @@ def build_voice_statuses() -> dict[str, dict[str, Any]]:
         "yandex_realtime": build_yandex_realtime_status(),
         "qwen3_asr": _service_status("qwen3_asr", os.getenv("QWEN3_ASR_BASE_URL")),
         "qwen3_tts": _service_status("qwen3_tts", os.getenv("QWEN3_TTS_BASE_URL")),
+        "silero_tts": _service_status("silero_tts", os.getenv("SILERO_TTS_BASE_URL")),
         "voxtral": _service_status("voxtral", os.getenv("VOXTRAL_BASE_URL")),
         "qwen3_omni": _service_status("qwen3_omni", os.getenv("QWEN3_OMNI_BASE_URL")),
     }
@@ -204,6 +205,20 @@ def synthesize_audio_with_provider(text: str, session_id: str, preferred: str = 
         resp.raise_for_status()
         data = resp.json()
         data.setdefault("provider", "qwen3_tts")
+        data.setdefault("session_id", session_id)
+        return data
+    if preferred == "silero_tts":
+        base_url = os.getenv("SILERO_TTS_BASE_URL")
+        if not base_url:
+            raise RuntimeError("Silero TTS service unavailable: SILERO_TTS_BASE_URL not set")
+        resp = requests.post(
+            base_url.rstrip("/") + "/speak",
+            json={"text": text, "session_id": session_id, "language": "ru"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        data.setdefault("provider", "silero_tts")
         data.setdefault("session_id", session_id)
         return data
     if preferred == "vosk_tts":
