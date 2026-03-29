@@ -1000,6 +1000,8 @@ async def voice_ws(websocket: WebSocket) -> None:
         while True:
             event = await websocket.receive_json()
             event_type = event.get("type")
+            if event_type != "input_audio_buffer.append":
+                print(f"[voice_ws] event: {event_type}", flush=True)
             if event_type == "session.update":
                 session.backend = _selected_backend(event.get("backend"))
                 session.voice_provider = normalize_voice_provider(event.get("voice_provider"))
