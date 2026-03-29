@@ -313,7 +313,7 @@ STACK_VOICE_PROFILE=oss_russian
 STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-30B-A3B --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.75 --download-dir ${MODELS_DIR}"
 STACK_SENSEVOICE_CMD="./.venv-sensevoice/bin/python -m uvicorn services.sensevoice_server:app --host 0.0.0.0 --port 50000"
 STACK_COSYVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.vosk_tts_server:app --host 0.0.0.0 --port 50001"
-STACK_WHISPER_CMD="./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
+STACK_WHISPER_CMD="LD_LIBRARY_PATH=./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cublas/lib:./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cudnn/lib:\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_QWEN3_TTS_CMD="./.venv-qwen3-tts/bin/python -m uvicorn services.qwen3_tts_server:app --host 0.0.0.0 --port 50003"
 STACK_QWEN3_ASR_CMD="./.venv-qwen3-asr/bin/python -m uvicorn services.qwen3_asr_server:app --host 0.0.0.0 --port 50004"
 STACK_VOXTRAL_CMD="./.venv-voxtral/bin/python -m uvicorn services.voxtral_server:app --host 0.0.0.0 --port 50005"
