@@ -316,18 +316,70 @@ Based on benchmark numbers + voice quality impressions:
 3. **Is Omni viable?** Better/worse/comparable to split pipeline?
 4. **If Omni lost:** which STT/TTS combination was best?
 
-### 5.2 Known Issues for Production (Post-Benchmark)
+### 5.2 Production Hardware Recommendation
 
-These are tracked for implementation after benchmarks confirm the winning stack:
+**For benchmarking and client demo:** A100 80GB is sufficient.
 
-| Issue | Current State | Production Fix |
-|-------|---------------|----------------|
-| **STT baseline** | whisper_server.py (Codex-era multi-backend wrapper) | Replace with dedicated FunAudioLLM SenseVoice official server |
-| **RAG latency** | Embedding + reranker on CPU (~1-2s per query, 10s cold start) | Move to CUDA on physical server with vLLM at 0.75 GPU utilization |
-| **UI polish** | Developer-oriented; no button animations, exposed Index KB button | Add click/hold animations, hide admin features |
-| **Whisper on CPU** | Runs on CPU because vLLM takes 85% GPU | On physical server, allocate GPU budget: vLLM 0.75 + whisper/sensevoice |
+**For production deployment (physical server):**
 
-These do not block benchmarking. The benchmark runner bypasses the browser UI entirely and tests latency/quality programmatically.
+| GPU | VRAM | Why | Price range |
+|-----|------|-----|-------------|
+| **H100 94GB (recommended)** | 94GB | 14GB more than A100, faster per-token (hopper), fits Qwen3.5-35B comfortably | $25-30k |
+| A100 80GB | 80GB | Works but tight. No room for model upgrades. | $15-20k |
+| 2x A100 | 160GB | Overkill for single-user voice assistant. Helps throughput (many users), not latency (one user). | $30-40k |
+
+**Current VRAM budget on A100 80GB (production config, vLLM 0.75):**
+
+| Component | VRAM | Notes |
+|-----------|------|-------|
+| vLLM (Qwen3-30B-A3B) | ~60GB | 0.75 utilization |
+| Embedding model (multilingual-e5-large) | ~2GB | On CUDA |
+| Reranker (mmarco-mMiniLMv2) | ~1GB | On CUDA |
+| Whisper STT (large-v3) | ~3GB | On CUDA |
+| TTS (vosk_tts) | 0GB | CPU only |
+| **Total** | **~66GB** | **14GB headroom** |
+
+### 5.3 Post-Benchmark Improvements
+
+| Issue | Status | Action |
+|-------|--------|--------|
+| **STT baseline** | Working (whisper on CUDA) | Post-benchmark: replace whisper_server.py with FunAudioLLM SenseVoice official server |
+| **RAG speed** | Fixed (embedding + reranker on CUDA: 350ms total) | Was 1.8s on CPU |
+| **TTS voice quality** | Working (vosk_tts, robotic) | Benchmark tests Qwen3-TTS as alternative |
+| **UI button animations** | Fixed (pulse on hold, scale on click) | |
+| **Short voice answers** | Built-in (voice_fast mode: 3-6 sentences) | Activated automatically on voice path |
+| **Streaming responses** | v2 feature | LiveKit/Pipecat migration after benchmark |
+
+### 5.4 Troubleshooting Reference
+
+Issues encountered during deployment and their permanent fixes:
+
+| Issue | Root cause | Fix | Permanent? |
+|-------|-----------|-----|------------|
+| **Port 8001 blocked (RunPod)** | RunPod reserves port 8001 internally | Changed vLLM to port 8787 | Yes, in provision script |
+| **vLLM crash-loop leaks GPU memory** | supervisor autorestart=true caused repeated CUDA context leaks | Set autorestart=false, startretries=0. restart_all.sh detects leaked memory and aborts | Yes |
+| **Leaked GPU memory in container** | CUDA contexts not freed after process crash; container cannot nvidia-smi --gpu-reset | Restart instance from provider dashboard | Only fix |
+| **STT returns 128 bytes (empty)** | Browser base64 audio chunks concatenated as strings instead of decoded+rejoined | Decode each chunk, concatenate raw bytes, re-encode | Yes, in app.py |
+| **TTS Internal Server Error** | vosk_tts API changed: synth() no longer accepts wav_path keyword | Changed to positional arg | Yes |
+| **COSYVOICE_API_STYLE=official** | vosk_tts exposes /speak, not /inference_sft | Set to compat | Yes, in provision script |
+| **SENSEVOICE_API_STYLE=official** | whisper_server exposes /transcribe, not /api/v1/asr | Set to compat | Yes, in provision script |
+| **Chat consent not shared** | Smoke test used different session_id for consent and chat | Pass session_id from consent to chat | Yes, in smoke test |
+| **Backend deadlocks on single worker** | One blocking LLM call locks all requests | Run with --workers 4 | Yes, in supervisord.conf |
+| **supervisord does not inherit .env** | /bin/sh -lc (login shell) resets environment | Each command sources .env directly with /bin/sh -c | Yes, in supervisord.conf |
+| **vLLM dependency conflict** | requirements.txt pins old pydantic/transformers, vLLM needs newer | Install vLLM first, then small backend packages | Yes, in provision script |
+| **Docker unavailable in containers** | RunPod/Vast.ai containers block Docker-in-Docker | Auto-detect: Qdrant binary fallback when no Docker | Yes, in provision script |
+| **knowledge_base/ gitignored** | KB files not in git clone | Temporarily un-ignored on experiment branch | Revert before merge to main |
+
+### 5.5 Useful Scripts
+
+| Script | Purpose | When to use |
+|--------|---------|-------------|
+| `provision_server.sh` | Full server setup from scratch | First time only |
+| `restart_all.sh` | Clean restart with GPU leak detection | After instance reboot, or when things are stuck |
+| `regenerate_env_and_restart.sh` | Reset .env to production values + restart | After git pull with config changes |
+| `smoke_test.sh` | 5-phase health check (infra, backend, KB, chat, sidecars) | After any restart |
+| `test_chat.sh` | Quick RAG + TTS test | Verify chat pipeline works |
+| `benchmark_orchestrator.sh` | Run full benchmark matrix | After smoke test passes |
 
 ### 5.3 Shut Down the Server
 
