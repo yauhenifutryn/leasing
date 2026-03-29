@@ -435,12 +435,15 @@ function startTalking() {
   talking = true;
   $("#transcript").textContent = "";
   $("#assistantVoice").textContent = "";
-  setVoiceStatus("Listening", "warn");
+  $("#btnVoiceTalk").classList.add("talking");
+  setVoiceStatus("Listening...", "warn");
 }
 
 function stopTalking() {
   if (!voiceSocket || !talking) return;
   talking = false;
+  $("#btnVoiceTalk").classList.remove("talking");
+  setVoiceStatus("Processing...", "warn");
   voiceSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
 }
 
