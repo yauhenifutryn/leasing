@@ -327,7 +327,7 @@ STACK_COSYVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.vosk_tts_s
 STACK_WHISPER_CMD="LD_LIBRARY_PATH=./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cublas/lib:./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cudnn/lib:\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_QWEN3_TTS_CMD="./.venv-qwen3-tts/bin/python -m uvicorn services.qwen3_tts_server:app --host 0.0.0.0 --port 50003"
 SILERO_TTS_BASE_URL=http://127.0.0.1:50006
-SILERO_TTS_SPEAKER=baya
+SILERO_TTS_SPEAKER=kseniya
 SILERO_TTS_SAMPLE_RATE=24000
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
 STACK_QWEN3_ASR_CMD="./.venv-qwen3-asr/bin/python -m uvicorn services.qwen3_asr_server:app --host 0.0.0.0 --port 50004"

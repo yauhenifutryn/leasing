@@ -380,7 +380,8 @@ function handleVoiceEvent(evt) {
     setVoiceStatus(`Stack: ${evt.stack_id || evt.voice_provider || "local"}`, "good");
   }
   if (evt.type === "conversation.item.input_audio_transcription.completed") {
-    $("#transcript").textContent = evt.transcription || evt.transcript || "";
+    const userText = evt.transcription || evt.transcript || "";
+    if (userText) _appendToHistory("user", userText);
     const sttMs = Date.now() - voiceT0;
     setVoiceStatus(`STT: ${sttMs}ms`, "warn");
   }
@@ -465,7 +466,11 @@ async function connectVoice() {
 function startTalking() {
   if (!voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) return;
   talking = true;
-  $("#transcript").textContent = "";
+  // Append previous assistant response to history before clearing
+  const prevAssistant = $("#assistantVoice").textContent.trim();
+  if (prevAssistant) {
+    _appendToHistory("assistant", prevAssistant);
+  }
   $("#assistantVoice").textContent = "";
   $("#btnVoiceTalk").classList.add("talking");
   setVoiceStatus("Listening...", "warn");
@@ -481,6 +486,14 @@ function stopTalking() {
   voiceFirstAudio = false;
   $("#assistantVoice").textContent = "";
   voiceSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+}
+
+function _appendToHistory(role, text) {
+  const history = $("#transcript");
+  const prefix = role === "user" ? "Вы: " : "Ассистент: ";
+  if (history.textContent) history.textContent += "\n";
+  history.textContent += prefix + text;
+  history.scrollTop = history.scrollHeight;
 }
 
 $("#btnSend").addEventListener("click", () => sendMessage().catch(alert));
