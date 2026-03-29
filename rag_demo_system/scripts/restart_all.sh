@@ -158,12 +158,11 @@ echo "[restart] Step 9: Starting voice sidecars..."
 "$SUPERVISORCTL" -c "$CONF" start cosyvoice 2>/dev/null || true
 sleep 10
 
-# --- Step 10: Start Qwen3-TTS ---
+# --- Step 10: Start TTS (Silero preferred, Qwen3 as fallback) ---
 echo ""
-echo "[restart] Step 10: Starting Qwen3-TTS..."
-"$SUPERVISORCTL" -c "$CONF" start qwen3_tts 2>/dev/null || true
-echo "[restart]   Waiting 45s for TTS model load..."
-sleep 45
+echo "[restart] Step 10: Starting TTS..."
+"$SUPERVISORCTL" -c "$CONF" start silero_tts 2>/dev/null || true
+sleep 5
 
 # --- Step 11: Health checks ---
 echo ""
@@ -174,7 +173,7 @@ echo -n "[restart]   Qdrant:     "; curl -s --max-time 5 http://localhost:6333/h
 echo -n "[restart]   SenseVoice: "; curl -s --max-time 5 http://localhost:50000/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   CosyVoice:  "; curl -s --max-time 5 http://localhost:50001/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Whisper:    "; curl -s --max-time 5 http://localhost:50002/health >/dev/null && echo "OK" || echo "FAILED"
-echo -n "[restart]   Qwen3-TTS:  "; curl -s --max-time 5 http://localhost:50003/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('OK' if d.get('ok') else f'FAILED ({d.get(\"reason\",\"unknown\")})')" 2>/dev/null || echo "FAILED"
+echo -n "[restart]   Silero TTS: "; curl -s --max-time 5 http://localhost:50006/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('OK' if d.get('ok') else f'FAILED ({d.get(\"reason\",\"unknown\")})')" 2>/dev/null || echo "FAILED"
 
 echo ""
 echo "[restart] ============================================="
