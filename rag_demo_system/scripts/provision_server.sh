@@ -366,25 +366,46 @@ start_stack() {
     sleep 5
   fi
 
-  # Step 2: Force-kill any remaining supervisord and its children
+  # Step 2: Graceful kill remaining processes (SIGTERM, not SIGKILL).
+  # SIGKILL (-9) on GPU processes leaks CUDA memory in containers,
+  # requiring a full instance restart. Use SIGTERM and wait.
+  pkill -f supervisord 2>/dev/null || true
+  pkill -f "uvicorn backend" 2>/dev/null || true
+  pkill -f "vllm" 2>/dev/null || true
+  pkill -f "uvicorn services" 2>/dev/null || true
+  log "  Waiting 15s for GPU processes to release memory..."
+  sleep 15
+
+  # Only force-kill non-GPU processes if still lingering
   pkill -9 -f supervisord 2>/dev/null || true
   pkill -9 -f "uvicorn backend" 2>/dev/null || true
-  pkill -9 -f "vllm" 2>/dev/null || true
   pkill -9 -f "uvicorn services" 2>/dev/null || true
-  sleep 2
+  # Do NOT kill -9 vllm: leaked CUDA memory cannot be recovered in containers
+  if pgrep -f "vllm" >/dev/null 2>&1; then
+    log "WARNING: vLLM still running after SIGTERM. Waiting 15s more..."
+    sleep 15
+    if pgrep -f "vllm" >/dev/null 2>&1; then
+      log "WARNING: vLLM refuses to die. Sending SIGKILL (may leak GPU memory)."
+      pkill -9 -f "vllm" 2>/dev/null || true
+      sleep 3
+    fi
+  fi
 
-  # Step 3: Verify all service ports are free; kill stragglers
+  # Step 3: Verify all service ports are free; graceful kill stragglers
   log "Verifying ports are free"
   local all_free=true
   for port in 8000 8001 8002 50000 50001 50002 50003 50004 50005; do
     local pid
     pid=$(lsof -ti :"$port" 2>/dev/null || true)
     if [ -n "$pid" ]; then
-      log "  Port $port still held by PID $pid -- force killing"
-      kill -9 $pid 2>/dev/null || true
+      log "  Port $port still held by PID $pid -- sending SIGTERM"
+      kill "$pid" 2>/dev/null || true
       all_free=false
     fi
   done
+  if [ "$all_free" = false ]; then
+    sleep 5
+  fi
   if [ "$all_free" = false ]; then
     sleep 3
     # Final check

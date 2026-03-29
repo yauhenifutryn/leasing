@@ -17,14 +17,29 @@ echo "[restart] Step 1: Shutting down supervisor..."
 "$SUPERVISORCTL" -c "$CONF" shutdown 2>/dev/null || true
 sleep 3
 
-# --- Step 2: Kill ALL python/vllm processes ---
-echo "[restart] Step 2: Killing all Python/vLLM processes..."
+# --- Step 2: Graceful kill (SIGTERM, not SIGKILL) ---
+# SIGKILL on GPU processes leaks CUDA memory in containers.
+echo "[restart] Step 2: Sending SIGTERM to all processes..."
+pkill -f supervisord 2>/dev/null || true
+pkill -f "uvicorn" 2>/dev/null || true
+pkill -f "vllm" 2>/dev/null || true
+pkill -f "python.*services" 2>/dev/null || true
+echo "[restart]   Waiting 15s for GPU processes to release memory..."
+sleep 15
+
+# Force-kill non-GPU stragglers only
 pkill -9 -f supervisord 2>/dev/null || true
 pkill -9 -f "uvicorn" 2>/dev/null || true
-pkill -9 -f "vllm" 2>/dev/null || true
-# Kill any remaining python processes that might hold GPU memory
-pkill -9 -f "python.*services" 2>/dev/null || true
-sleep 3
+# Do NOT kill -9 vllm unless absolutely necessary
+if pgrep -f "vllm" >/dev/null 2>&1; then
+  echo "[restart]   WARNING: vLLM still running. Waiting 15s more..."
+  sleep 15
+  if pgrep -f "vllm" >/dev/null 2>&1; then
+    echo "[restart]   WARNING: Force-killing vLLM (may leak GPU memory)"
+    pkill -9 -f "vllm" 2>/dev/null || true
+    sleep 3
+  fi
+fi
 
 # --- Step 3: Kill anything on service ports ---
 echo "[restart] Step 3: Clearing service ports..."
