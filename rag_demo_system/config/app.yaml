@@ -29,8 +29,8 @@ retrieval:
   fast_bm25_top_k: 4
   fast_final_top_n: 3
   fast_context_max_tokens: 900
-  voice_vector_top_k: 6
-  voice_bm25_top_k: 4
+  voice_vector_top_k: 10
+  voice_bm25_top_k: 6
   voice_final_top_n: 4
   voice_context_max_tokens: 900
 
