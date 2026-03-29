@@ -13,7 +13,7 @@ if [ ! -f "$FULL_PATH" ]; then
 fi
 
 # Build JSON payload via python to avoid shell argument limits
-python3 -c "
+"$APP_DIR/.venv/bin/python" -c "
 import base64, json, requests, sys
 
 with open('$FULL_PATH', 'rb') as f:
