@@ -3,6 +3,7 @@ transformers==4.57.3
 accelerate
 qwen-omni-utils>=0.0.9
 torch>=2.0.0,<2.7.0
+torchvision
 fastapi==0.115.6
 uvicorn==0.30.6
 pydantic>=2.10.0
