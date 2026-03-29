@@ -492,12 +492,29 @@ async def _stream_voice_response(
                     "message": f"tts_failed: {exc}",
                 })
 
+    all_sentences: list[str] = []
+    _orig_put = sentence_queue.put
+
+    async def _tracking_put(item: str | None) -> None:
+        if item is not None:
+            all_sentences.append(item)
+        await _orig_put(item)
+
+    sentence_queue.put = _tracking_put  # type: ignore[assignment]
+
     session.assistant_speaking = True
     session.interrupted = False
     producer_task = asyncio.create_task(llm_producer())
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
     session.assistant_speaking = False
+
+    # Save conversation turn for memory (persistent across voice turns)
+    full_answer = " ".join(all_sentences)
+    if full_answer:
+        chat_session = state.get(session_id) or state.create(session_id)
+        _append_turn(chat_session, message, full_answer, settings.app.memory_turns)
+        state.update(chat_session)
 
     t_now = time.time()
     _llm_ft = t_llm_first_token or t_retrieval_done
