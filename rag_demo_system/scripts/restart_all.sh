@@ -150,12 +150,10 @@ while true; do
   sleep 15
 done
 
-# --- Step 9: Start voice sidecars ---
+# --- Step 9: Start voice sidecars (only what's needed) ---
 echo ""
 echo "[restart] Step 9: Starting voice sidecars..."
-"$SUPERVISORCTL" -c "$CONF" start sensevoice 2>/dev/null || true
 "$SUPERVISORCTL" -c "$CONF" start whisper 2>/dev/null || true
-"$SUPERVISORCTL" -c "$CONF" start cosyvoice 2>/dev/null || true
 sleep 10
 
 # --- Step 10: Start TTS (Silero preferred, Qwen3 as fallback) ---
