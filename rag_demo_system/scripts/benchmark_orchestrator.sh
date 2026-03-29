@@ -260,7 +260,7 @@ main() {
   check_vram "pre-brain-upgrade"
 
   # Patch .env to switch model path for vLLM startup
-  sed -i.bak 's|Qwen/Qwen3-30B-A3B|Qwen/Qwen3.5-35B-A3B|g' "$APP_DIR/.env"
+  sed -i.bak 's|Qwen/Qwen3-30B-A3B|Qwen/Qwen3.5-35B-A3B-FP8|g' "$APP_DIR/.env"
   $SUPERVISORCTL start qwen
   wait_healthy "http://127.0.0.1:$VLLM_PORT/health" "$HEALTH_TIMEOUT"
   check_vram "post-brain-upgrade"

@@ -41,10 +41,13 @@ if ! curl -fsS http://localhost:6333/healthz >/dev/null 2>&1; then
 fi
 echo "[35b]   Qdrant OK"
 
-# --- Patch .env to 3.5-35B ---
-echo "[35b] Patching .env for Qwen3.5-35B..."
+# --- Patch .env to 3.5-35B-FP8 ---
+echo "[35b] Patching .env for Qwen3.5-35B-A3B-FP8..."
 cp "$APP_DIR/.env" "$APP_DIR/.env.brain_backup"
-sed -i 's|Qwen/Qwen3-30B-A3B|Qwen/Qwen3.5-35B-A3B|g' "$APP_DIR/.env"
+sed -i 's|Qwen/Qwen3-30B-A3B|Qwen/Qwen3.5-35B-A3B-FP8|g' "$APP_DIR/.env"
+
+# Ensure embedding/reranker are on GPU (FP8 model is small enough)
+sed -i 's/device: "cpu"/device: "cuda"/g' "$APP_DIR/config/app.yaml"
 
 # --- Start supervisor ---
 echo "[35b] Starting supervisor (backend + vLLM)..."

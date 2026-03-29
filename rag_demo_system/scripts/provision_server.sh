@@ -205,8 +205,8 @@ download_models() {
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
-  log "  Qwen3.5-35B-A3B (split pipeline brain upgrade)"
-  "$hf_cli" download Qwen/Qwen3.5-35B-A3B \
+  log "  Qwen3.5-35B-A3B-FP8 (split pipeline brain upgrade, half VRAM)"
+  "$hf_cli" download Qwen/Qwen3.5-35B-A3B-FP8 \
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
