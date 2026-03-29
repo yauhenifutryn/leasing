@@ -1320,7 +1320,22 @@ async def tts_endpoint(payload: TTSRequest) -> JSONResponse:
     )
 
 
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+from fastapi.responses import FileResponse as _FileResponse
+
+
+@app.get("/")
+async def root() -> _FileResponse:
+    """Serve demo.html as the default page (client-facing)."""
+    return _FileResponse(FRONTEND_DIR / "demo.html")
+
+
+@app.get("/dev")
+async def dev_ui() -> _FileResponse:
+    """Dev UI for internal use."""
+    return _FileResponse(FRONTEND_DIR / "index.html")
+
+
+app.mount("/", StaticFiles(directory=FRONTEND_DIR), name="frontend")
 
 
 def _stream_or_json(payload: dict[str, Any], stream: bool) -> Any:

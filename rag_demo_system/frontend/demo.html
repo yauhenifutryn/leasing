@@ -9,8 +9,8 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #0d1117;
-        color: #e6edf3;
+        background: #f5f6f8;
+        color: #1a1a2e;
         min-height: 100vh;
         display: flex;
         flex-direction: column;
@@ -31,19 +31,20 @@
       .logo h1 {
         font-size: 20px;
         font-weight: 600;
-        color: #58a6ff;
+        color: #1a56db;
       }
       .logo p {
         font-size: 13px;
-        color: #8b949e;
+        color: #6b7280;
         margin-top: 4px;
       }
       .status-bar {
         text-align: center;
         font-size: 12px;
-        color: #8b949e;
+        color: #6b7280;
         padding: 8px;
-        background: #161b22;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
         border-radius: 8px;
         margin-bottom: 12px;
         min-height: 32px;
@@ -51,12 +52,13 @@
         align-items: center;
         justify-content: center;
       }
-      .status-bar.good { color: #3fb950; }
-      .status-bar.warn { color: #d29922; }
-      .status-bar.danger { color: #f85149; }
+      .status-bar.good { color: #059669; }
+      .status-bar.warn { color: #d97706; }
+      .status-bar.danger { color: #dc2626; }
       .transcript-box {
         flex: 1;
-        background: #161b22;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
         border-radius: 12px;
         padding: 16px;
         overflow-y: auto;
@@ -68,22 +70,23 @@
       .transcript-box .turn {
         margin-bottom: 10px;
       }
-      .transcript-box .turn.user { color: #58a6ff; }
-      .transcript-box .turn.assistant { color: #e6edf3; }
-      .transcript-box .turn .latency { color: #8b949e; font-size: 11px; }
+      .transcript-box .turn.user { color: #1a56db; }
+      .transcript-box .turn.assistant { color: #1a1a2e; }
+      .transcript-box .turn .latency { color: #9ca3af; font-size: 11px; }
       .current-response {
-        background: #1c2129;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
         border-radius: 8px;
         padding: 12px;
         margin-bottom: 12px;
         min-height: 44px;
         font-size: 14px;
-        color: #e6edf3;
+        color: #1a1a2e;
         line-height: 1.5;
       }
       .current-response:empty::after {
         content: "Нажмите и удерживайте кнопку, чтобы говорить";
-        color: #484f58;
+        color: #9ca3af;
       }
       .controls {
         display: flex;
@@ -102,35 +105,35 @@
         user-select: none;
       }
       .btn-connect {
-        background: #21262d;
-        color: #58a6ff;
+        background: #e5e7eb;
+        color: #1a56db;
         flex: 1;
       }
       .btn-connect.connected {
-        background: #0d419d;
+        background: #1a56db;
         color: #fff;
       }
       .btn-talk {
-        background: #238636;
+        background: #059669;
         color: #fff;
         flex: 2;
       }
       .btn-talk:disabled {
-        background: #21262d;
-        color: #484f58;
+        background: #e5e7eb;
+        color: #9ca3af;
         cursor: not-allowed;
       }
       .btn-talk:active:not(:disabled), .btn-talk.talking {
-        background: #f85149;
+        background: #dc2626;
         transform: scale(0.97);
       }
       .btn-download {
-        background: #21262d;
-        color: #8b949e;
+        background: #e5e7eb;
+        color: #6b7280;
         padding: 14px;
         font-size: 18px;
       }
-      .btn-download:hover { color: #e6edf3; }
+      .btn-download:hover { color: #1a1a2e; }
     </style>
   </head>
   <body>
@@ -154,7 +157,7 @@
     </div>
 
     <script>
-    const WS_BASE = `ws://${location.host}`;
+    const WS_BASE = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
     let ws = null;
     let connected = false;
     let talking = false;
