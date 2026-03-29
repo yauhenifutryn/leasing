@@ -5,19 +5,30 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
 CONF="$APP_DIR/scripts/supervisord.conf"
+VLLM_PORT=8787
 
-echo "[restart] Shutting down supervisor..."
+echo "[restart] ============================================="
+echo "[restart]   Full Stack Restart"
+echo "[restart] ============================================="
+
+# --- Step 1: Graceful shutdown ---
+echo ""
+echo "[restart] Step 1: Shutting down supervisor..."
 "$SUPERVISORCTL" -c "$CONF" shutdown 2>/dev/null || true
 sleep 3
 
-echo "[restart] Killing stale processes..."
+# --- Step 2: Kill ALL python/vllm processes ---
+echo "[restart] Step 2: Killing all Python/vLLM processes..."
 pkill -9 -f supervisord 2>/dev/null || true
-pkill -9 -f uvicorn 2>/dev/null || true
-pkill -9 -f vllm 2>/dev/null || true
-sleep 2
+pkill -9 -f "uvicorn" 2>/dev/null || true
+pkill -9 -f "vllm" 2>/dev/null || true
+# Kill any remaining python processes that might hold GPU memory
+pkill -9 -f "python.*services" 2>/dev/null || true
+sleep 3
 
-echo "[restart] Clearing held ports..."
-for port in 8000 8787 8002 50000 50001 50002 50003 50004 50005; do
+# --- Step 3: Kill anything on service ports ---
+echo "[restart] Step 3: Clearing service ports..."
+for port in 8000 $VLLM_PORT 8002 50000 50001 50002 50003 50004 50005; do
   pid=$(lsof -ti :"$port" 2>/dev/null || true)
   if [ -n "$pid" ]; then
     echo "  Killing PID $pid on port $port"
@@ -26,28 +37,129 @@ for port in 8000 8787 8002 50000 50001 50002 50003 50004 50005; do
 done
 sleep 2
 
-echo "[restart] Removing stale pidfile and socket..."
-rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
+# --- Step 4: Check GPU memory ---
+echo ""
+echo "[restart] Step 4: GPU memory check..."
+if nvidia-smi &>/dev/null; then
+  USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
+  TOTAL_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
+  FREE_MIB=$((TOTAL_MIB - USED_MIB))
+  echo "[restart]   GPU: used=${USED_MIB}MiB total=${TOTAL_MIB}MiB free=${FREE_MIB}MiB"
 
-echo "[restart] Starting stack..."
+  # Check for leaked GPU memory (>5GB used with no processes)
+  GPU_PROCS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]' || echo "0")
+  if [ "$USED_MIB" -gt 5000 ] && [ "$GPU_PROCS" -eq 0 ]; then
+    echo ""
+    echo "[restart]   ERROR: ${USED_MIB}MiB GPU memory used but no GPU processes found!"
+    echo "[restart]   This is leaked CUDA memory from crashed processes."
+    echo "[restart]   The container cannot reset the GPU."
+    echo ""
+    echo "[restart]   OPTIONS:"
+    echo "[restart]   1. Restart the Vast.ai/RunPod instance from the dashboard (fixes the leak)"
+    echo "[restart]   2. Continue anyway with reduced vLLM memory (may OOM or fail)"
+    echo ""
+    read -rp "[restart]   Continue anyway? (y/N): " CONTINUE
+    if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+      echo "[restart]   Aborted. Restart the instance and try again."
+      exit 1
+    fi
+    echo "[restart]   Continuing with reduced memory..."
+  fi
+
+  # Check if enough free memory for vLLM (needs ~60GB for Qwen3-30B)
+  if [ "$FREE_MIB" -lt 60000 ]; then
+    echo "[restart]   WARNING: Only ${FREE_MIB}MiB free. vLLM needs ~60GB."
+    echo "[restart]   vLLM may fail to start. Consider restarting the instance."
+  fi
+fi
+
+# --- Step 5: Clean state files ---
+echo ""
+echo "[restart] Step 5: Cleaning state files..."
+rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
+# Clear old log files to avoid confusion with stale error messages
+> "$APP_DIR/.state/qwen.err.log"
+> "$APP_DIR/.state/qwen.log"
+> "$APP_DIR/.state/backend.err.log"
+
+# --- Step 6: Start Qdrant ---
+echo ""
+echo "[restart] Step 6: Starting Qdrant..."
+if ! curl -fsS http://localhost:6333/healthz >/dev/null 2>&1; then
+  QDRANT_DIR="/workspace/qdrant"
+  if [ -f "$QDRANT_DIR/qdrant" ]; then
+    pkill -f "qdrant" 2>/dev/null || true
+    sleep 1
+    mkdir -p /workspace/qdrant_storage
+    QDRANT__STORAGE__STORAGE_PATH=/workspace/qdrant_storage nohup "$QDRANT_DIR/qdrant" > /workspace/qdrant.log 2>&1 &
+    sleep 3
+  fi
+fi
+curl -fsS http://localhost:6333/healthz >/dev/null 2>&1 && echo "[restart]   Qdrant OK" || echo "[restart]   Qdrant FAILED"
+
+# --- Step 7: Start supervisor (backend + vLLM) ---
+echo ""
+echo "[restart] Step 7: Starting supervisor stack..."
 cd "$APP_DIR"
 bash scripts/stack.sh up
-sleep 5
+sleep 3
 
-echo "[restart] Starting voice sidecars..."
-"$SUPERVISORCTL" -c "$CONF" start sensevoice whisper cosyvoice
-sleep 15
+# --- Step 8: Wait for vLLM to load ---
+echo ""
+echo "[restart] Step 8: Waiting for vLLM to load model..."
+ELAPSED=0
+MAX_WAIT=600
+while true; do
+  CODE=$(curl -s --max-time 5 --connect-timeout 3 -o /dev/null -w "%{http_code}" "http://localhost:$VLLM_PORT/health" 2>/dev/null || echo "000")
+  if [ "$CODE" = "200" ]; then
+    echo "[restart]   vLLM ready after ${ELAPSED}s"
+    break
+  fi
 
-echo "[restart] Status:"
-"$SUPERVISORCTL" -c "$CONF" status
+  ELAPSED=$((ELAPSED + 15))
+  if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+    echo "[restart]   ERROR: vLLM not ready after ${MAX_WAIT}s"
+    echo "[restart]   Check: tail -20 .state/qwen.err.log"
+    # Check if it crashed
+    QWEN_STATUS=$("$SUPERVISORCTL" -c "$CONF" status qwen 2>/dev/null | awk '{print $2}' || echo "UNKNOWN")
+    if [ "$QWEN_STATUS" != "RUNNING" ]; then
+      echo "[restart]   vLLM status: $QWEN_STATUS (crashed, NOT restarting to prevent memory leak)"
+    fi
+    break
+  fi
 
-echo "[restart] Health checks:"
-curl -s http://localhost:8000/api/health && echo " backend OK" || echo " backend FAILED"
-curl -s http://localhost:8787/health && echo " vLLM OK" || echo " vLLM NOT READY"
-curl -s http://localhost:6333/healthz && echo " Qdrant OK" || echo " Qdrant FAILED"
-curl -s http://localhost:50000/health && echo " sensevoice" || echo " sensevoice FAILED"
-curl -s http://localhost:50001/health && echo " cosyvoice" || echo " cosyvoice FAILED"
-curl -s http://localhost:50002/health && echo " whisper" || echo " whisper FAILED"
+  # Show GPU progress
+  GPU_INFO=""
+  if nvidia-smi &>/dev/null; then
+    USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    GPU_INFO=" | GPU: ${USED}/${TOTAL}MiB"
+  fi
+  echo "[restart]   ...loading (${ELAPSED}s/${MAX_WAIT}s, HTTP $CODE${GPU_INFO})"
+  sleep 15
+done
+
+# --- Step 9: Start voice sidecars ---
+echo ""
+echo "[restart] Step 9: Starting voice sidecars..."
+"$SUPERVISORCTL" -c "$CONF" start sensevoice 2>/dev/null || true
+"$SUPERVISORCTL" -c "$CONF" start whisper 2>/dev/null || true
+"$SUPERVISORCTL" -c "$CONF" start cosyvoice 2>/dev/null || true
+sleep 10
+
+# --- Step 10: Health checks ---
+echo ""
+echo "[restart] Step 10: Health checks..."
+echo -n "[restart]   Backend:    "; curl -s --max-time 5 http://localhost:8000/api/health >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[restart]   vLLM:       "; curl -s --max-time 5 http://localhost:$VLLM_PORT/health >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[restart]   Qdrant:     "; curl -s --max-time 5 http://localhost:6333/healthz >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[restart]   SenseVoice: "; curl -s --max-time 5 http://localhost:50000/health >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[restart]   CosyVoice:  "; curl -s --max-time 5 http://localhost:50001/health >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[restart]   Whisper:    "; curl -s --max-time 5 http://localhost:50002/health >/dev/null && echo "OK" || echo "FAILED"
 
 echo ""
-echo "[restart] Done. Run smoke_test.sh to verify."
+echo "[restart] ============================================="
+echo "[restart]   Restart complete"
+echo "[restart]   Run: bash scripts/smoke_test.sh"
+echo "[restart]   Or:  bash scripts/test_chat.sh"
+echo "[restart] ============================================="
