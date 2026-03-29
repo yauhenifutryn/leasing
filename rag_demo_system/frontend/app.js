@@ -412,13 +412,19 @@ function handleVoiceEvent(evt) {
   if (evt.type === "response.done") {
     renderChunks(evt.used_knowledge || []);
     const vt = evt.voice_timings || {};
+    const totalMs = vt.total_ms || (Date.now() - voiceT0);
+    // Append assistant response with latency to transcript history
+    const assistantText = $("#assistantVoice").textContent.trim();
+    if (assistantText) {
+      _appendToHistory("assistant", assistantText + ` [${totalMs}ms]`);
+    }
     if (vt.stt_ms !== undefined) {
       setVoiceStatus(
         `STT:${vt.stt_ms}ms RAG:${vt.rag_ms}ms LLM:${vt.llm_first_ms}ms TTS:${vt.tts_first_ms}ms Total:${vt.total_ms}ms`,
         "good"
       );
     } else {
-      setVoiceStatus(`Done: ${Date.now() - voiceT0}ms`, "good");
+      setVoiceStatus(`Done: ${totalMs}ms`, "good");
     }
   }
   if (evt.type === "warning") {
@@ -466,11 +472,6 @@ async function connectVoice() {
 function startTalking() {
   if (!voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) return;
   talking = true;
-  // Append previous assistant response to history before clearing
-  const prevAssistant = $("#assistantVoice").textContent.trim();
-  if (prevAssistant) {
-    _appendToHistory("assistant", prevAssistant);
-  }
   $("#assistantVoice").textContent = "";
   $("#btnVoiceTalk").classList.add("talking");
   setVoiceStatus("Listening...", "warn");
