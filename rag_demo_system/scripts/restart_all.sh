@@ -150,17 +150,19 @@ while true; do
   sleep 15
 done
 
-# --- Step 9: Start voice sidecars (only what's needed) ---
+# --- Step 9: Ensure unused services are stopped ---
 echo ""
-echo "[restart] Step 9: Starting voice sidecars..."
-"$SUPERVISORCTL" -c "$CONF" start whisper 2>/dev/null || true
-sleep 10
+echo "[restart] Step 9: Stopping unused services..."
+for svc in sensevoice cosyvoice vosk vosk_tts qwen3_tts qwen3_asr voxtral qwen3_omni ngrok frontend; do
+  "$SUPERVISORCTL" -c "$CONF" stop "$svc" 2>/dev/null || true
+done
 
-# --- Step 10: Start TTS (Silero preferred, Qwen3 as fallback) ---
+# --- Step 10: Start active voice services ---
 echo ""
-echo "[restart] Step 10: Starting TTS..."
+echo "[restart] Step 10: Starting Whisper STT + Silero TTS..."
+"$SUPERVISORCTL" -c "$CONF" start whisper 2>/dev/null || true
 "$SUPERVISORCTL" -c "$CONF" start silero_tts 2>/dev/null || true
-sleep 5
+sleep 10
 
 # --- Step 11: Health checks ---
 echo ""
@@ -168,8 +170,6 @@ echo "[restart] Step 11: Health checks..."
 echo -n "[restart]   Backend:    "; curl -s --max-time 5 http://localhost:8000/api/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   vLLM:       "; curl -s --max-time 5 http://localhost:$VLLM_PORT/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Qdrant:     "; curl -s --max-time 5 http://localhost:6333/healthz >/dev/null && echo "OK" || echo "FAILED"
-echo -n "[restart]   SenseVoice: "; curl -s --max-time 5 http://localhost:50000/health >/dev/null && echo "OK" || echo "FAILED"
-echo -n "[restart]   CosyVoice:  "; curl -s --max-time 5 http://localhost:50001/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Whisper:    "; curl -s --max-time 5 http://localhost:50002/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Silero TTS: "; curl -s --max-time 5 http://localhost:50006/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('OK' if d.get('ok') else f'FAILED ({d.get(\"reason\",\"unknown\")})')" 2>/dev/null || echo "FAILED"
 
