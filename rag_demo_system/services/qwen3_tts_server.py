@@ -46,7 +46,7 @@ class Qwen3TTSSynthesizer:
         # If ref_audio is provided, pre-compute the voice clone prompt once at startup
         if ref_audio and ref_text:
             print(f"[qwen3_tts] Building voice clone prompt from {ref_audio}...")
-            self._voice_clone_prompt = self._model.build_voice_clone_prompt(
+            self._voice_clone_prompt = self._model.create_voice_clone_prompt(
                 ref_audio=ref_audio,
                 ref_text=ref_text,
             )
