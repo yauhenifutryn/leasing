@@ -371,7 +371,7 @@ Based on benchmark numbers + voice quality impressions:
 | Qwen3-TTS (1.7B) | ~3GB | On CUDA, port 50003 |
 | **Total** | **~69GB** | **11GB headroom** |
 
-**PyTorch/CUDA constraint:** All venvs except `.venv-qwen3-tts` pin `torch<2.7.0` (requirements files have explicit caps). This is because `torch>=2.7` requires CUDA 13 runtime, and mixing CUDA versions across venvs causes conflicts. The `qwen-tts` pip package bundles its own torch 2.7+ and CUDA 13 `.so` files, so it needs its own isolated venv (`.venv-qwen3-tts`).
+**PyTorch/CUDA constraint:** All venvs except `.venv-qwen3-tts` pin `torch<2.7.0` (requirements files have explicit caps). This is because `torch>=2.7` requires CUDA 13 runtime, and mixing CUDA versions across venvs causes conflicts. The `.venv-qwen3-tts` venv pins `torch>=2.7.0` because `qwen-tts` bundles `.so` files compiled against torch 2.7+ (uses the `aoti_torch_abi_version` symbol). Running it with torch 2.6 causes `undefined symbol` errors at import time.
 
 ### 5.3 Post-Benchmark Improvements
 

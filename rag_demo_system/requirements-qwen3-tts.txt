@@ -1,5 +1,9 @@
 qwen-tts==0.1.1
-torch>=2.0.0,<2.7.0
+# No torch cap here: qwen-tts bundles .so files built against torch 2.7+.
+# This venv is isolated precisely so torch 2.7+ can run without affecting others.
+# The <2.7.0 cap in other requirements files protects venvs that share CUDA 12.x libs.
+torch>=2.7.0
+torchaudio>=2.7.0
 fastapi==0.115.6
 uvicorn==0.30.6
 pydantic>=2.10.0
