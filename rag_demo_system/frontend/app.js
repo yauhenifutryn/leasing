@@ -403,8 +403,15 @@ function handleVoiceEvent(evt) {
   }
   if (evt.type === "response.done") {
     renderChunks(evt.used_knowledge || []);
-    const totalMs = Date.now() - voiceT0;
-    setVoiceStatus(`Done: ${totalMs}ms total`, "good");
+    const vt = evt.voice_timings || {};
+    if (vt.stt_ms !== undefined) {
+      setVoiceStatus(
+        `STT:${vt.stt_ms}ms RAG:${vt.rag_ms}ms LLM:${vt.llm_first_ms}ms TTS:${vt.tts_first_ms}ms Total:${vt.total_ms}ms`,
+        "good"
+      );
+    } else {
+      setVoiceStatus(`Done: ${Date.now() - voiceT0}ms`, "good");
+    }
   }
   if (evt.type === "warning") {
     setVoiceStatus(evt.message || "Voice warning", "warn");

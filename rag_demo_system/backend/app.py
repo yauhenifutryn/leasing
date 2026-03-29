@@ -490,6 +490,16 @@ async def _stream_voice_response(
     session.assistant_speaking = False
 
     t_now = time.time()
+    _llm_ft = t_llm_first_token or t_retrieval_done
+    _tts_fc = t_tts_first_chunk or t_now
+    _pb_st = t_playback_started or t_now
+    voice_timings = {
+        "stt_ms": round((t_stt_done - t_speech_stopped) * 1000),
+        "rag_ms": round((t_retrieval_done - t_stt_done) * 1000),
+        "llm_first_ms": round((_llm_ft - t_retrieval_done) * 1000),
+        "tts_first_ms": round((_tts_fc - _llm_ft) * 1000),
+        "total_ms": round((_pb_st - t_speech_stopped) * 1000),
+    }
     used_knowledge = [
         {"text": c["text"], "chunk_id": c.get("chunk_id")} for c in final_chunks
     ]
@@ -500,15 +510,17 @@ async def _stream_voice_response(
         "stt_provider": session.stt_provider, "tts_provider": tts_provider,
         "transcript": message, "speech_stopped": t_speech_stopped,
         "stt_done": t_stt_done, "retrieval_done": t_retrieval_done,
-        "llm_first_token": t_llm_first_token or t_retrieval_done,
-        "tts_first_chunk": t_tts_first_chunk or t_now,
-        "playback_started": t_playback_started or t_now,
-        "primary_kpi_ms": ((t_playback_started or t_now) - t_speech_stopped) * 1000,
+        "llm_first_token": _llm_ft,
+        "tts_first_chunk": _tts_fc,
+        "playback_started": _pb_st,
+        "primary_kpi_ms": voice_timings["total_ms"],
+        **voice_timings,
     })
     await websocket.send_json({
         "type": "response.done", "session_id": session_id,
         "backend": backend, "used_knowledge": used_knowledge,
         "citations": [], "timings": timings,
+        "voice_timings": voice_timings,
     })
 
 
