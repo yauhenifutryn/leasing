@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # start_omni_benchmark.sh
-# Stops vLLM, starts Qwen3-Omni, runs text benchmark, restores.
-# Omni handles LLM+TTS internally but still uses RAG for context.
+# Stops vLLM, starts Qwen3-Omni + Whisper, runs voice benchmark.
+# Omni handles LLM+TTS internally. Whisper needed for STT.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,13 +9,14 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
 CONF="$APP_DIR/scripts/supervisord.conf"
 VLLM_PORT=8787
+BENCHMARK_RUNNER="$APP_DIR/.venv/bin/python $APP_DIR/scripts/benchmark_runner.py"
 
 echo "[omni] ============================================="
-echo "[omni]   Qwen3-Omni Hybrid Benchmark"
+echo "[omni]   Qwen3-Omni Voice Benchmark"
 echo "[omni] ============================================="
 
 # --- Kill everything ---
-echo "[omni] Killing all existing processes..."
+echo "[omni] Stopping all processes..."
 "$SUPERVISORCTL" -c "$CONF" shutdown 2>/dev/null || true
 sleep 3
 pkill -f supervisord 2>/dev/null || true
@@ -43,27 +44,33 @@ if ! curl -fsS http://localhost:6333/healthz >/dev/null 2>&1; then
 fi
 echo "[omni]   Qdrant OK"
 
-# --- Patch .env: use Omni instead of vLLM ---
+# --- Backup and patch .env ---
 echo "[omni] Patching .env for Omni mode..."
 cp "$APP_DIR/.env" "$APP_DIR/.env.omni_backup"
-# Omni doesn't use vLLM, but backend still needs to start.
-# The RAG engine uses embedding/reranker directly.
 
-# --- Start supervisor with backend only (no vLLM) ---
+# Ensure embedding/reranker on GPU
+sed -i 's/device: "cpu"/device: "cuda"/g' "$APP_DIR/config/app.yaml"
+
+# --- Start supervisor ---
 echo "[omni] Starting supervisor..."
 rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
 cd "$APP_DIR" && bash scripts/stack.sh up
 sleep 3
 
-# Stop everything except backend
+# Stop vLLM and all voice services except Whisper
 "$SUPERVISORCTL" -c "$CONF" stop qwen 2>/dev/null || true
-"$SUPERVISORCTL" -c "$CONF" stop qwen3_tts whisper sensevoice cosyvoice vosk_tts qwen3_asr voxtral 2>/dev/null || true
+"$SUPERVISORCTL" -c "$CONF" stop qwen3_tts sensevoice cosyvoice vosk_tts qwen3_asr voxtral 2>/dev/null || true
+
+# Start Whisper (needed for STT in voice benchmark)
+echo "[omni] Starting Whisper STT..."
+"$SUPERVISORCTL" -c "$CONF" start whisper 2>/dev/null || true
+sleep 5
 
 # Start Omni sidecar
 echo "[omni] Starting Qwen3-Omni sidecar..."
 "$SUPERVISORCTL" -c "$CONF" start qwen3_omni
 
-echo "[omni]   Waiting for Omni to load (may take 3-5 min)..."
+echo "[omni]   Waiting for Omni to load (3-5 min)..."
 ELAPSED=0
 MAX_WAIT=600
 while true; do
@@ -88,7 +95,11 @@ done
 echo "[omni] Health checks..."
 echo -n "[omni]   Backend: "; curl -s --max-time 5 http://localhost:8000/api/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[omni]   Omni:    "; curl -s --max-time 10 http://localhost:8002/health >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[omni]   Whisper: "; curl -s --max-time 5 http://localhost:50002/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[omni]   Qdrant:  "; curl -s --max-time 5 http://localhost:6333/healthz >/dev/null && echo "OK" || echo "FAILED"
+
+USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
+echo "[omni]   GPU: ${USED_MIB}MiB used"
 
 # --- Ensure KB indexed ---
 echo ""
@@ -103,38 +114,36 @@ else
   echo "[omni]   KB already indexed: $KB_COUNT points"
 fi
 
-# --- Test Omni with a single question first ---
+# --- Run voice benchmark with Omni ---
 echo ""
-echo "[omni] Quick test: sending one question to Omni..."
-TEST_RESULT=$(curl -s --max-time 60 -X POST http://localhost:8002/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"audio_b64":"", "context_chunks":["Компания Микро Лизинг основана в 2009 году."], "system_prompt":""}' 2>/dev/null || echo "FAILED")
-if echo "$TEST_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Omni responds: {d.get(\"text\",\"\")[:100]}')" 2>/dev/null; then
-  echo "[omni]   Quick test passed"
-else
-  echo "[omni]   Quick test failed: $TEST_RESULT"
-  echo "[omni]   Check: tail -20 $APP_DIR/.state/qwen3_omni.err.log"
-fi
+echo "[omni] Running voice benchmark (Omni mode)..."
+echo "[omni]   This uses the voice WebSocket: STT(Whisper) -> RAG -> Omni(LLM+TTS)"
+echo "[omni]   Each question: ~10-30s. Total: ~20-40 min for 85 questions."
 
-# --- Run Omni text benchmark ---
-# RAG retrieval via backend, then Omni /chat for answer generation
-echo ""
-echo "[omni] Running Omni text benchmark..."
-"$APP_DIR/.venv/bin/python" "$APP_DIR/scripts/benchmark_omni_text.py" \
-  --output "$APP_DIR/results/text_omni_$(date +%Y%m%d_%H%M%S).jsonl" \
+OUTPUT="$APP_DIR/results/voice_omni_$(date +%Y%m%d_%H%M%S).jsonl"
+
+$BENCHMARK_RUNNER \
+  --fixture "$APP_DIR/fixtures/bench_questions_ru.jsonl" \
+  --profile "omni_hybrid" \
+  --output "$OUTPUT" \
+  --ws-url "ws://localhost:8000/ws/voice" \
   --backend-url "http://localhost:8000" \
-  --omni-url "http://localhost:8002"
+  --timeout 60 \
+  --warmup 3
+
+echo "[omni]   Results: $OUTPUT"
 
 # --- Restore ---
 echo ""
 echo "[omni] Restoring..."
 "$SUPERVISORCTL" -c "$CONF" stop qwen3_omni 2>/dev/null || true
+"$SUPERVISORCTL" -c "$CONF" stop whisper 2>/dev/null || true
 sleep 10
 mv "$APP_DIR/.env.omni_backup" "$APP_DIR/.env" 2>/dev/null || true
 
 echo ""
 echo "[omni] ============================================="
 echo "[omni]   Omni benchmark complete."
-echo "[omni]   Results in results/ directory."
+echo "[omni]   Results: $OUTPUT"
 echo "[omni]   Run restart_all.sh to reload split pipeline."
 echo "[omni] ============================================="
