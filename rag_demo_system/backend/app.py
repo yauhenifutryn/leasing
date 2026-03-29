@@ -400,7 +400,7 @@ async def _stream_voice_response(
     )
     expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
-        "Это голосовой разговор. Ответь одним-двумя короткими предложениями, как в живом телефонном разговоре. Не перечисляй все детали, дай главное и предложи уточнить."
+        "Это голосовой разговор по телефону. СТРОГО одно предложение. Дай только самое главное. Если вопрос расплывчатый, задай один короткий уточняющий вопрос."
         if not expanded
         else "Можно ответить подробнее, но только на основе контекста."
     )
@@ -432,7 +432,7 @@ async def _stream_voice_response(
                 base_url=effective_base_url, model=effective_model,
                 system_prompt=system_prompt, user_prompt=user_prompt,
                 temperature=settings.llm.temperature,
-                max_tokens=100,  # Voice: short responses only
+                max_tokens=60,  # Voice: one sentence only
                 timeout_sec=settings.llm.timeout_sec,
             )
             for event in stream:
