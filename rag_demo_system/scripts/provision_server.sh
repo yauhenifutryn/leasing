@@ -201,7 +201,7 @@ download_models() {
   log "=== Downloading HuggingFace models to HF_HOME=$HF_HOME ==="
 
   log "  Qwen3-30B-A3B (split pipeline brain baseline)"
-  "$hf_cli" download Qwen/Qwen3-30B-A3B \
+  "$hf_cli" download Qwen/Qwen3.5-35B-A3B-FP8 \
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
@@ -293,9 +293,9 @@ write_env_file() {
 # Edit manually to adjust model selection or enable optional services.
 
 RAG_LLM_BASE_URL=http://127.0.0.1:${VLLM_PORT}/v1
-RAG_LLM_MODEL=Qwen/Qwen3-30B-A3B
+RAG_LLM_MODEL=Qwen/Qwen3.5-35B-A3B-FP8
 RAG_LLM_FAST_BASE_URL=http://127.0.0.1:${VLLM_PORT}/v1
-RAG_LLM_FAST_MODEL=Qwen/Qwen3-30B-A3B
+RAG_LLM_FAST_MODEL=Qwen/Qwen3.5-35B-A3B-FP8
 
 SENSEVOICE_BASE_URL=http://127.0.0.1:50000
 SENSEVOICE_API_STYLE=compat
@@ -321,7 +321,7 @@ STACK_MODE=docker
 RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
-STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-30B-A3B --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.75 --download-dir ${MODELS_DIR}"
+STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.75 --download-dir ${MODELS_DIR}"
 STACK_SENSEVOICE_CMD="./.venv-sensevoice/bin/python -m uvicorn services.sensevoice_server:app --host 0.0.0.0 --port 50000"
 STACK_COSYVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.vosk_tts_server:app --host 0.0.0.0 --port 50001"
 STACK_WHISPER_CMD="LD_LIBRARY_PATH=./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cublas/lib:./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cudnn/lib:\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
