@@ -81,7 +81,7 @@ You need an HF token with access to gated models (Qwen, Mistral):
 3. Accept the license on each model page (visit each and click "Agree"):
    - `Qwen/Qwen3-30B-A3B`
    - `Qwen/Qwen3.5-35B-A3B`
-   - `Qwen/Qwen3-TTS-12Hz-1.7B-Base`
+   - `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`
    - `Qwen/Qwen3-ASR-1.7B`
    - `Qwen/Qwen3-Omni-30B-A3B-Instruct`
    - `mistralai/Voxtral-Mini-4B-Realtime-2602`

@@ -210,8 +210,8 @@ download_models() {
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
-  log "  Qwen3-TTS-12Hz-1.7B-Base (TTS sidecar)"
-  "$hf_cli" download Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  log "  Qwen3-TTS-12Hz-1.7B-CustomVoice (TTS sidecar)"
+  "$hf_cli" download Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 

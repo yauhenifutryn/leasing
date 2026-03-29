@@ -17,7 +17,7 @@ class SpeakRequest(BaseModel):
 
 
 class Qwen3TTSSynthesizer:
-    def __init__(self, model_id: str, device: str) -> None:
+    def __init__(self, model_id: str, device: str, speaker: str) -> None:
         from qwen_tts import Qwen3TTSModel  # deferred import: keeps import errors in _build_default_app
 
         self._model = Qwen3TTSModel.from_pretrained(
@@ -25,11 +25,13 @@ class Qwen3TTSSynthesizer:
             device_map=device,
             dtype=torch.bfloat16,
         )
+        self._speaker = speaker
 
     def synthesize(self, text: str, language: str) -> tuple[bytes, int]:
-        # Qwen3-TTS uses full language name, not ISO code.
-        # "Russian" is the correct value regardless of request language field.
-        wavs, sr = self._model.generate_voice_clone(text=text, language="Russian")
+        # Qwen3-TTS CustomVoice uses full language name, not ISO code.
+        wavs, sr = self._model.generate_custom_voice(
+            text=text, language="Russian", speaker=self._speaker,
+        )
 
         # Convert the numpy waveform to raw PCM16 bytes by writing a WAV in-memory
         # and then discarding the 44-byte header so the caller gets headerless PCM16.
@@ -76,10 +78,11 @@ def create_unavailable_app(reason: str) -> FastAPI:
 
 
 def _build_default_app() -> FastAPI:
-    model_id = (os.getenv("QWEN3_TTS_MODEL_ID") or "Qwen/Qwen3-TTS-12Hz-1.7B-Base").strip()
+    model_id = (os.getenv("QWEN3_TTS_MODEL_ID") or "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice").strip()
     device = (os.getenv("QWEN3_TTS_DEVICE") or "cuda:0").strip()
+    speaker = (os.getenv("QWEN3_TTS_SPEAKER") or "Vivian").strip()
     try:
-        synthesizer = Qwen3TTSSynthesizer(model_id, device)
+        synthesizer = Qwen3TTSSynthesizer(model_id, device, speaker)
     except Exception as exc:  # noqa: BLE001
         return create_unavailable_app(f"qwen3_tts_not_ready: {exc}")
     return create_app(synthesizer)
