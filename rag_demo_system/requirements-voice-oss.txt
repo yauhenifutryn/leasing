@@ -3,3 +3,4 @@ uvicorn==0.30.6
 pydantic==2.10.2
 vosk==0.3.45
 vosk-tts==0.3.61
+faster-whisper>=1.0.0

@@ -308,7 +308,8 @@ RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
 STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-30B-A3B --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.75 --download-dir ${MODELS_DIR}"
-STACK_SENSEVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50000"
+# STACK_SENSEVOICE_CMD intentionally not set: real SenseVoice (FunAudioLLM) not yet integrated.
+# Do not run whisper_server.py on port 50000 as a fake placeholder.
 STACK_COSYVOICE_CMD="./.venv-voice-oss/bin/python -m uvicorn services.vosk_tts_server:app --host 0.0.0.0 --port 50001"
 STACK_WHISPER_CMD="./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_QWEN3_TTS_CMD="./.venv-qwen3-tts/bin/python -m uvicorn services.qwen3_tts_server:app --host 0.0.0.0 --port 50003"
