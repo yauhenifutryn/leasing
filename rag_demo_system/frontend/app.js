@@ -372,10 +372,10 @@ function handleVoiceEvent(evt) {
     $("#transcript").textContent = evt.transcription || evt.transcript || "";
   }
   if (evt.type === "assistant_response") {
-    $("#assistantVoice").textContent = evt.answer || "";
+    // Session management only (barge-in state). Text display handled by output_text.delta.
   }
   if (evt.type === "response.output_text.delta") {
-    $("#assistantVoice").textContent = ($("#assistantVoice").textContent || "") + (evt.delta || "");
+    $("#assistantVoice").textContent = evt.delta || "";
   }
   if (evt.type === "response.output_audio.delta" && evt.delta) {
     playPcm(b64ToInt16(evt.delta), evt.sample_rate_hz || 24000);
