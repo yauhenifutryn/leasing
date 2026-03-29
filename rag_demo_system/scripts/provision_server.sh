@@ -386,10 +386,25 @@ start_stack() {
   fi
   log "All ports free"
 
-  # Step 4: Remove stale pidfile and socket
+  # Step 4: Check for leaked GPU memory before starting
+  if command -v nvidia-smi &>/dev/null; then
+    local used_mib total_mib gpu_procs
+    used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    total_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    gpu_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]' || echo "0")
+    if [ "${used_mib:-0}" -gt 5000 ] && [ "${gpu_procs:-0}" -eq 0 ]; then
+      log "ERROR: Leaked GPU memory detected (${used_mib}MiB used, 0 processes)."
+      log "Cannot start vLLM. Restart the instance from your provider's dashboard,"
+      log "then re-run: bash rag_demo_system/scripts/provision_server.sh"
+      exit 1
+    fi
+    log "GPU memory OK: ${used_mib}MiB / ${total_mib}MiB used, ${gpu_procs} process(es)"
+  fi
+
+  # Step 5: Remove stale pidfile and socket
   rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
 
-  # Step 5: Start the stack
+  # Step 6: Start the stack
   log "Starting stack via stack.sh"
   cd "$APP_DIR"
   bash scripts/stack.sh up

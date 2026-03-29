@@ -19,17 +19,18 @@ Both paths produce identical benchmark output.
 | **RunPod** (recommended) | Container | ~$1.20-1.50/hr | No (auto-detected, Qdrant runs as binary) | Simple dashboard, reliable SSH, good availability |
 | TensorDock | VM | ~$1.18/hr | Yes (Qdrant runs in Docker) | Real VM, but availability issues |
 | Lambda Cloud | VM | ~$1.29/hr | Yes | Often sold out |
-| Vast.ai | Container | ~$0.80-1.20/hr | No (auto-detected) | Cheapest, variable host quality |
+| Vast.ai | Container | ~$0.80-1.20/hr | No (auto-detected) | Cheapest, variable host quality. Filter by CUDA 13.0+. |
 | Your own server | VM | N/A | Yes | Full control, use for production after benchmarks |
 
 ### 1.2 Create the Instance
 
 **Minimum specs:**
 - **GPU:** 1x A100 80GB (SXM preferred over PCIe for higher memory bandwidth)
+- **CUDA:** 13.0 minimum. Qwen3-TTS (`qwen-tts` pip package) bundles `.so` libraries compiled against CUDA 13. CUDA 12.x will fail with `undefined symbol` errors at import time. Check with `nvidia-smi` (top right shows "CUDA Version").
 - **CPU:** 16 vCPUs recommended (8 minimum; runs ~8 concurrent processes)
 - **RAM:** 64GB+ (128GB recommended)
 - **Disk/Volume:** 500GB+ (models are ~200GB, venvs ~30GB, repo + results need space)
-- **Ports:** expose internal port 8000 (for browser-based voice testing later)
+- **Ports:** expose internal ports 8000 (web UI) and 8787 (vLLM; default 8001 is reserved by RunPod/Vast.ai)
 
 **RunPod setup:**
 1. Create a GPU Pod (not Serverless)
@@ -44,6 +45,15 @@ Both paths produce identical benchmark output.
 1. Deploy a VM: A100 80GB, 16 vCPU, 128GB RAM, 600GB disk
 2. OS: Ubuntu 24 ML Everything (pre-installed NVIDIA drivers, skip driver step)
 3. Request port 8000 in port forwarding
+
+**Vast.ai setup:**
+1. Go to Templates, search for a base Ubuntu/CUDA image (or use the default pytorch template)
+2. Go to Search, filter: GPU Type = A100 SXM 80GB, Max CUDA Version >= 13.0
+3. Pick an instance ($1-1.20/hr typical). Prefer geographically close regions for lower SSH latency.
+4. Disk space: set to 500GB+
+5. Add your SSH public key in Account > SSH Keys before creating the instance
+6. After creation, get the SSH command from the instance dashboard (format: `ssh -p PORT root@IP`)
+7. Port 8001 is reserved by Vast.ai internally; the provision script uses 8787 for vLLM instead
 
 ### 1.3 SSH Access
 
@@ -142,18 +152,40 @@ bash rag_demo_system/scripts/provision_server.sh
 | `No module named 'vllm'` / `qwen: ERROR (spawn error)` | vLLM not installed in backend venv | `.venv/bin/pip install vllm`, then re-run provisioning. Already fixed in latest script. If pip install fails (CUDA mismatch), check `nvidia-smi` CUDA version and install matching vllm: `pip install vllm==0.8.x`. |
 | `does not include supervisorctl section` | supervisord.conf missing control sections | Pull latest (`git pull`) and re-run. Already fixed in latest script. |
 | Qdrant `WARNING: may not have started` | Binary needs a moment longer to start | Check `curl http://localhost:6333/healthz`. If it returns OK, continue. If not: `cat /workspace/qdrant.log` for details. |
+| `undefined symbol` when importing qwen_tts | CUDA version < 13.0. The `qwen-tts` package bundles CUDA 13 `.so` files. | Deploy on a CUDA 13.0+ machine. Check: `nvidia-smi` top right. Cannot be fixed with pip; it is a compiled binary mismatch. |
+| `torch>=2.7` conflicts in other venvs | torch 2.7+ requires CUDA 13 runtime | All venvs except `.venv-qwen3-tts` cap `torch<2.7.0` in their requirements files. Do not remove this cap. |
 
 ### 2.2 Verify Everything Works
 
-After provisioning completes, run the smoke test:
+After provisioning completes:
 
 ```bash
 cd /workspace/leasing/rag_demo_system
-bash 
 
+# 1. Smoke test (checks vLLM, Qdrant, backend, STT, KB)
+bash scripts/smoke_test.sh
+
+# 2. Quick chat test (RAG text path)
+bash scripts/test_chat.sh
+
+# 3. Start Qwen3-TTS (not auto-started; requires CUDA 13)
+.venv/bin/supervisorctl -c scripts/supervisord.conf start qwen3_tts
+
+# 4. Wait ~30s for model load, then check health
+curl -s http://localhost:50003/health | python3 -m json.tool
+
+# 5. Test TTS directly
+curl -s -X POST http://localhost:50003/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Здравствуйте, это тест"}' | python3 -c "
+import sys, json; d=json.load(sys.stdin)
+print(f'Provider: {d.get(\"provider\")}, Audio length: {len(d.get(\"audio_base64\",\"\"))} chars')
+"
+
+# 6. Open UI in browser, select "qwen3_tts" from TTS dropdown, test voice end-to-end
 ```
 
-This checks: UI, backend health, Qdrant indexing, chat stream, sidecar health, vLLM readiness, and VRAM. You should see `=== Smoke test PASSED ===`.
+The smoke test checks: backend health, Qdrant indexing, chat stream, sidecar health, vLLM readiness, and VRAM. You should see `=== Smoke test PASSED ===`.
 
 ---
 
@@ -336,8 +368,10 @@ Based on benchmark numbers + voice quality impressions:
 | Embedding model (multilingual-e5-large) | ~2GB | On CUDA |
 | Reranker (mmarco-mMiniLMv2) | ~1GB | On CUDA |
 | Whisper STT (large-v3) | ~3GB | On CUDA |
-| TTS (vosk_tts) | 0GB | CPU only |
-| **Total** | **~66GB** | **14GB headroom** |
+| Qwen3-TTS (1.7B) | ~3GB | On CUDA, port 50003 |
+| **Total** | **~69GB** | **11GB headroom** |
+
+**PyTorch/CUDA constraint:** All venvs except `.venv-qwen3-tts` pin `torch<2.7.0` (requirements files have explicit caps). This is because `torch>=2.7` requires CUDA 13 runtime, and mixing CUDA versions across venvs causes conflicts. The `qwen-tts` pip package bundles its own torch 2.7+ and CUDA 13 `.so` files, so it needs its own isolated venv (`.venv-qwen3-tts`).
 
 ### 5.3 Post-Benchmark Improvements
 
@@ -345,7 +379,7 @@ Based on benchmark numbers + voice quality impressions:
 |-------|--------|--------|
 | **STT baseline** | Working (whisper on CUDA) | Post-benchmark: replace whisper_server.py with FunAudioLLM SenseVoice official server |
 | **RAG speed** | Fixed (embedding + reranker on CUDA: 350ms total) | Was 1.8s on CPU |
-| **TTS voice quality** | Working (vosk_tts, robotic) | Benchmark tests Qwen3-TTS as alternative |
+| **TTS voice quality** | Qwen3-TTS is the production TTS (97ms latency, excellent Russian, port 50003). Vosk_tts is legacy/robotic, kept as CPU-only fallback. | Select qwen3_tts in UI dropdown. Requires CUDA 13. |
 | **UI button animations** | Fixed (pulse on hold, scale on click) | |
 | **Short voice answers** | Built-in (voice_fast mode: 3-6 sentences) | Activated automatically on voice path |
 | **Streaming responses** | v2 feature | LiveKit/Pipecat migration after benchmark |
@@ -358,6 +392,7 @@ Issues encountered during deployment and their permanent fixes:
 |-------|-----------|-----|------------|
 | **Port 8001 blocked (RunPod)** | RunPod reserves port 8001 internally | Changed vLLM to port 8787 | Yes, in provision script |
 | **vLLM crash-loop leaks GPU memory** | supervisor autorestart=true caused repeated CUDA context leaks | Set autorestart=false, startretries=0. restart_all.sh detects leaked memory and aborts | Yes |
+| **Leaked GPU memory after provision** | provision_server.sh started vLLM, which crashed; CUDA context leaked inside container (cannot nvidia-smi --gpu-reset) | Added GPU leak check to provision_server.sh and stack_cli.py; both abort early with "restart instance" message | Yes |
 | **Leaked GPU memory in container** | CUDA contexts not freed after process crash; container cannot nvidia-smi --gpu-reset | Restart instance from provider dashboard | Only fix |
 | **STT returns 128 bytes (empty)** | Browser base64 audio chunks concatenated as strings instead of decoded+rejoined | Decode each chunk, concatenate raw bytes, re-encode | Yes, in app.py |
 | **TTS Internal Server Error** | vosk_tts API changed: synth() no longer accepts wav_path keyword | Changed to positional arg | Yes |

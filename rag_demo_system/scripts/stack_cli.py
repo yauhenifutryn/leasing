@@ -121,12 +121,40 @@ def _supervisorctl(repo_root: Path, *args: str, check: bool) -> subprocess.Compl
     )
 
 
+def _check_gpu_memory_leak() -> None:
+    """Abort early if GPU memory is leaked (used but no processes)."""
+    if not shutil.which("nvidia-smi"):
+        return
+    try:
+        used = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip().split("\n")[0].strip()
+        procs = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        used_mib = int(used) if used else 0
+        proc_count = len([l for l in procs.splitlines() if l.strip()])
+        if used_mib > 5000 and proc_count == 0:
+            print(
+                f"ERROR: Leaked GPU memory ({used_mib}MiB used, 0 processes).\n"
+                "Cannot start vLLM. Restart the instance from your provider's dashboard,\n"
+                "then re-run this command.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+    except (ValueError, FileNotFoundError):
+        pass
+
+
 def ensure_supervisor_running(repo_root: Path) -> None:
     state_dir = repo_root / "rag_demo_system" / ".state"
     state_dir.mkdir(parents=True, exist_ok=True)
     status = _supervisorctl(repo_root, "status", check=False)
     if status.returncode == 0:
         return
+    _check_gpu_memory_leak()
     pidfile = state_dir / "supervisord.pid"
     pidfile.unlink(missing_ok=True)
     subprocess.run([_supervisord_bin(repo_root), "-c", _supervisor_conf(repo_root)], check=True)
