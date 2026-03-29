@@ -50,26 +50,22 @@ if nvidia-smi &>/dev/null; then
   GPU_PROCS=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]' || echo "0")
   if [ "$USED_MIB" -gt 5000 ] && [ "$GPU_PROCS" -eq 0 ]; then
     echo ""
-    echo "[restart]   ERROR: ${USED_MIB}MiB GPU memory used but no GPU processes found!"
-    echo "[restart]   This is leaked CUDA memory from crashed processes."
-    echo "[restart]   The container cannot reset the GPU."
+    echo "[restart]   *** LEAKED GPU MEMORY DETECTED ***"
+    echo "[restart]   ${USED_MIB}MiB used but no GPU processes running."
+    echo "[restart]   Cannot continue. vLLM needs ~60GB free to start."
     echo ""
-    echo "[restart]   OPTIONS:"
-    echo "[restart]   1. Restart the Vast.ai/RunPod instance from the dashboard (fixes the leak)"
-    echo "[restart]   2. Continue anyway with reduced vLLM memory (may OOM or fail)"
-    echo ""
-    read -rp "[restart]   Continue anyway? (y/N): " CONTINUE
-    if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
-      echo "[restart]   Aborted. Restart the instance and try again."
-      exit 1
-    fi
-    echo "[restart]   Continuing with reduced memory..."
+    echo "[restart]   FIX: Restart the instance from your provider's dashboard"
+    echo "[restart]         (Vast.ai: Stop then Start. RunPod: Restart pod.)"
+    echo "[restart]         Then re-run this script."
+    exit 1
   fi
 
-  # Check if enough free memory for vLLM (needs ~60GB for Qwen3-30B)
   if [ "$FREE_MIB" -lt 60000 ]; then
-    echo "[restart]   WARNING: Only ${FREE_MIB}MiB free. vLLM needs ~60GB."
-    echo "[restart]   vLLM may fail to start. Consider restarting the instance."
+    echo ""
+    echo "[restart]   *** NOT ENOUGH GPU MEMORY ***"
+    echo "[restart]   Only ${FREE_MIB}MiB free. vLLM needs ~60GB."
+    echo "[restart]   FIX: Restart the instance from your provider's dashboard."
+    exit 1
   fi
 fi
 
