@@ -181,26 +181,18 @@ main() {
   BENCH_PROFILE=baseline bash "$SMOKE_TEST"
 
   # ===========================================================================
-  # STEP 1: RAG Comparison (our_rag baseline vs dify_rag)
+  # STEP 1: Baseline RAG benchmark
   # ===========================================================================
   log "============================================="
-  log "  STEP 1: RAG Comparison"
-  log "  baseline (our_rag) vs dify_rag"
+  log "  STEP 1: Baseline RAG benchmark (our_rag)"
+  log "  Dify RAG comparison skipped (no DIFY_API_KEY configured)"
   log "============================================="
 
   RESULT_BASELINE=$(run_benchmark "baseline")
-  RESULT_DIFY=$(run_benchmark "dify_rag")
-  run_comparison "$RESULT_BASELINE" "$RESULT_DIFY" "rag"
-  print_scp "step1" "$RESULT_BASELINE" "$RESULT_DIFY"
+  print_scp "step1" "$RESULT_BASELINE"
 
-  # Prompt the user to declare the RAG winner after reviewing the comparison
-  # table. The conditional logic for Step 2 and Step 3 depends on this input.
-  log ""
-  log "Review the RAG comparison table above."
-  log "Type 'baseline' if our RAG won, or 'dify_rag' if Dify RAG won."
-  read -rp "[orch] RAG winner (baseline/dify_rag): " WINNING_RAG
-  WINNING_RAG="${WINNING_RAG:-baseline}"
-  log "RAG winner selected: $WINNING_RAG"
+  WINNING_RAG="baseline"
+  log "RAG winner: baseline (our_rag) -- Dify comparison skipped"
 
   # BEST_SPLIT_RESULT tracks the best split pipeline result seen so far.
   # It starts as the baseline and is updated when a better stack wins.
