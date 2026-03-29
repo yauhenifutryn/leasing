@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 MODEL_PATH = os.getenv("QWEN3_OMNI_MODEL_PATH", "Qwen/Qwen3-Omni-30B-A3B-Instruct")
 SPEAKER = os.getenv("QWEN3_OMNI_SPEAKER", "Chelsie")
-ATTN_IMPL = os.getenv("QWEN3_OMNI_ATTN_IMPL", "flash_attention_2")
+ATTN_IMPL = os.getenv("QWEN3_OMNI_ATTN_IMPL", "sdpa")
 
 # Grounding system prompt in Russian (D-05). Uses {context_block} placeholder.
 SYSTEM_PROMPT_TEMPLATE = (
