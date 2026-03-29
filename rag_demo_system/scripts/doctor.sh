@@ -162,20 +162,25 @@ echo "=== 5. Voice sidecars ==="
 
 check_sidecar() {
   local name="$1" port="$2" prog="$3"
-  CODE=$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" "http://localhost:$port/health" 2>/dev/null || echo "000")
-  if [ "$CODE" = "200" ]; then
-    ok "$name :$port"
+  HEALTH=$(curl -s --max-time 5 "http://localhost:$port/health" 2>/dev/null || echo "")
+  if [ -n "$HEALTH" ]; then
+    IS_OK=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null || echo "")
+    if [ "$IS_OK" = "True" ]; then
+      ok "$name :$port"
+    else
+      REASON=$(echo "$HEALTH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('reason','unknown'))" 2>/dev/null || echo "unknown")
+      fail "$name :$port responding but not ready: $REASON"
+    fi
   else
-    # Check if supervisor even has it configured to run
     if [ "$SUPERVISOR_OK" = true ]; then
       STATUS=$("$SUPERVISORCTL" -c "$CONF" status "$prog" 2>/dev/null | awk '{print $2}' || echo "UNKNOWN")
       if [ "$STATUS" = "STOPPED" ]; then
-        info "$name :$port not started (STOPPED in supervisor, may need STACK_*_CMD in .env)"
+        info "$name :$port not started (STOPPED in supervisor)"
       else
-        fail "$name :$port (HTTP $CODE, supervisor status: $STATUS)"
+        fail "$name :$port not responding (supervisor: $STATUS)"
       fi
     else
-      fail "$name :$port (HTTP $CODE)"
+      fail "$name :$port not responding"
     fi
   fi
 }
