@@ -158,19 +158,27 @@ echo "[restart] Step 9: Starting voice sidecars..."
 "$SUPERVISORCTL" -c "$CONF" start cosyvoice 2>/dev/null || true
 sleep 10
 
-# --- Step 10: Health checks ---
+# --- Step 10: Start Qwen3-TTS ---
 echo ""
-echo "[restart] Step 10: Health checks..."
+echo "[restart] Step 10: Starting Qwen3-TTS..."
+"$SUPERVISORCTL" -c "$CONF" start qwen3_tts 2>/dev/null || true
+echo "[restart]   Waiting 45s for TTS model load..."
+sleep 45
+
+# --- Step 11: Health checks ---
+echo ""
+echo "[restart] Step 11: Health checks..."
 echo -n "[restart]   Backend:    "; curl -s --max-time 5 http://localhost:8000/api/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   vLLM:       "; curl -s --max-time 5 http://localhost:$VLLM_PORT/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Qdrant:     "; curl -s --max-time 5 http://localhost:6333/healthz >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   SenseVoice: "; curl -s --max-time 5 http://localhost:50000/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   CosyVoice:  "; curl -s --max-time 5 http://localhost:50001/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Whisper:    "; curl -s --max-time 5 http://localhost:50002/health >/dev/null && echo "OK" || echo "FAILED"
+echo -n "[restart]   Qwen3-TTS:  "; curl -s --max-time 5 http://localhost:50003/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('OK' if d.get('ok') else f'FAILED ({d.get(\"reason\",\"unknown\")})')" 2>/dev/null || echo "FAILED"
 
 echo ""
 echo "[restart] ============================================="
 echo "[restart]   Restart complete"
-echo "[restart]   Run: bash scripts/smoke_test.sh"
-echo "[restart]   Or:  bash scripts/test_chat.sh"
+echo "[restart]   Run: bash scripts/doctor.sh   (diagnose)"
+echo "[restart]   Or:  bash scripts/smoke_test.sh"
 echo "[restart] ============================================="

@@ -155,37 +155,39 @@ bash rag_demo_system/scripts/provision_server.sh
 | `undefined symbol` when importing qwen_tts | CUDA version < 13.0. The `qwen-tts` package bundles CUDA 13 `.so` files. | Deploy on a CUDA 13.0+ machine. Check: `nvidia-smi` top right. Cannot be fixed with pip; it is a compiled binary mismatch. |
 | `torch>=2.7` conflicts in other venvs | torch 2.7+ requires CUDA 13 runtime | All venvs except `.venv-qwen3-tts` cap `torch<2.7.0` in their requirements files. Do not remove this cap. |
 
-### 2.2 Verify Everything Works
+### 2.2 After Provisioning or Instance Restart
 
-After provisioning completes:
+**One command does everything:**
 
 ```bash
-cd /workspace/leasing/rag_demo_system
-
-# 1. Smoke test (checks vLLM, Qdrant, backend, STT, KB)
-bash scripts/smoke_test.sh
-
-# 2. Quick chat test (RAG text path)
-bash scripts/test_chat.sh
-
-# 3. Start Qwen3-TTS (not auto-started; requires CUDA 13)
-.venv/bin/supervisorctl -c scripts/supervisord.conf start qwen3_tts
-
-# 4. Wait ~30s for model load, then check health
-curl -s http://localhost:50003/health | python3 -m json.tool
-
-# 5. Test TTS directly
-curl -s -X POST http://localhost:50003/synthesize \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Здравствуйте, это тест"}' | python3 -c "
-import sys, json; d=json.load(sys.stdin)
-print(f'Provider: {d.get(\"provider\")}, Audio length: {len(d.get(\"audio_base64\",\"\"))} chars')
-"
-
-# 6. Open UI in browser, select "qwen3_tts" from TTS dropdown, test voice end-to-end
+bash /workspace/leasing/rag_demo_system/scripts/restart_all.sh
 ```
 
-The smoke test checks: backend health, Qdrant indexing, chat stream, sidecar health, vLLM readiness, and VRAM. You should see `=== Smoke test PASSED ===`.
+This handles the full startup sequence: GPU leak check, Qdrant, supervisor, vLLM (waits for model load), voice sidecars, Qwen3-TTS, and health checks for all services. Takes 2-5 minutes.
+
+**Then verify:**
+
+```bash
+bash /workspace/leasing/rag_demo_system/scripts/smoke_test.sh
+```
+
+**If something is broken:**
+
+```bash
+bash /workspace/leasing/rag_demo_system/scripts/doctor.sh
+```
+
+The doctor diagnoses all components (GPU, CUDA version, Qdrant, supervisor, venvs, torch versions, service health) and auto-fixes what it can.
+
+### Workflow summary
+
+| Situation | Command |
+|-----------|---------|
+| First time setup | `bash rag_demo_system/scripts/provision_server.sh` |
+| After instance restart | `bash rag_demo_system/scripts/restart_all.sh` |
+| After git pull with changes | `bash rag_demo_system/scripts/restart_all.sh` |
+| Verify everything works | `bash rag_demo_system/scripts/smoke_test.sh` |
+| Something is broken | `bash rag_demo_system/scripts/doctor.sh` |
 
 ---
 
