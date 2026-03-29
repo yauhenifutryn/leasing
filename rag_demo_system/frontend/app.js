@@ -359,6 +359,10 @@ function playPcm(int16, sampleRate = 24000) {
   nextPlayTime += buffer.duration;
 }
 
+let voiceT0 = 0; // timestamp when user stops talking (commit sent)
+let voiceFirstText = false;
+let voiceFirstAudio = false;
+
 function handleVoiceEvent(evt) {
   if (evt.type === "session.ready") {
     setSessionId(evt.session_id);
@@ -370,15 +374,28 @@ function handleVoiceEvent(evt) {
   }
   if (evt.type === "conversation.item.input_audio_transcription.completed") {
     $("#transcript").textContent = evt.transcription || evt.transcript || "";
+    const sttMs = Date.now() - voiceT0;
+    setVoiceStatus(`STT: ${sttMs}ms`, "warn");
   }
   if (evt.type === "assistant_response") {
     // Session management only (barge-in state). Text display handled by output_text.delta.
   }
   if (evt.type === "response.output_text.delta") {
-    $("#assistantVoice").textContent = evt.delta || "";
+    // Append for streaming (multiple sentences arrive as separate deltas)
+    $("#assistantVoice").textContent += evt.delta || "";
+    if (!voiceFirstText) {
+      voiceFirstText = true;
+      const ttftMs = Date.now() - voiceT0;
+      setVoiceStatus(`First text: ${ttftMs}ms`, "warn");
+    }
   }
   if (evt.type === "response.output_audio.delta" && evt.delta) {
     playPcm(b64ToInt16(evt.delta), evt.sample_rate_hz || 24000);
+    if (!voiceFirstAudio) {
+      voiceFirstAudio = true;
+      const ttfaMs = Date.now() - voiceT0;
+      setVoiceStatus(`First audio: ${ttfaMs}ms`, "good");
+    }
   }
   if (evt.type === "interrupt") {
     $("#assistantVoice").textContent = "";
@@ -386,7 +403,8 @@ function handleVoiceEvent(evt) {
   }
   if (evt.type === "response.done") {
     renderChunks(evt.used_knowledge || []);
-    setVoiceStatus("Voice idle", "good");
+    const totalMs = Date.now() - voiceT0;
+    setVoiceStatus(`Done: ${totalMs}ms total`, "good");
   }
   if (evt.type === "warning") {
     setVoiceStatus(evt.message || "Voice warning", "warn");
@@ -444,6 +462,10 @@ function stopTalking() {
   talking = false;
   $("#btnVoiceTalk").classList.remove("talking");
   setVoiceStatus("Processing...", "warn");
+  voiceT0 = Date.now();
+  voiceFirstText = false;
+  voiceFirstAudio = false;
+  $("#assistantVoice").textContent = "";
   voiceSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
 }
 
