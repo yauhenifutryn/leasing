@@ -482,8 +482,8 @@ if __name__ == "__main__":
     # Read BENCH_* vars (with fallbacks from CLI defaults or env)
     backend = os.getenv("BENCH_BACKEND", "our_rag")
     brain_model = os.getenv("BENCH_BRAIN_MODEL", "Qwen/Qwen3-30B-A3B")
-    stt_provider = os.getenv("BENCH_STT_PROVIDER", "sensevoice")
-    tts_provider = os.getenv("BENCH_TTS_PROVIDER", "cosyvoice")
+    stt_provider = os.getenv("BENCH_STT_PROVIDER", "whisper")
+    tts_provider = os.getenv("BENCH_TTS_PROVIDER", "qwen3_tts")
 
     # Determine output path
     if args.output is not None:
