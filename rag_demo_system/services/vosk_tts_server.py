@@ -28,7 +28,7 @@ class VoskTtsSynthesizer:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             wav_path = Path(temp_file.name)
         try:
-            self._synth.synth(text, wav_path=str(wav_path))
+            self._synth.synth(text, str(wav_path))
             audio_bytes = wav_path.read_bytes()
             if audio_bytes[:44].startswith(b"RIFF"):
                 audio_bytes = audio_bytes[44:]
