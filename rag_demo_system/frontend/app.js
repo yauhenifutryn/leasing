@@ -471,6 +471,13 @@ async function connectVoice() {
 
 function startTalking() {
   if (!voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) return;
+  // Interrupt assistant if still speaking
+  if (playCtx && nextPlayTime > playCtx.currentTime) {
+    playCtx.close();
+    playCtx = null;
+    nextPlayTime = 0;
+    voiceSocket.send(JSON.stringify({ type: "response.cancel" }));
+  }
   talking = true;
   $("#assistantVoice").textContent = "";
   $("#btnVoiceTalk").classList.add("talking");
