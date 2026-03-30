@@ -18,13 +18,8 @@ class SileroTTSSynthesizer:
     def __init__(
         self, speaker: str, sample_rate: int, model_variant: str = "v4_ru", speaker_pt: str | None = None
     ) -> None:
-        self._model, _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-models",
-            model="silero_tts",
-            language="ru",
-            speaker=model_variant,
-            trust_repo=True,
-        )
+        from silero import silero_tts
+        self._model, _ = silero_tts(language="ru", speaker=model_variant)
         self._model.to(torch.device("cpu"))
         self._speaker = speaker
         self._speaker_embedding: torch.Tensor | None = None
@@ -51,22 +46,7 @@ class SileroTTSSynthesizer:
                 put_accent=True,
                 put_yo=True,
             )
-        # Clean up v4_ru echo/reverb: high-pass filter + normalization
-        import numpy as np
-        audio_np = audio.detach().cpu().numpy()
-        # High-pass filter at 80Hz to remove low-frequency reverb
-        if len(audio_np) > 2:
-            alpha = 0.98  # cutoff ~80Hz at 24kHz
-            filtered = np.zeros_like(audio_np)
-            filtered[0] = audio_np[0]
-            for i in range(1, len(audio_np)):
-                filtered[i] = alpha * (filtered[i - 1] + audio_np[i] - audio_np[i - 1])
-            audio_np = filtered
-        # Normalize to prevent clipping
-        peak = np.abs(audio_np).max()
-        if peak > 0:
-            audio_np = audio_np / peak * 0.95
-        pcm16 = (audio_np * 32767).astype(np.int16).tobytes()
+        pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
         return pcm16, self._sample_rate
 
 
@@ -114,7 +94,7 @@ def create_unavailable_app(reason: str) -> FastAPI:
 
 
 def _build_default_app() -> FastAPI:
-    speaker = (os.getenv("SILERO_TTS_SPEAKER") or "eugene").strip()
+    speaker = (os.getenv("SILERO_TTS_SPEAKER") or "aidar").strip()
     model_variant = (os.getenv("SILERO_TTS_MODEL") or "v4_ru").strip()
     sample_rate = int(os.getenv("SILERO_TTS_SAMPLE_RATE") or "24000")
     speaker_pt = os.getenv("SILERO_TTS_SPEAKER_PT")
