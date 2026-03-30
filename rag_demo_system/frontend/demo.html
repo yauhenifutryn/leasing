@@ -168,7 +168,7 @@
       <div class="current-response" id="currentResponse"></div>
 
       <div class="mode-toggle">
-        <button id="btnMode" onclick="toggleMode()" disabled>Режим: Нажми и говори</button>
+        <button id="btnMode" onclick="toggleMode()">Режим: Нажми и говори</button>
       </div>
 
       <div class="controls">
@@ -317,10 +317,6 @@
               : `Готово: ${totalMs}ms`,
             "good"
           );
-          // Enable VAD toggle after first real response (consent flow done)
-          if (vt.stt_ms !== undefined && $("#btnMode").disabled) {
-            $("#btnMode").disabled = false;
-          }
         } else {
           setStatus("Готов к разговору", "good");
         }

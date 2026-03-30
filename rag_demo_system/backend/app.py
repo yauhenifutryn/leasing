@@ -882,10 +882,40 @@ async def voice_ws(websocket: WebSocket) -> None:
         })
 
     # ------------------------------------------------------------------
-    # Helper: wait for next voice utterance and return transcript text
+    # Shared transcript queue: both push-to-talk commit and VAD speech-end
+    # push transcribed text here. _wait_for_speech reads from it.
+    # ------------------------------------------------------------------
+    _speech_queue: asyncio.Queue[str] = asyncio.Queue()
+
+    # ------------------------------------------------------------------
+    # Helper: transcribe audio and push to speech queue
+    # ------------------------------------------------------------------
+    async def _transcribe_and_enqueue(audio_b64: str) -> None:
+        try:
+            transcript = transcribe_audio(audio_b64, session_id=session_id)
+        except Exception:  # noqa: BLE001
+            return
+        text = (transcript.get("text") or "").strip()
+        if text:
+            await websocket.send_json({
+                "type": "conversation.item.input_audio_transcription.completed",
+                "session_id": session_id,
+                "provider": transcript.get("provider"),
+                "transcription": text,
+            })
+            await _speech_queue.put(text)
+
+    # ------------------------------------------------------------------
+    # Helper: wait for next voice utterance (works with both modes)
     # ------------------------------------------------------------------
     async def _wait_for_speech() -> str:
         while True:
+            # Check if VAD already pushed something
+            try:
+                return _speech_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+
             event = await websocket.receive_json()
             event_type = event.get("type")
             if event_type == "session.init":
@@ -898,7 +928,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                     voice_sessions[session_id] = session
                 continue
             elif event_type == "session.update":
-                # Handle VAD toggle even during consent flow
+                session.backend = _selected_backend(event.get("backend"))
                 if "vad_mode" in event:
                     vad_enabled = bool(event["vad_mode"])
                     if vad_enabled and vad is None:
@@ -906,31 +936,40 @@ async def voice_ws(websocket: WebSocket) -> None:
                         vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
                     if not vad_enabled and vad is not None:
                         vad.reset()
+                await websocket.send_json({
+                    "type": "session.updated",
+                    "session_id": session_id,
+                    "backend": session.backend,
+                    "vad_mode": vad_enabled,
+                })
                 continue
             elif event_type == "input_audio_buffer.append":
                 audio = event.get("audio") or ""
                 if audio:
                     raw = _b64mod.b64decode(audio)
-                    await audio_adapter.handle_audio_message(raw)
+                    # Always accumulate for push-to-talk
+                    audio_chunks.append(_b64mod.b64encode(raw).decode())
+                    # VAD processing
+                    if vad_enabled and vad is not None:
+                        was_speaking = vad.is_speaking
+                        speech_audio = vad.feed(raw)
+                        if speech_audio is not None:
+                            vad_b64 = _b64mod.b64encode(speech_audio).decode()
+                            audio_chunks.clear()
+                            await _transcribe_and_enqueue(vad_b64)
             elif event_type == "input_audio_buffer.commit":
                 raw_audio = b"".join(_b64mod.b64decode(c) for c in audio_chunks)
                 audio_chunks.clear()
                 if not raw_audio:
                     continue
                 audio_b64 = _b64mod.b64encode(raw_audio).decode()
-                try:
-                    transcript = transcribe_audio(audio_b64, session_id=session_id)
-                except Exception:  # noqa: BLE001
-                    continue
-                text = (transcript.get("text") or "").strip()
-                if text:
-                    await websocket.send_json({
-                        "type": "conversation.item.input_audio_transcription.completed",
-                        "session_id": session_id,
-                        "provider": transcript.get("provider"),
-                        "transcription": text,
-                    })
-                    return text
+                await _transcribe_and_enqueue(audio_b64)
+
+            # Check queue after processing event
+            try:
+                return _speech_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                continue
 
     # ------------------------------------------------------------------
     # Hardcoded consent flow (runs once at start)
