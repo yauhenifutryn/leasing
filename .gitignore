@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv*/
 .venv_dedup/
 env/
 venv/
@@ -52,5 +53,13 @@ demo_ui/__pycache__/
 
 # Archives
 *.zip
+
+# Voice pipeline runtime artifacts
+voices/*.pt
+voices/*.wav
+voices/catalog.json
+models/
+*.log
+.state/
 
 .worktrees/
