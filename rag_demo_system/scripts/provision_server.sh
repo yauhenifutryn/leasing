@@ -240,6 +240,9 @@ download_models() {
   log "  Reranker model (cross-encoder/mmarco-mMiniLMv2-L12-H384-v1)"
   "$APP_DIR/.venv/bin/python" -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')"
 
+  log "  Whisper large-v3 (faster-whisper STT model)"
+  "$APP_DIR/.venv-voice-oss/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
+
   log "  Silero VAD model (~2MB)"
   mkdir -p "$APP_DIR/models"
   curl -fsSL "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.jit" \
