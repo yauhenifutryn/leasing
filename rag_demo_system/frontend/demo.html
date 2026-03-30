@@ -285,6 +285,7 @@
 
     function handleEvent(evt) {
       if (evt.type === "session.ready") {
+        localStorage.setItem("voice_session_id", evt.session_id);
         setStatus("Готов к разговору", "good");
         $("#btnTalk").disabled = false;
       }
@@ -351,14 +352,11 @@
         };
         source.connect(recorderNode);
 
-        // Send session config
+        // Send session init with stored ID (for reconnection) or let server create new
+        const savedSessionId = localStorage.getItem("voice_session_id");
         ws.send(JSON.stringify({
-          type: "session.update",
-          backend: "our_rag",
-          voice_provider: "local",
-          brain_model: "Qwen/Qwen3.5-35B-A3B-FP8",
-          stt_provider: "whisper",
-          tts_provider: "silero_tts",
+          type: "session.init",
+          session_id: savedSessionId || null,
         }));
       };
       ws.onmessage = (msg) => handleEvent(JSON.parse(msg.data));

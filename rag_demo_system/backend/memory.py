@@ -29,7 +29,7 @@ def build_memory_block(transcript: list[dict[str, Any]], max_turns: int) -> str:
         return ""
 
     return (
-        "Контекст диалога (для понимания запроса, не как источник фактов):\n"
+        "Контекст диалога (используй для продолжения темы и уточняющих вопросов):\n"
         + "\n".join(lines)
         + "\n\n"
     )

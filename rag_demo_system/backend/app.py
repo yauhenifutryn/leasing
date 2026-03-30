@@ -755,7 +755,12 @@ async def _stream_voice_response(
 @app.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
     await websocket.accept()
-    session_id = str(uuid.uuid4())
+    # Accept client-provided session_id for reconnection, or generate new one
+    first_msg = await websocket.receive_json()
+    if first_msg.get("type") == "session.init" and first_msg.get("session_id"):
+        session_id = str(first_msg["session_id"])
+    else:
+        session_id = str(uuid.uuid4())
     session = VoiceSession(session_id=session_id, backend="our_rag")
     voice_sessions[session_id] = session
     audio_chunks: list[str] = []
