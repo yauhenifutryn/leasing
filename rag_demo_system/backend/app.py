@@ -43,13 +43,22 @@ app = FastAPI(title="Micro Leasing RAG Demo")
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
 
+_shared_vad: SileroVAD | None = None
+
+
 @app.on_event("startup")
-async def _warmup_rag() -> None:
-    """Pre-load embedding model + reranker on startup so first voice request is fast."""
+async def _warmup() -> None:
+    """Pre-load models on startup so first request is fast."""
+    global _shared_vad
     try:
         engine.retrieve("warmup", fast=True, voice_fast=True)
     except Exception:  # noqa: BLE001
-        pass  # KB might not be indexed yet; model is still loaded into GPU
+        pass
+    try:
+        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+        _shared_vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app.add_middleware(
@@ -937,11 +946,9 @@ async def voice_ws(websocket: WebSocket) -> None:
                 session.backend = _selected_backend(event.get("backend"))
                 if "vad_mode" in event:
                     vad_enabled = bool(event["vad_mode"])
-                    print(f"[wait_speech] VAD SET TO {vad_enabled}", flush=True)
-                    if vad_enabled and vad is None:
-                        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
-                        vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
-                        print(f"[wait_speech] VAD MODEL LOADED", flush=True)
+                    if vad_enabled and vad is None and _shared_vad is not None:
+                        vad = _shared_vad
+                        vad.reset()
                     if not vad_enabled and vad is not None:
                         vad.reset()
                 await websocket.send_json({
@@ -1072,11 +1079,9 @@ async def voice_ws(websocket: WebSocket) -> None:
                 # VAD mode toggle
                 if "vad_mode" in event:
                     vad_enabled = bool(event["vad_mode"])
-                    print(f"[voice_ws] VAD mode: {vad_enabled}", flush=True)
-                    if vad_enabled and vad is None:
-                        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
-                        vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
-                        print(f"[voice_ws] VAD initialized (silence_ms={silence_ms})", flush=True)
+                    if vad_enabled and vad is None and _shared_vad is not None:
+                        vad = _shared_vad
+                        vad.reset()
                     if not vad_enabled and vad is not None:
                         vad.reset()
                 await websocket.send_json(
