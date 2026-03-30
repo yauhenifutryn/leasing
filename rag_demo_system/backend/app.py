@@ -923,6 +923,8 @@ async def voice_ws(websocket: WebSocket) -> None:
 
             event = await websocket.receive_json()
             event_type = event.get("type")
+            if event_type != "input_audio_buffer.append":
+                print(f"[wait_speech] event={event_type} vad={vad_enabled} chunks={len(audio_chunks)}", flush=True)
             if event_type == "session.init":
                 if event.get("session_id"):
                     old_id = session_id
