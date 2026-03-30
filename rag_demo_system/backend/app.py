@@ -756,12 +756,7 @@ async def _stream_voice_response(
 @app.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
     await websocket.accept()
-    # Accept client-provided session_id for reconnection, or generate new one
-    first_msg = await websocket.receive_json()
-    if first_msg.get("type") == "session.init" and first_msg.get("session_id"):
-        session_id = str(first_msg["session_id"])
-    else:
-        session_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
     session = VoiceSession(session_id=session_id, backend="our_rag")
     voice_sessions[session_id] = session
     audio_chunks: list[str] = []
@@ -858,14 +853,23 @@ async def voice_ws(websocket: WebSocket) -> None:
         while True:
             event = await websocket.receive_json()
             event_type = event.get("type")
-            if event_type == "session.update":
+            if event_type == "session.init":
+                # Client reconnecting with stored session_id
+                if event.get("session_id"):
+                    old_id = session_id
+                    session_id = str(event["session_id"])
+                    session.session_id = session_id
+                    voice_sessions.pop(old_id, None)
+                    voice_sessions[session_id] = session
+                continue
+            elif event_type == "session.update":
                 session.backend = _selected_backend(event.get("backend"))
                 # VAD mode toggle
                 if "vad_mode" in event:
                     vad_enabled = bool(event["vad_mode"])
                     if vad_enabled and vad is None:
                         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
-                        vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
+                        vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
                     if not vad_enabled and vad is not None:
                         vad.reset()
                 await websocket.send_json(
@@ -894,6 +898,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                 session.interrupted = True
                 await websocket.send_json({"type": "response.cancelled", "session_id": session_id})
     except WebSocketDisconnect:
+        pass
+    finally:
         voice_sessions.pop(session_id, None)
 
 
