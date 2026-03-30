@@ -660,6 +660,8 @@ async def _stream_voice_response(
             for event in stream:
                 if session.interrupted:
                     break
+                # Yield to event loop so barge-in listener can process audio
+                await asyncio.sleep(0)
                 choice = (event.get("choices") or [{}])[0]
                 token = (choice.get("delta") or {}).get("content") or ""
                 if not token:
@@ -732,6 +734,8 @@ async def _stream_voice_response(
     session.assistant_speaking = False
 
     full_answer = " ".join(all_sentences)
+    if session.interrupted and full_answer:
+        full_answer += " [прервано клиентом]"
     if full_answer:
         chat_session = state.get(session_id) or state.create(session_id)
         _append_turn(chat_session, message, full_answer, settings.app.memory_turns)
@@ -813,7 +817,8 @@ async def voice_ws(websocket: WebSocket) -> None:
             return
         for action in session.on_transcript_final(text):
             await websocket.send_json(action)
-        await _stream_voice_response(
+
+        response_coro = _stream_voice_response(
             websocket=websocket,
             session=session,
             session_id=session_id,
@@ -822,6 +827,71 @@ async def voice_ws(websocket: WebSocket) -> None:
             t_stt_done=t_stt_done,
             question_id=question_id,
         )
+
+        if not (vad_enabled and vad is not None):
+            # PTT mode: original blocking behavior
+            await response_coro
+            return
+
+        # ---- VAD mode: concurrent barge-in listener ----
+        # While the response streams (LLM + TTS), keep reading WebSocket
+        # events so incoming audio is fed to VAD.  When VAD detects
+        # speech start during assistant playback, set session.interrupted
+        # (already checked by both llm_producer and tts_consumer).
+        response_task = asyncio.create_task(response_coro)
+
+        async def _barge_in_listener() -> None:
+            """Read WebSocket events during response for barge-in."""
+            try:
+                while not response_task.done():
+                    event = await websocket.receive_json()
+                    etype = event.get("type")
+                    if etype == "input_audio_buffer.append":
+                        audio = event.get("audio", "")
+                        if not audio:
+                            continue
+                        raw = _b64mod.b64decode(audio)
+                        audio_chunks.append(_b64mod.b64encode(raw).decode())
+                        was_speaking = vad.is_speaking
+                        vad.feed(raw)
+                        if (
+                            not was_speaking
+                            and vad.is_speaking
+                            and session.assistant_speaking
+                        ):
+                            session.interrupted = True
+                            print(
+                                "[BARGE-IN] speech detected during response",
+                                flush=True,
+                            )
+                            await websocket.send_json({
+                                "type": "interrupt",
+                                "session_id": session_id,
+                            })
+                            return
+                    elif etype == "response.cancel":
+                        session.interrupted = True
+                        session.assistant_speaking = False
+                        print(
+                            "[BARGE-IN] response.cancel received",
+                            flush=True,
+                        )
+                        await websocket.send_json({
+                            "type": "interrupt",
+                            "session_id": session_id,
+                        })
+                        return
+            except (WebSocketDisconnect, RuntimeError):
+                session.interrupted = True
+
+        listener_task = asyncio.create_task(_barge_in_listener())
+        await response_task
+        if not listener_task.done():
+            listener_task.cancel()
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
 
     # ------------------------------------------------------------------
     # Audio adapter callback: receives raw PCM16 for every chunk.
