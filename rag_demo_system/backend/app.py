@@ -832,6 +832,10 @@ async def voice_ws(websocket: WebSocket) -> None:
         # -- VAD processing --
         was_speaking = vad.is_speaking
         speech_audio = vad.feed(raw)
+        if not was_speaking and vad.is_speaking:
+            print(f"[VAD] speech_start", flush=True)
+        if was_speaking and not vad.is_speaking and speech_audio is not None:
+            print(f"[VAD] speech_end ({len(speech_audio)} bytes)", flush=True)
 
         # Barge-in: user started speaking while assistant is streaming TTS
         if not was_speaking and vad.is_speaking and session.assistant_speaking:
@@ -1064,9 +1068,11 @@ async def voice_ws(websocket: WebSocket) -> None:
                 # VAD mode toggle
                 if "vad_mode" in event:
                     vad_enabled = bool(event["vad_mode"])
+                    print(f"[voice_ws] VAD mode: {vad_enabled}", flush=True)
                     if vad_enabled and vad is None:
                         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
                         vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
+                        print(f"[voice_ws] VAD initialized (silence_ms={silence_ms})", flush=True)
                     if not vad_enabled and vad is not None:
                         vad.reset()
                 await websocket.send_json(
