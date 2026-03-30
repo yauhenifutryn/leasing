@@ -4,7 +4,10 @@ set -euo pipefail
 # =============================================================================
 # provision_server.sh
 #
-# Full provisioning for H100 NVL 94GB (Vast.ai / RunPod).
+# Full provisioning for GPU servers (H100 NVL 94GB recommended).
+# Works on: clean Ubuntu 22.04/24.04, Vast.ai, RunPod, Hetzner, Lambda,
+#           or any bare-metal/VM with an NVIDIA GPU.
+#
 # Winning stack: Whisper STT + Silero TTS + Qwen3.5-35B-A3B-FP8.
 # Run once after the VM is created. Idempotent: safe to re-run.
 #
@@ -65,26 +68,82 @@ install_apt_packages() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 2: Check for NVIDIA driver; install if missing
+# Step 2: Ensure full NVIDIA stack (driver + CUDA toolkit + cuDNN)
+#   On Vast.ai/RunPod containers: already present, just verify.
+#   On clean Ubuntu bare-metal: install everything from scratch.
 # ---------------------------------------------------------------------------
+_is_container() {
+  [ -f /.dockerenv ] || grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null
+}
+
+_install_cuda_toolkit() {
+  # Install CUDA 12.8 toolkit + cuDNN via NVIDIA's official apt repo.
+  # This is the universal method that works on Ubuntu 22.04 and 24.04.
+  # Ref: https://developer.nvidia.com/cuda-downloads
+  local DISTRO
+  DISTRO=$(. /etc/os-release && echo "${ID}${VERSION_ID}" | tr -d '.')
+  # e.g. ubuntu2204 or ubuntu2404
+
+  log "Adding NVIDIA CUDA apt repository for $DISTRO"
+  local KEYRING="/usr/share/keyrings/cuda-archive-keyring.gpg"
+  curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/${DISTRO}/x86_64/cuda-keyring_1.1-1_all.deb" \
+    -o /tmp/cuda-keyring.deb
+  sudo dpkg -i /tmp/cuda-keyring.deb
+  rm -f /tmp/cuda-keyring.deb
+  sudo apt-get update -y
+
+  log "Installing CUDA toolkit 12.8 + cuDNN"
+  sudo apt-get install -y cuda-toolkit-12-8 libcudnn9-cuda-12 libcudnn9-dev-cuda-12
+
+  # Add CUDA to PATH and LD_LIBRARY_PATH for this session and future logins
+  local CUDA_PROFILE="/etc/profile.d/cuda.sh"
+  if [ ! -f "$CUDA_PROFILE" ]; then
+    log "Writing CUDA environment to $CUDA_PROFILE"
+    sudo tee "$CUDA_PROFILE" > /dev/null <<'CUDAEOF'
+export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+CUDAEOF
+  fi
+  export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
+  export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+}
+
 check_nvidia_driver() {
   if nvidia-smi &>/dev/null; then
     log "NVIDIA driver OK: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
-    return 0
-  fi
-
-  if [ -f /.dockerenv ] || grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null; then
-    log "ERROR: nvidia-smi not found inside container. The host must have NVIDIA drivers installed."
+  elif _is_container; then
+    log "ERROR: nvidia-smi not found inside container. The host must have NVIDIA drivers."
     log "If using RunPod/Vast.ai, select a GPU-enabled template."
+    exit 1
+  else
+    log "NVIDIA driver not found -- installing via ubuntu-drivers"
+    sudo apt-get install -y ubuntu-drivers-common
+    sudo ubuntu-drivers install
+    log "Driver installed. REBOOT REQUIRED before continuing."
+    log "After reboot, re-run: HF_TOKEN=\$HF_TOKEN bash $0"
     exit 1
   fi
 
-  log "NVIDIA driver not found -- installing via ubuntu-drivers"
-  sudo ubuntu-drivers install
+  # Check CUDA toolkit (nvcc). Containers usually have it; bare-metal may not.
+  if command -v nvcc &>/dev/null; then
+    log "CUDA toolkit OK: $(nvcc --version | grep 'release' | head -1)"
+  elif _is_container; then
+    # Containers on Vast.ai/RunPod have CUDA in non-standard paths; pip packages
+    # bundle their own CUDA libs (nvidia-cublas-cu12, nvidia-cudnn-cu12).
+    # nvcc may not be in PATH but CUDA works via pip wheels. This is fine.
+    log "CUDA toolkit not in PATH (container). pip CUDA wheels will provide libs."
+  else
+    log "CUDA toolkit not found on bare-metal -- installing"
+    _install_cuda_toolkit
+    log "CUDA toolkit installed: $(nvcc --version | grep 'release' | head -1)"
+  fi
 
-  log "Driver installed. REBOOT REQUIRED before continuing."
-  log "After reboot, re-run: HF_TOKEN=\$HF_TOKEN bash $0"
-  exit 1
+  # Verify nvidia-smi works after all installs
+  if ! nvidia-smi &>/dev/null; then
+    log "ERROR: nvidia-smi still not working after driver install."
+    log "Reboot the machine, then re-run this script."
+    exit 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
