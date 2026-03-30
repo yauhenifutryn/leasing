@@ -1041,21 +1041,22 @@ async def voice_ws(websocket: WebSocket) -> None:
     # Step 3: Ask name
     await _send_tts_message("Спасибо! Как я могу к вам обращаться?")
     client_name_raw = await _wait_for_speech()
-    # Extract just the name: strip prefixes and filler words
-    client_name = client_name_raw.lower().strip()
-    for prefix in ["меня зовут ", "я тоже ", "я ", "это ", "мое имя ", "моё имя ",
-                    "зовите меня ", "называйте меня ", "можете называть меня ", "имя "]:
-        if client_name.startswith(prefix):
-            client_name = client_name[len(prefix):]
-            break
-    # Remove remaining filler words that might precede the actual name
-    for filler in ["тоже ", "тоже", "это ", "ну ", "а ", "вот "]:
-        if client_name.startswith(filler):
-            client_name = client_name[len(filler):]
-    client_name = client_name.strip().strip(".").strip(",").strip("!").title()
-    # Take only the first word (the actual name, not "Евгений из Минска")
-    if " " in client_name:
-        client_name = client_name.split()[0]
+    # Use LLM to extract the name (handles any phrasing naturally)
+    from .llm import call_openai_compatible
+    try:
+        name_resp = await asyncio.to_thread(
+            call_openai_compatible,
+            base_url=settings.llm.fast_base_url or settings.llm.base_url,
+            model=settings.llm.fast_model or settings.llm.model,
+            system_prompt="Извлеки имя человека из текста. Верни ТОЛЬКО имя, одно слово, без пояснений. Если имя не найдено, верни слово 'друг'.",
+            user_prompt=client_name_raw,
+            temperature=0.0,
+            max_tokens=10,
+            timeout_sec=5,
+        )
+        client_name = name_resp.text.strip().strip('"').strip("'").strip(".").title()
+    except Exception:  # noqa: BLE001
+        client_name = client_name_raw.strip().split()[0].title()
     if not client_name or len(client_name) > 20 or len(client_name) < 2:
         client_name = "друг"
 
