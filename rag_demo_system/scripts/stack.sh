@@ -1,12 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+# Simple stack launcher: starts supervisord, then starts vLLM + voice services.
+# Replaces the old stack_cli.py which was removed in the clean branch.
 
-if [ -f "$ROOT_DIR/rag_demo_system/.env" ]; then
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONF="$APP_DIR/scripts/supervisord.conf"
+SUPERVISORD="$APP_DIR/.venv/bin/supervisord"
+SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
+
+# Load .env
+if [ -f "$APP_DIR/.env" ]; then
   set -a
-  . "$ROOT_DIR/rag_demo_system/.env"
+  . "$APP_DIR/.env"
   set +a
 fi
 
-python "$ROOT_DIR/rag_demo_system/scripts/stack_cli.py" "$@"
+mkdir -p "$APP_DIR/.state"
+
+case "${1:-up}" in
+  up)
+    # Start supervisord (manages backend, vLLM, whisper, silero_tts)
+    rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
+    "$SUPERVISORD" -c "$CONF"
+    sleep 2
+
+    # Start vLLM (autostart=false, needs explicit start)
+    "$SUPERVISORCTL" -c "$CONF" start qwen
+    ;;
+
+  down)
+    "$SUPERVISORCTL" -c "$CONF" shutdown 2>/dev/null || true
+    ;;
+
+  status)
+    "$SUPERVISORCTL" -c "$CONF" status
+    ;;
+
+  *)
+    echo "Usage: stack.sh [up|down|status]"
+    exit 1
+    ;;
+esac
