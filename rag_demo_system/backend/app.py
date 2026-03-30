@@ -909,6 +909,7 @@ async def voice_ws(websocket: WebSocket) -> None:
     # Helper: wait for next voice utterance (works with both modes)
     # ------------------------------------------------------------------
     async def _wait_for_speech() -> str:
+        nonlocal vad_enabled, vad, session_id
         while True:
             # Check if VAD already pushed something
             try:
@@ -920,7 +921,6 @@ async def voice_ws(websocket: WebSocket) -> None:
             event_type = event.get("type")
             if event_type == "session.init":
                 if event.get("session_id"):
-                    nonlocal session_id
                     old_id = session_id
                     session_id = str(event["session_id"])
                     session.session_id = session_id
