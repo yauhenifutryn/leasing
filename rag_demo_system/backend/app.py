@@ -927,6 +927,19 @@ async def voice_ws(websocket: WebSocket) -> None:
     # ------------------------------------------------------------------
     # Hardcoded consent flow (runs once at start)
     # ------------------------------------------------------------------
+    _CONSENT_YES = {"да", "согласен", "согласна", "конечно", "ладно", "хорошо",
+                    "ок", "окей", "давай", "давайте", "угу", "ага", "можно", "yes"}
+    _CONSENT_NO = {"нет", "не согласен", "не согласна", "не хочу", "отказываюсь", "no"}
+
+    def _classify_consent(text: str) -> str:
+        """Return 'yes', 'no', or 'unclear'."""
+        words = set(text.lower().replace(",", " ").replace(".", " ").split())
+        if words & _CONSENT_YES:
+            return "yes"
+        if words & _CONSENT_NO:
+            return "no"
+        return "unclear"
+
     await websocket.send_json({
         "type": "session.ready",
         "session_id": session_id,
@@ -939,30 +952,46 @@ async def voice_ws(websocket: WebSocket) -> None:
         "Для продолжения консультации мне нужно ваше согласие на обработку персональных данных. Вы согласны?"
     )
 
-    # Step 2: Wait for consent answer
-    consent_text = await _wait_for_speech()
-    consent_positive = any(w in consent_text.lower() for w in ["да", "согласен", "согласна", "конечно", "ладно", "хорошо", "ок", "окей"])
-    if not consent_positive:
-        await _send_tts_message(
-            "Без согласия на обработку данных я не смогу продолжить консультацию. "
-            "Спасибо за обращение, всего доброго!"
-        )
+    # Step 2: Wait for consent (with retries for ambiguous answers)
+    consent_given = False
+    for _attempt in range(3):
+        consent_text = await _wait_for_speech()
+        result = _classify_consent(consent_text)
+        if result == "yes":
+            consent_given = True
+            break
+        elif result == "no":
+            await _send_tts_message(
+                "Без согласия на обработку данных я не смогу продолжить консультацию. "
+                "Спасибо за обращение, всего доброго!"
+            )
+            return
+        else:
+            # Ambiguous: "а зачем?", "что это значит?", random phrase
+            await _send_tts_message(
+                "Это стандартная процедура для консультации. Ваши данные защищены и не передаются третьим лицам. "
+                "Вы согласны на обработку персональных данных?"
+            )
+    if not consent_given:
+        await _send_tts_message("Не удалось получить согласие. Спасибо за обращение!")
         return
 
     # Step 3: Ask name
     await _send_tts_message("Спасибо! Как я могу к вам обращаться?")
     client_name = await _wait_for_speech()
     # Extract just the name (strip common prefixes)
-    for prefix in ["меня зовут ", "я ", "это ", "мое имя ", "моё имя "]:
+    for prefix in ["меня зовут ", "я ", "это ", "мое имя ", "моё имя ", "зовите меня ", "называйте меня "]:
         if client_name.lower().startswith(prefix):
             client_name = client_name[len(prefix):]
             break
     client_name = client_name.strip().strip(".").strip(",").title()
+    if not client_name or len(client_name) > 30:
+        client_name = "клиент"
 
     # Step 4: Greet and start
     await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
 
-    # Save intro to session transcript so memory block has it
+    # Save intro to session transcript so model knows the name
     chat_session = state.get(session_id) or state.create(session_id)
     _append_turn(chat_session, f"Меня зовут {client_name}", f"Очень приятно, {client_name}! Чем могу помочь?", settings.app.memory_turns)
     state.update(chat_session)
