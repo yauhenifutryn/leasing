@@ -51,7 +51,22 @@ class SileroTTSSynthesizer:
                 put_accent=True,
                 put_yo=True,
             )
-        pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
+        # Clean up v4_ru echo/reverb: high-pass filter + normalization
+        import numpy as np
+        audio_np = audio.detach().cpu().numpy()
+        # High-pass filter at 80Hz to remove low-frequency reverb
+        if len(audio_np) > 2:
+            alpha = 0.98  # cutoff ~80Hz at 24kHz
+            filtered = np.zeros_like(audio_np)
+            filtered[0] = audio_np[0]
+            for i in range(1, len(audio_np)):
+                filtered[i] = alpha * (filtered[i - 1] + audio_np[i] - audio_np[i - 1])
+            audio_np = filtered
+        # Normalize to prevent clipping
+        peak = np.abs(audio_np).max()
+        if peak > 0:
+            audio_np = audio_np / peak * 0.95
+        pcm16 = (audio_np * 32767).astype(np.int16).tobytes()
         return pcm16, self._sample_rate
 
 
