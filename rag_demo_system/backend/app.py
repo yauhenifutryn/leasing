@@ -24,7 +24,6 @@ from .consent import (
     detect_consent,
 )
 from .engine import RAGEngine
-from .dify_client import chat_once as dify_chat_once, stop_generation as dify_stop_generation
 from .rag_backends import build_backend_status
 from .settings import load_settings
 from .state import StateStore
@@ -83,10 +82,7 @@ def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> Non
 
 
 def _selected_backend(requested: str | None) -> str:
-    name = (requested or "our_rag").strip() or "our_rag"
-    if name not in {"our_rag", "dify_rag"}:
-        return "our_rag"
-    return name
+    return "our_rag"
 
 
 def _launch_mode() -> str:
@@ -94,20 +90,12 @@ def _launch_mode() -> str:
 
 
 def _rag_statuses() -> dict[str, dict[str, Any]]:
-    dify_base_url = os.getenv("DIFY_API_BASE_URL", "")
-    dify_key = os.getenv("DIFY_API_KEY", "")
     return {
         "our_rag": {
             "name": "our_rag",
             "available": True,
             "healthy": settings.app.kb_markdown_path.exists(),
             "reason": "ok" if settings.app.kb_markdown_path.exists() else "kb_missing",
-        },
-        "dify_rag": {
-            "name": "dify_rag",
-            "available": bool(dify_base_url and dify_key),
-            "healthy": bool(dify_base_url and dify_key),
-            "reason": "ok" if dify_base_url and dify_key else "not_configured",
         },
     }
 
@@ -123,15 +111,6 @@ def _used_knowledge_from_chunks(final_chunks: list[dict[str, Any]]) -> list[dict
         }
         for c in final_chunks
     ]
-
-
-def _dify_inputs(*, fast: bool, voice_fast: bool, mode: str, session_id: str) -> dict[str, Any]:
-    return {
-        "fast": fast,
-        "voice_fast": voice_fast,
-        "mode": mode,
-        "session_id": session_id,
-    }
 
 
 @app.get("/api/health")
@@ -252,64 +231,6 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         }
         _append_turn(session, message, routed.response, settings.app.memory_turns)
         state.update(session)
-        return _stream_or_json(response, stream)
-
-    if backend_name == "dify_rag":
-        dify_base_url = os.getenv("DIFY_API_BASE_URL", "")
-        dify_api_key = os.getenv("DIFY_API_KEY", "")
-        if not dify_base_url or not dify_api_key:
-            response = {
-                "ok": True,
-                "session_id": session_id,
-                "backend": backend_name,
-                "answer": "Dify не настроен. Проверьте DIFY_API_BASE_URL и DIFY_API_KEY.",
-                "consent": "granted",
-                "chunks": [],
-                "used_knowledge": [],
-                "citations": [],
-                "timings": timings,
-                "conversation_ref": {},
-                "can_barge_in": True,
-            }
-            return _stream_or_json(response, stream)
-        t_dify = time.perf_counter()
-        provider_resp = dify_chat_once(
-            base_url=dify_base_url,
-            api_key=dify_api_key,
-            query=message,
-            user=session_id,
-            inputs=_dify_inputs(fast=fast, voice_fast=voice_fast, mode=mode, session_id=session_id),
-            conversation_id=(session.metadata.get("dify") or {}).get("conversation_id"),
-            timeout_sec=settings.llm.timeout_sec,
-        )
-        timings["dify_total_ms"] = (time.perf_counter() - t_dify) * 1000
-        session.metadata["dify"] = provider_resp.conversation_ref
-        _append_turn(session, message, provider_resp.answer, settings.app.memory_turns)
-        state.update(session)
-        state.log(
-            {
-                "event": "chat",
-                "backend": "dify_rag",
-                "session_id": session_id,
-                "question": message,
-                "chunks": [c.get("chunk_id") for c in provider_resp.used_knowledge],
-                "timings": timings,
-            }
-        )
-        response = {
-            "ok": True,
-            "session_id": session_id,
-            "backend": provider_resp.backend,
-            "answer": provider_resp.answer or settings.app.strict_refusal_text,
-            "consent": "granted",
-            "chunks": [],
-            "used_knowledge": provider_resp.used_knowledge,
-            "citations": provider_resp.citations,
-            "timings": {**provider_resp.timings, **timings},
-            "conversation_ref": provider_resp.conversation_ref,
-            "can_barge_in": provider_resp.can_barge_in,
-            "incomplete": provider_resp.incomplete,
-        }
         return _stream_or_json(response, stream)
 
     retrieval = engine.retrieve(message, fast=fast, voice_fast=voice_fast, session_id=session_id)
@@ -631,25 +552,6 @@ async def voice_ws(websocket: WebSocket) -> None:
                     audio_chunks.append(audio)
                     for action in session.on_audio_chunk(audio):
                         await websocket.send_json(action)
-                        if action.get("type") == "interrupt" and action.get("task_id") and session.backend == "dify_rag":
-                            dify_base_url = os.getenv("DIFY_API_BASE_URL", "")
-                            dify_api_key = os.getenv("DIFY_API_KEY", "")
-                            if dify_base_url and dify_api_key:
-                                try:
-                                    dify_stop_generation(
-                                        base_url=dify_base_url,
-                                        api_key=dify_api_key,
-                                        task_id=action["task_id"],
-                                        user=session_id,
-                                    )
-                                except Exception as exc:  # noqa: BLE001
-                                    await websocket.send_json(
-                                        {
-                                            "type": "warning",
-                                            "session_id": session_id,
-                                            "message": f"interrupt stop failed: {exc}",
-                                        }
-                                    )
             elif event_type == "input_audio_buffer.commit":
                 audio_b64 = "".join(audio_chunks)
                 audio_chunks.clear()

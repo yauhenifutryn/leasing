@@ -8,10 +8,9 @@ from typing import Any
 class VoiceSession:
     session_id: str
     backend: str = "our_rag"
-    voice_provider: str = "local"
-    brain_model: str = "Qwen/Qwen3-30B-A3B"
+    brain_model: str = "Qwen/Qwen3.5-35B-A3B-FP8"
     stt_provider: str = "whisper"
-    tts_provider: str = "qwen3_tts"
+    tts_provider: str = "silero_tts"
     assistant_speaking: bool = False
     interrupted: bool = False
     active_task_id: str | None = None
