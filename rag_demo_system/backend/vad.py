@@ -59,6 +59,11 @@ class SileroVAD:
 
         self._is_speaking = False
         self._speech_buffer = b""
+        self._vad_buffer = b""  # accumulate small chunks before VAD processing
+        self._min_vad_bytes = 2 * int(self._VAD_RATE * 0.032)  # 32ms at 16kHz = 512 samples = 1024 bytes input equivalent
+        if self._resample:
+            # Need enough input samples to produce 512 at 16kHz
+            self._min_vad_bytes = 2 * int(512 * sample_rate / self._VAD_RATE)  # ~768 samples at 24kHz = 1536 bytes
         # Track silence duration by counting samples, not wall-clock time.
         self._silence_samples = 0
         self._silence_samples_threshold = int(sample_rate * silence_ms / 1000)
@@ -75,14 +80,27 @@ class SileroVAD:
         """
         import torch  # noqa: F811 -- lazy import
 
-        n_samples = len(pcm16_bytes) // 2
-        samples = struct.unpack(f"<{n_samples}h", pcm16_bytes)
+        # Always add to speech buffer if speaking (even before VAD processes)
+        if self._is_speaking:
+            self._speech_buffer += pcm16_bytes
+
+        # Accumulate small chunks until we have enough for VAD
+        self._vad_buffer += pcm16_bytes
+        if len(self._vad_buffer) < self._min_vad_bytes:
+            return None
+
+        # Process accumulated VAD buffer
+        vad_bytes = self._vad_buffer
+        self._vad_buffer = b""
+
+        n_samples = len(vad_bytes) // 2
+        samples = struct.unpack(f"<{n_samples}h", vad_bytes)
         tensor = torch.FloatTensor(samples) / 32768.0
 
         # Resample to 16kHz for VAD model if input is different rate
         if self._resample:
             ratio = self._VAD_RATE / self.sample_rate
-            target_len = int(len(tensor) * ratio)
+            target_len = max(512, int(len(tensor) * ratio))
             vad_tensor = torch.nn.functional.interpolate(
                 tensor.unsqueeze(0).unsqueeze(0), size=target_len, mode="linear", align_corners=False
             ).squeeze()
@@ -94,14 +112,12 @@ class SileroVAD:
         if prob >= self.SPEECH_THRESHOLD:
             if not self._is_speaking:
                 self._is_speaking = True
-                self._speech_buffer = b""
-            self._speech_buffer += pcm16_bytes
+                self._speech_buffer = vad_bytes  # start with current chunk
             self._silence_samples = 0
             return None
 
         # Below threshold: either trailing silence during speech, or idle silence.
         if self._is_speaking:
-            self._speech_buffer += pcm16_bytes
             self._silence_samples += n_samples
             if self._silence_samples >= self._silence_samples_threshold:
                 audio = self._speech_buffer
@@ -116,5 +132,6 @@ class SileroVAD:
         """Clear all internal state."""
         self._is_speaking = False
         self._speech_buffer = b""
+        self._vad_buffer = b""
         self._silence_samples = 0
         self._model.reset_states()
