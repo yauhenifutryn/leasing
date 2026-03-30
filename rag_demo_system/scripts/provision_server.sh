@@ -250,33 +250,6 @@ ENVEOF
 }
 
 # ---------------------------------------------------------------------------
-# Step 8b: Merge knowledge base files
-# ---------------------------------------------------------------------------
-merge_knowledge_base() {
-  local kb_dir="$WORKSPACE/leasing/knowledge_base"
-  local main_kb="$kb_dir/kb_faq_ru.md"
-  local website_kb="$WORKSPACE/leasing/experiments/yandex_realtime_voice/mikro_leasing_site_unified_dedup.md"
-
-  if [ ! -f "$main_kb" ]; then
-    log "WARNING: Main KB file not found: $main_kb"
-    return
-  fi
-
-  if [ -f "$website_kb" ]; then
-    log "Merging KB files: FAQ + website content -> kb_faq_ru.md"
-    if ! grep -q "# Website Content" "$main_kb" 2>/dev/null; then
-      echo -e "\n\n---\n\n# Website Content\n" >> "$main_kb"
-      cat "$website_kb" >> "$main_kb"
-      log "Combined KB: $(wc -l < "$main_kb") lines"
-    else
-      log "KB already merged; skipping"
-    fi
-  else
-    log "No website KB found; using FAQ only"
-  fi
-}
-
-# ---------------------------------------------------------------------------
 # Step 9: Start stack via stack.sh
 # ---------------------------------------------------------------------------
 start_stack() {
@@ -381,7 +354,6 @@ main() {
   download_models            # Step 6: HF model + Silero VAD download
   start_qdrant               # Step 7: Qdrant vector DB
   write_env_file             # Step 8: generate .env
-  merge_knowledge_base       # Step 8b: combine FAQ + website KB
   start_stack                # Step 9: launch supervisor stack
 
   log "=== Provisioning complete ==="
