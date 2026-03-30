@@ -134,6 +134,24 @@
         font-size: 18px;
       }
       .btn-download:hover { color: #1a1a2e; }
+      .mode-toggle {
+        text-align: center;
+        margin-bottom: 10px;
+      }
+      .mode-toggle button {
+        background: none;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 12px;
+        color: #6b7280;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .mode-toggle button:hover {
+        border-color: #1a56db;
+        color: #1a56db;
+      }
     </style>
   </head>
   <body>
@@ -148,6 +166,10 @@
       <div class="transcript-box" id="transcriptBox"></div>
 
       <div class="current-response" id="currentResponse"></div>
+
+      <div class="mode-toggle">
+        <button id="btnMode" onclick="toggleMode()">Режим: Нажми и говори</button>
+      </div>
 
       <div class="controls">
         <button class="btn btn-connect" id="btnConnect">Подключить</button>
@@ -169,6 +191,8 @@
     let t0 = 0;
     let firstAudio = false;
     let turns = [];
+    let vadMode = false;
+    let continuousStreaming = false;
 
     const $ = (s) => document.querySelector(s);
 
@@ -192,6 +216,44 @@
       }
       $("#transcriptBox").appendChild(div);
       $("#transcriptBox").scrollTop = $("#transcriptBox").scrollHeight;
+    }
+
+    function stopPlayback() {
+      if (playCtx && nextPlayTime > playCtx.currentTime) {
+        playCtx.close();
+        playCtx = null;
+        nextPlayTime = 0;
+      }
+    }
+
+    function toggleMode() {
+      vadMode = !vadMode;
+      const btn = $("#btnMode");
+      const talkBtn = $("#btnTalk");
+
+      if (vadMode) {
+        btn.textContent = "Режим: Свободный разговор";
+        talkBtn.textContent = "Микрофон вкл";
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
+        }
+        startContinuousStream();
+      } else {
+        btn.textContent = "Режим: Нажми и говори";
+        talkBtn.textContent = "Удерживайте для записи";
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "session.update", vad_mode: false }));
+        }
+        stopContinuousStream();
+      }
+    }
+
+    function startContinuousStream() {
+      continuousStreaming = true;
+    }
+
+    function stopContinuousStream() {
+      continuousStreaming = false;
     }
 
     function b64ToInt16(b64) {
@@ -259,6 +321,10 @@
       if (evt.type === "error") {
         setStatus(evt.error || "Ошибка", "danger");
       }
+      if (evt.type === "interrupt") {
+        stopPlayback();
+        setStatus("Слушаю...", "warn");
+      }
     }
 
     async function connect() {
@@ -277,9 +343,11 @@
         recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
         source = audioCtx.createMediaStreamSource(stream);
         recorderNode.port.onmessage = (e) => {
-          if (!talking || !ws) return;
-          const b64 = btoa(String.fromCharCode(...new Uint8Array(e.data.buffer)));
-          ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
+          const pcm16 = e.data;
+          if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
+            const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+            ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
+          }
         };
         source.connect(recorderNode);
 
@@ -306,11 +374,15 @@
 
     function startTalking() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      // In VAD mode, toggle mute/unmute instead of push-to-talk
+      if (vadMode) {
+        continuousStreaming = !continuousStreaming;
+        $("#btnTalk").textContent = continuousStreaming ? "Микрофон вкл" : "Микрофон выкл";
+        return;
+      }
       // Interrupt if assistant is speaking
       if (playCtx && nextPlayTime > playCtx.currentTime) {
-        playCtx.close();
-        playCtx = null;
-        nextPlayTime = 0;
+        stopPlayback();
         ws.send(JSON.stringify({ type: "response.cancel" }));
       }
       talking = true;
@@ -321,6 +393,7 @@
     }
 
     function stopTalking() {
+      if (vadMode) return;
       if (!ws || !talking) return;
       talking = false;
       $("#btnTalk").classList.remove("talking");
