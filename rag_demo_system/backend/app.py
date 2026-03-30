@@ -30,6 +30,8 @@ from .state import StateStore
 from .router import route_non_rag
 from .voice_adapters import build_llm_status, build_voice_statuses, synthesize_audio, transcribe_audio
 from .voice_session import VoiceSession
+from .vad import SileroVAD
+from .audio_input import WebSocketAudioAdapter
 
 settings = load_settings()
 state = StateStore(Path(__file__).resolve().parents[1] / ".state")
@@ -526,6 +528,133 @@ async def voice_ws(websocket: WebSocket) -> None:
     session = VoiceSession(session_id=session_id, backend="our_rag")
     voice_sessions[session_id] = session
     audio_chunks: list[str] = []
+
+    # -- VAD state --
+    vad_enabled = False
+    vad: SileroVAD | None = None
+
+    # ------------------------------------------------------------------
+    # Helper: run the full voice response pipeline (STT -> RAG -> TTS).
+    # Shared by both push-to-talk commit and VAD speech-end paths.
+    # ------------------------------------------------------------------
+    async def _process_voice_utterance(audio_b64: str) -> None:
+        """Transcribe *audio_b64*, query RAG, and stream TTS back."""
+        try:
+            transcript = transcribe_audio(audio_b64, session_id=session_id)
+        except Exception as exc:  # noqa: BLE001
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "session_id": session_id,
+                    "error": f"stt_failed: {exc}",
+                }
+            )
+            return
+        text = (transcript.get("text") or "").strip()
+        await websocket.send_json(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "session_id": session_id,
+                "provider": transcript.get("provider"),
+                "transcription": text,
+            }
+        )
+        if not text:
+            return
+        for action in session.on_transcript_final(text):
+            await websocket.send_json(action)
+        response = await chat(
+            ChatRequest(
+                message=text,
+                session_id=session_id,
+                stream=False,
+                fast=True,
+                mode="voice_fast",
+                backend=session.backend,
+            ),
+            stream=False,
+        )
+        if isinstance(response, dict):
+            for action in session.on_provider_response(response):
+                await websocket.send_json(action)
+            answer_text = response.get("answer", "")
+            if answer_text:
+                await websocket.send_json(
+                    {
+                        "type": "response.output_text.delta",
+                        "session_id": session_id,
+                        "delta": answer_text,
+                    }
+                )
+            try:
+                audio_response = synthesize_audio(answer_text, session_id=session_id)
+                tts_b64 = audio_response.get("audio_b64") or ""
+                if tts_b64:
+                    await websocket.send_json(
+                        {
+                            "type": "response.output_audio.delta",
+                            "session_id": session_id,
+                            "delta": tts_b64,
+                            "sample_rate_hz": audio_response.get("sample_rate_hz"),
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await websocket.send_json(
+                    {
+                        "type": "warning",
+                        "session_id": session_id,
+                        "message": f"tts_failed: {exc}",
+                    }
+                )
+            await websocket.send_json(
+                {
+                    "type": "response.done",
+                    "session_id": session_id,
+                    "backend": response.get("backend"),
+                    "used_knowledge": response.get("used_knowledge", []),
+                    "citations": response.get("citations", []),
+                    "timings": response.get("timings", {}),
+                }
+            )
+
+    # ------------------------------------------------------------------
+    # Audio adapter callback: receives raw PCM16 for every chunk.
+    # Handles both push-to-talk accumulation and VAD processing.
+    # ------------------------------------------------------------------
+    import base64 as _b64mod
+
+    async def _on_audio_chunk(raw: bytes) -> None:
+        nonlocal vad_enabled, vad, audio_chunks
+
+        # Always accumulate base64 for push-to-talk commit path
+        audio_chunks.append(_b64mod.b64encode(raw).decode())
+
+        if not vad_enabled or vad is None:
+            return
+
+        # -- VAD processing --
+        was_speaking = vad.is_speaking
+        speech_audio = vad.feed(raw)
+
+        # Barge-in: user started speaking while assistant is streaming TTS
+        if not was_speaking and vad.is_speaking and session.assistant_speaking:
+            session.interrupted = True
+            session.assistant_speaking = False
+            await websocket.send_json(
+                {
+                    "type": "interrupt",
+                    "session_id": session_id,
+                }
+            )
+
+        # Speech ended: VAD returned accumulated audio
+        if speech_audio is not None:
+            vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
+            audio_chunks.clear()
+            await _process_voice_utterance(vad_audio_b64)
+
+    audio_adapter = WebSocketAudioAdapter(on_chunk=_on_audio_chunk)
+
     await websocket.send_json(
         {
             "type": "session.ready",
@@ -539,99 +668,31 @@ async def voice_ws(websocket: WebSocket) -> None:
             event_type = event.get("type")
             if event_type == "session.update":
                 session.backend = _selected_backend(event.get("backend"))
+                # VAD mode toggle
+                if "vad_mode" in event:
+                    vad_enabled = bool(event["vad_mode"])
+                    if vad_enabled and vad is None:
+                        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+                        vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
+                    if not vad_enabled and vad is not None:
+                        vad.reset()
                 await websocket.send_json(
                     {
                         "type": "session.updated",
                         "session_id": session_id,
                         "backend": session.backend,
+                        "vad_mode": vad_enabled,
                     }
                 )
             elif event_type == "input_audio_buffer.append":
                 audio = event.get("audio") or ""
                 if audio:
-                    audio_chunks.append(audio)
-                    for action in session.on_audio_chunk(audio):
-                        await websocket.send_json(action)
+                    raw = _b64mod.b64decode(audio)
+                    await audio_adapter.handle_audio_message(raw)
             elif event_type == "input_audio_buffer.commit":
                 audio_b64 = "".join(audio_chunks)
                 audio_chunks.clear()
-                try:
-                    transcript = transcribe_audio(audio_b64, session_id=session_id)
-                except Exception as exc:  # noqa: BLE001
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "session_id": session_id,
-                            "error": f"stt_failed: {exc}",
-                        }
-                    )
-                    continue
-                text = (transcript.get("text") or "").strip()
-                await websocket.send_json(
-                    {
-                        "type": "conversation.item.input_audio_transcription.completed",
-                        "session_id": session_id,
-                        "provider": transcript.get("provider"),
-                        "transcription": text,
-                    }
-                )
-                if not text:
-                    continue
-                for action in session.on_transcript_final(text):
-                    await websocket.send_json(action)
-                response = await chat(
-                    ChatRequest(
-                        message=text,
-                        session_id=session_id,
-                        stream=False,
-                        fast=True,
-                        mode="voice_fast",
-                        backend=session.backend,
-                    ),
-                    stream=False,
-                )
-                if isinstance(response, dict):
-                    for action in session.on_provider_response(response):
-                        await websocket.send_json(action)
-                    answer_text = response.get("answer", "")
-                    if answer_text:
-                        await websocket.send_json(
-                            {
-                                "type": "response.output_text.delta",
-                                "session_id": session_id,
-                                "delta": answer_text,
-                            }
-                        )
-                    try:
-                        audio_response = synthesize_audio(answer_text, session_id=session_id)
-                        audio_b64 = audio_response.get("audio_b64") or ""
-                        if audio_b64:
-                            await websocket.send_json(
-                                {
-                                    "type": "response.output_audio.delta",
-                                    "session_id": session_id,
-                                    "delta": audio_b64,
-                                    "sample_rate_hz": audio_response.get("sample_rate_hz"),
-                                }
-                            )
-                    except Exception as exc:  # noqa: BLE001
-                        await websocket.send_json(
-                            {
-                                "type": "warning",
-                                "session_id": session_id,
-                                "message": f"tts_failed: {exc}",
-                            }
-                        )
-                    await websocket.send_json(
-                        {
-                            "type": "response.done",
-                            "session_id": session_id,
-                            "backend": response.get("backend"),
-                            "used_knowledge": response.get("used_knowledge", []),
-                            "citations": response.get("citations", []),
-                            "timings": response.get("timings", {}),
-                        }
-                    )
+                await _process_voice_utterance(audio_b64)
             elif event_type == "response.cancel":
                 session.assistant_speaking = False
                 session.interrupted = True
