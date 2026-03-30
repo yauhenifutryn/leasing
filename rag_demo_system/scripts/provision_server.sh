@@ -58,6 +58,12 @@ install_apt_packages() {
     python3-pip \
     jq
 
+  # Install ngrok for exposing the backend to the internet
+  if ! command -v ngrok &>/dev/null; then
+    log "Installing ngrok"
+    curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin
+  fi
+
   # Install Docker and ubuntu-drivers only if not in a container
   if [ -f /proc/1/cgroup ] && grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null || [ -f /.dockerenv ]; then
     log "Running inside a container -- skipping docker.io and ubuntu-drivers-common"
