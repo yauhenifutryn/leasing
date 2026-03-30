@@ -42,6 +42,16 @@ voice_sessions: dict[str, VoiceSession] = {}
 app = FastAPI(title="Micro Leasing RAG Demo")
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
+
+@app.on_event("startup")
+async def _warmup_rag() -> None:
+    """Pre-load embedding model + reranker on startup so first voice request is fast."""
+    try:
+        engine.retrieve("warmup", fast=True, voice_fast=True)
+    except Exception:  # noqa: BLE001
+        pass  # KB might not be indexed yet; model is still loaded into GPU
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
