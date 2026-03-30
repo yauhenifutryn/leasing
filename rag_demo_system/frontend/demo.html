@@ -226,7 +226,9 @@
       }
     }
 
+    let audioChunkCount = 0;
     function toggleMode() {
+      if (!connected) { setStatus("Сначала подключитесь", "warn"); return; }
       vadMode = !vadMode;
       const btn = $("#btnMode");
       const talkBtn = $("#btnTalk");
@@ -234,10 +236,9 @@
       if (vadMode) {
         btn.textContent = "Режим: Свободный разговор";
         talkBtn.textContent = "Микрофон вкл";
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
-        }
+        ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
         startContinuousStream();
+        setStatus("VAD режим включен, говорите", "good");
       } else {
         btn.textContent = "Режим: Нажми и говори";
         talkBtn.textContent = "Удерживайте для записи";
@@ -351,8 +352,12 @@
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
           if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
+            audioChunkCount++;
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
             ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
+            if (audioChunkCount % 100 === 0) {
+              console.log(`[audio] sent ${audioChunkCount} chunks, mode: ${vadMode ? 'VAD' : 'PTT'}, streaming: ${continuousStreaming}`);
+            }
           }
         };
         source.connect(recorderNode);
