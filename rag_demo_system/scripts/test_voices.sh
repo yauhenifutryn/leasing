@@ -28,15 +28,9 @@ def save_wav(audio, name, sr=24000):
         wf.writeframes(pcm)
     print(f"  {name}: {path}")
 
-# Native male voices
-print("\n--- Native Male Voices ---")
-for speaker in ["aidar", "eugene"]:
-    audio = model.apply_tts(text=TEXT, speaker=speaker, sample_rate=24000, put_accent=True, put_yo=True)
-    save_wav(audio, f"native_{speaker}")
-
-# Native female voices for comparison
-print("\n--- Native Female Voices ---")
-for speaker in ["baya", "xenia", "kseniya"]:
+# All native voices (aidar=male, rest=female)
+print("\n--- Native Voices ---")
+for speaker in ["aidar", "baya", "xenia", "kseniya"]:
     audio = model.apply_tts(text=TEXT, speaker=speaker, sample_rate=24000, put_accent=True, put_yo=True)
     save_wav(audio, f"native_{speaker}")
 

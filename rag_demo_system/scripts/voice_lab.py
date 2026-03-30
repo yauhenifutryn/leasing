@@ -22,7 +22,7 @@ import torch
 VOICES_DIR = Path(__file__).resolve().parent.parent / "voices"
 CATALOG_PATH = VOICES_DIR / "catalog.json"
 
-NATIVE_VOICES = ["baya", "xenia", "kseniya", "aidar", "eugene"]
+NATIVE_VOICES = ["aidar", "baya", "xenia", "kseniya"]
 
 DEFAULT_TEXT = "Добро пожаловать в Микро Лизинг. Чем могу помочь?"
 
