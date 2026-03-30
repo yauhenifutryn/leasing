@@ -228,6 +228,12 @@ download_models() {
     --token "$HF_TOKEN" \
     --local-dir-use-symlinks False
 
+  log "  Embedding model (intfloat/multilingual-e5-large)"
+  "$APP_DIR/.venv/bin/python" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+
+  log "  Reranker model (cross-encoder/mmarco-mMiniLMv2-L12-H384-v1)"
+  "$APP_DIR/.venv/bin/python" -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')"
+
   log "  Silero VAD model (~2MB)"
   mkdir -p "$APP_DIR/models"
   curl -fsSL "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.jit" \
