@@ -307,6 +307,8 @@ STACK_WHISPER_CMD="LD_LIBRARY_PATH=./.venv-voice-oss/lib/python3.12/site-package
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
 
 HF_HOME=${MODELS_DIR}
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
 ENVEOF
 }
 
