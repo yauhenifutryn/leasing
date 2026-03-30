@@ -243,6 +243,9 @@ download_models() {
   log "  Whisper large-v3 (faster-whisper STT model)"
   "$APP_DIR/.venv-voice-oss/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
 
+  log "  Silero TTS model (v5_4_ru Russian voices)"
+  "$APP_DIR/.venv-voice-oss/bin/python" -c "from silero import silero_tts; silero_tts(language='ru', speaker='v5_4_ru'); print('Silero TTS downloaded')"
+
   log "  Silero VAD model (~2MB)"
   mkdir -p "$APP_DIR/models"
   curl -fsSL "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.jit" \
