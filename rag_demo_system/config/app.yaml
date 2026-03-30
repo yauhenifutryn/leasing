@@ -9,7 +9,7 @@ app:
 embedding:
   model_name: "intfloat/multilingual-e5-large"
   batch_size: 32
-  device: "cpu"  # set to "cuda" if available
+  device: "cuda"
   max_characters: 6000
   chunk_size_tokens: 700
   chunk_overlap_tokens: 120
@@ -29,10 +29,10 @@ retrieval:
   fast_bm25_top_k: 4
   fast_final_top_n: 3
   fast_context_max_tokens: 900
-  voice_vector_top_k: 3
-  voice_bm25_top_k: 1
-  voice_final_top_n: 2
-  voice_context_max_tokens: 500
+  voice_vector_top_k: 10
+  voice_bm25_top_k: 6
+  voice_final_top_n: 4
+  voice_context_max_tokens: 900
 
 llm:
   provider: "openai_compatible"
@@ -40,16 +40,16 @@ llm:
   max_tokens: 420
   fast_base_url: ""
   fast_model: ""
-  fast_max_tokens: 220
+  fast_max_tokens: 180
   timeout_sec: 60
-  concise_sentences_min: 3
-  concise_sentences_max: 6
+  concise_sentences_min: 2
+  concise_sentences_max: 4
   expand_triggers: ["подробнее", "детально", "поясните", "раскройте", "разверните"]
 
 reranker:
   enabled: true
   model_name: "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-  device: "cpu"
+  device: "cuda"
   batch_size: 16
   allow_no_rerank: false
 

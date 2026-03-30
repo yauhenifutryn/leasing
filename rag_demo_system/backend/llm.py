@@ -36,6 +36,9 @@ def call_openai_compatible(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        # Disable Qwen3 thinking mode: prevents <think>...</think> wrapper
+        # that wastes tokens on reasoning before the actual answer.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     resp = requests.post(url, json=payload, timeout=timeout_sec)
     resp.raise_for_status()
@@ -69,6 +72,8 @@ def iter_openai_compatible_stream(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        # Disable Qwen3 thinking mode for streaming too
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     resp = requests.post(url, json=payload, timeout=timeout_sec, stream=True)
     resp.raise_for_status()
@@ -102,6 +107,8 @@ def iter_openai_compatible_stream_events(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        # Disable Qwen3 thinking mode
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     resp = requests.post(url, json=payload, timeout=timeout_sec, stream=True)
     resp.raise_for_status()

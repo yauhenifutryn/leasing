@@ -44,6 +44,11 @@ class StateStore:
         self.sessions_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def get(self, session_id: str) -> SessionState | None:
+        session = self._sessions.get(session_id)
+        if session is not None:
+            return session
+        # Re-read from disk: another worker may have created this session.
+        self._load()
         return self._sessions.get(session_id)
 
     def create(self, session_id: str) -> SessionState:

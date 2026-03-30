@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Микро Лизинг · Голосовой помощник</title>
+    <link rel="icon" href="favicon.ico" />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #f5f6f8;
+        color: #1a1a2e;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .container {
+        max-width: 480px;
+        width: 100%;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      .logo {
+        text-align: center;
+        padding: 24px 0 16px;
+      }
+      .logo h1 {
+        font-size: 20px;
+        font-weight: 600;
+        color: #1a56db;
+      }
+      .logo p {
+        font-size: 13px;
+        color: #6b7280;
+        margin-top: 4px;
+      }
+      .status-bar {
+        text-align: center;
+        font-size: 12px;
+        color: #6b7280;
+        padding: 8px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        min-height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .status-bar.good { color: #059669; }
+      .status-bar.warn { color: #d97706; }
+      .status-bar.danger { color: #dc2626; }
+      .transcript-box {
+        flex: 1;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 16px;
+        overflow-y: auto;
+        margin-bottom: 12px;
+        min-height: 200px;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .transcript-box .turn {
+        margin-bottom: 10px;
+      }
+      .transcript-box .turn.user { color: #1a56db; }
+      .transcript-box .turn.assistant { color: #1a1a2e; }
+      .transcript-box .turn .latency { color: #9ca3af; font-size: 11px; }
+      .current-response {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+        min-height: 44px;
+        font-size: 14px;
+        color: #1a1a2e;
+        line-height: 1.5;
+      }
+      .current-response:empty::after {
+        content: "Нажмите и удерживайте кнопку, чтобы говорить";
+        color: #9ca3af;
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        padding-bottom: 20px;
+      }
+      .btn {
+        border: none;
+        border-radius: 12px;
+        padding: 14px 20px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+      }
+      .btn-connect {
+        background: #e5e7eb;
+        color: #1a56db;
+        flex: 1;
+      }
+      .btn-connect.connected {
+        background: #1a56db;
+        color: #fff;
+      }
+      .btn-talk {
+        background: #059669;
+        color: #fff;
+        flex: 2;
+      }
+      .btn-talk:disabled {
+        background: #e5e7eb;
+        color: #9ca3af;
+        cursor: not-allowed;
+      }
+      .btn-talk:active:not(:disabled), .btn-talk.talking {
+        background: #dc2626;
+        transform: scale(0.97);
+      }
+      .btn-download {
+        background: #e5e7eb;
+        color: #6b7280;
+        padding: 14px;
+        font-size: 18px;
+      }
+      .btn-download:hover { color: #1a1a2e; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="logo">
+        <h1>Микро Лизинг</h1>
+        <p>Голосовой помощник</p>
+      </div>
+
+      <div class="status-bar" id="statusBar">Нажмите "Подключить" для начала</div>
+
+      <div class="transcript-box" id="transcriptBox"></div>
+
+      <div class="current-response" id="currentResponse"></div>
+
+      <div class="controls">
+        <button class="btn btn-connect" id="btnConnect">Подключить</button>
+        <button class="btn btn-talk" id="btnTalk" disabled>Говорить</button>
+        <button class="btn btn-download" id="btnDownload" title="Скачать транскрипт">&#8681;</button>
+      </div>
+    </div>
+
+    <script>
+    const WS_BASE = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+    let ws = null;
+    let connected = false;
+    let talking = false;
+    let audioCtx = null;
+    let recorderNode = null;
+    let source = null;
+    let playCtx = null;
+    let nextPlayTime = 0;
+    let t0 = 0;
+    let firstAudio = false;
+    let turns = [];
+
+    const $ = (s) => document.querySelector(s);
+
+    function setStatus(text, cls) {
+      const bar = $("#statusBar");
+      bar.textContent = text;
+      bar.className = "status-bar " + (cls || "");
+    }
+
+    function addTurn(role, text, latencyMs) {
+      turns.push({ role, text, latencyMs, time: new Date().toLocaleTimeString() });
+      const div = document.createElement("div");
+      div.className = "turn " + role;
+      const prefix = role === "user" ? "Вы: " : "Ассистент: ";
+      div.textContent = prefix + text;
+      if (latencyMs) {
+        const span = document.createElement("span");
+        span.className = "latency";
+        span.textContent = ` [${latencyMs}ms]`;
+        div.appendChild(span);
+      }
+      $("#transcriptBox").appendChild(div);
+      $("#transcriptBox").scrollTop = $("#transcriptBox").scrollHeight;
+    }
+
+    function b64ToInt16(b64) {
+      const bin = atob(b64);
+      const buf = new Int16Array(bin.length / 2);
+      for (let i = 0; i < buf.length; i++) {
+        buf[i] = (bin.charCodeAt(i * 2 + 1) << 8) | bin.charCodeAt(i * 2);
+      }
+      return buf;
+    }
+
+    function playPcm(int16, sampleRate) {
+      if (!playCtx) {
+        playCtx = new AudioContext();
+        nextPlayTime = playCtx.currentTime + 0.05;
+      }
+      if (nextPlayTime < playCtx.currentTime) {
+        nextPlayTime = playCtx.currentTime + 0.02;
+      }
+      const buffer = playCtx.createBuffer(1, int16.length, sampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let i = 0; i < int16.length; i++) channel[i] = int16[i] / 0x8000;
+      const src = playCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(playCtx.destination);
+      src.start(nextPlayTime);
+      nextPlayTime += buffer.duration;
+    }
+
+    function handleEvent(evt) {
+      if (evt.type === "session.ready") {
+        setStatus("Готов к разговору", "good");
+        $("#btnTalk").disabled = false;
+      }
+      if (evt.type === "conversation.item.input_audio_transcription.completed") {
+        const text = evt.transcription || evt.transcript || "";
+        if (text) addTurn("user", text);
+        setStatus(`Обработка... (STT: ${Date.now() - t0}ms)`, "warn");
+      }
+      if (evt.type === "response.output_text.delta") {
+        $("#currentResponse").textContent += evt.delta || "";
+      }
+      if (evt.type === "response.output_audio.delta" && evt.delta) {
+        playPcm(b64ToInt16(evt.delta), evt.sample_rate_hz || 24000);
+        if (!firstAudio) {
+          firstAudio = true;
+          setStatus(`Отвечаю... (${Date.now() - t0}ms)`, "good");
+        }
+      }
+      if (evt.type === "response.done") {
+        const vt = evt.voice_timings || {};
+        const totalMs = vt.total_ms || (Date.now() - t0);
+        const text = $("#currentResponse").textContent.trim();
+        if (text) addTurn("assistant", text, totalMs);
+        setStatus(
+          vt.stt_ms !== undefined
+            ? `STT:${vt.stt_ms} RAG:${vt.rag_ms} LLM:${vt.llm_first_ms} TTS:${vt.tts_first_ms} = ${totalMs}ms`
+            : `Готово: ${totalMs}ms`,
+          "good"
+        );
+      }
+      if (evt.type === "warning") {
+        setStatus(evt.message || "Предупреждение", "warn");
+      }
+      if (evt.type === "error") {
+        setStatus(evt.error || "Ошибка", "danger");
+      }
+    }
+
+    async function connect() {
+      if (connected) return;
+      ws = new WebSocket(`${WS_BASE}/ws/voice`);
+      ws.onopen = async () => {
+        connected = true;
+        $("#btnConnect").textContent = "Подключено";
+        $("#btnConnect").classList.add("connected");
+        setStatus("Подключение...", "warn");
+
+        // Init audio
+        audioCtx = new AudioContext();
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 24000, channelCount: 1 } });
+        await audioCtx.audioWorklet.addModule("recorder-worklet.js");
+        recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
+        source = audioCtx.createMediaStreamSource(stream);
+        recorderNode.port.onmessage = (e) => {
+          if (!talking || !ws) return;
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(e.data.buffer)));
+          ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
+        };
+        source.connect(recorderNode);
+
+        // Send session config
+        ws.send(JSON.stringify({
+          type: "session.update",
+          backend: "our_rag",
+          voice_provider: "local",
+          brain_model: "Qwen/Qwen3.5-35B-A3B-FP8",
+          stt_provider: "whisper",
+          tts_provider: "silero_tts",
+        }));
+      };
+      ws.onmessage = (msg) => handleEvent(JSON.parse(msg.data));
+      ws.onerror = () => setStatus("Ошибка соединения", "danger");
+      ws.onclose = () => {
+        connected = false;
+        $("#btnConnect").textContent = "Подключить";
+        $("#btnConnect").classList.remove("connected");
+        $("#btnTalk").disabled = true;
+        setStatus("Отключено", "warn");
+      };
+    }
+
+    function startTalking() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      // Interrupt if assistant is speaking
+      if (playCtx && nextPlayTime > playCtx.currentTime) {
+        playCtx.close();
+        playCtx = null;
+        nextPlayTime = 0;
+        ws.send(JSON.stringify({ type: "response.cancel" }));
+      }
+      talking = true;
+      $("#currentResponse").textContent = "";
+      $("#btnTalk").classList.add("talking");
+      $("#btnTalk").textContent = "Слушаю...";
+      setStatus("Слушаю...", "warn");
+    }
+
+    function stopTalking() {
+      if (!ws || !talking) return;
+      talking = false;
+      $("#btnTalk").classList.remove("talking");
+      $("#btnTalk").textContent = "Говорить";
+      setStatus("Обработка...", "warn");
+      t0 = Date.now();
+      firstAudio = false;
+      ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    }
+
+    function downloadTranscript() {
+      if (!turns.length) return;
+      let md = "# Микро Лизинг - Транскрипт голосового разговора\n\n";
+      md += `**Дата:** ${new Date().toLocaleDateString("ru-RU")}\n`;
+      md += `**Время:** ${turns[0].time} - ${turns[turns.length - 1].time}\n\n`;
+      md += "---\n\n";
+      for (const t of turns) {
+        const prefix = t.role === "user" ? "**Клиент:**" : "**Ассистент:**";
+        const lat = t.latencyMs ? ` *(${t.latencyMs}ms)*` : "";
+        md += `${prefix} ${t.text}${lat}\n\n`;
+      }
+      const blob = new Blob([md], { type: "text/markdown" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `transcript_${new Date().toISOString().slice(0, 10)}.md`;
+      a.click();
+    }
+
+    // Event listeners
+    $("#btnConnect").addEventListener("click", () => connect().catch(alert));
+
+    // Mouse events
+    $("#btnTalk").addEventListener("mousedown", startTalking);
+    $("#btnTalk").addEventListener("mouseup", stopTalking);
+    $("#btnTalk").addEventListener("mouseleave", stopTalking);
+
+    // Touch events (mobile/tablet)
+    $("#btnTalk").addEventListener("touchstart", (e) => { e.preventDefault(); startTalking(); });
+    $("#btnTalk").addEventListener("touchend", (e) => { e.preventDefault(); stopTalking(); });
+
+    // Download
+    $("#btnDownload").addEventListener("click", downloadTranscript);
+    </script>
+  </body>
+</html>

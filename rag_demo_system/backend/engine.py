@@ -52,8 +52,7 @@ def effective_retrieval(config: RetrievalConfig, fast: bool, voice_fast: bool = 
 
 
 def should_rerank(config: RerankerConfig, voice_fast: bool) -> bool:
-    if voice_fast:
-        return False
+    # Reranking is fast (~20ms) and critical for quality. Always use it.
     return bool(config.enabled)
 
 

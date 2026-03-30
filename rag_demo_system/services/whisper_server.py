@@ -57,7 +57,11 @@ def create_app(transcriber: FasterWhisperTranscriber) -> FastAPI:
             audio_bytes = base64.b64decode(payload.audio_b64)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"invalid_audio_b64: {exc}") from exc
+        audio_len_bytes = len(audio_bytes)
+        audio_duration_s = audio_len_bytes / (2 * payload.sample_rate_hz)  # PCM16 = 2 bytes/sample
+        print(f"[whisper] transcribe: {audio_len_bytes} bytes, {audio_duration_s:.1f}s, sr={payload.sample_rate_hz}, lang={payload.language}")
         text = transcriber.transcribe_pcm16(audio_bytes, payload.sample_rate_hz, payload.language)
+        print(f"[whisper] result: '{text[:100]}'" if text else "[whisper] result: (empty)")
         return {
             "ok": True,
             "provider": "whisper",
