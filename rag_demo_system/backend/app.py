@@ -886,9 +886,13 @@ async def voice_ws(websocket: WebSocket) -> None:
                     raw = _b64mod.b64decode(audio)
                     await audio_adapter.handle_audio_message(raw)
             elif event_type == "input_audio_buffer.commit":
-                audio_b64 = "".join(audio_chunks)
+                # Each chunk was independently base64-encoded; decode all,
+                # concatenate raw bytes, then re-encode as single base64 string.
+                raw_audio = b"".join(_b64mod.b64decode(c) for c in audio_chunks)
                 audio_chunks.clear()
-                await _process_voice_utterance(audio_b64)
+                if raw_audio:
+                    audio_b64 = _b64mod.b64encode(raw_audio).decode()
+                    await _process_voice_utterance(audio_b64)
             elif event_type == "response.cancel":
                 session.assistant_speaking = False
                 session.interrupted = True
