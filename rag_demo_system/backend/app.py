@@ -1040,15 +1040,24 @@ async def voice_ws(websocket: WebSocket) -> None:
 
     # Step 3: Ask name
     await _send_tts_message("Спасибо! Как я могу к вам обращаться?")
-    client_name = await _wait_for_speech()
-    # Extract just the name (strip common prefixes)
-    for prefix in ["меня зовут ", "я ", "это ", "мое имя ", "моё имя ", "зовите меня ", "называйте меня "]:
-        if client_name.lower().startswith(prefix):
+    client_name_raw = await _wait_for_speech()
+    # Extract just the name: strip prefixes and filler words
+    client_name = client_name_raw.lower().strip()
+    for prefix in ["меня зовут ", "я тоже ", "я ", "это ", "мое имя ", "моё имя ",
+                    "зовите меня ", "называйте меня ", "можете называть меня ", "имя "]:
+        if client_name.startswith(prefix):
             client_name = client_name[len(prefix):]
             break
-    client_name = client_name.strip().strip(".").strip(",").title()
-    if not client_name or len(client_name) > 30:
-        client_name = "клиент"
+    # Remove remaining filler words that might precede the actual name
+    for filler in ["тоже ", "тоже", "это ", "ну ", "а ", "вот "]:
+        if client_name.startswith(filler):
+            client_name = client_name[len(filler):]
+    client_name = client_name.strip().strip(".").strip(",").strip("!").title()
+    # Take only the first word (the actual name, not "Евгений из Минска")
+    if " " in client_name:
+        client_name = client_name.split()[0]
+    if not client_name or len(client_name) > 20 or len(client_name) < 2:
+        client_name = "друг"
 
     # Step 4: Greet and start
     await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
