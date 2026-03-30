@@ -101,7 +101,13 @@ class Qwen3OmniInference:
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_f:
                 tmp_path = tmp_f.name
-                tmp_f.write(base64.b64decode(req.audio_b64))
+                import wave
+                pcm_data = base64.b64decode(req.audio_b64)
+                with wave.open(tmp_f, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(24000)
+                    wf.writeframes(pcm_data)
 
             # Build conversation in the Qwen3-Omni multi-modal format
             conversation = [
