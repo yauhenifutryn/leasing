@@ -28,16 +28,8 @@
         text-align: center;
         padding: 24px 0 16px;
       }
-      .logo h1 {
-        font-size: 20px;
-        font-weight: 600;
-        color: #1a56db;
-      }
-      .logo p {
-        font-size: 13px;
-        color: #6b7280;
-        margin-top: 4px;
-      }
+      .logo h1 { font-size: 20px; font-weight: 600; color: #1a56db; }
+      .logo p { font-size: 13px; color: #6b7280; margin-top: 4px; }
       .status-bar {
         text-align: center;
         font-size: 12px;
@@ -55,6 +47,36 @@
       .status-bar.good { color: #059669; }
       .status-bar.warn { color: #d97706; }
       .status-bar.danger { color: #dc2626; }
+
+      /* Mode tabs */
+      .mode-tabs {
+        display: flex;
+        gap: 0;
+        margin-bottom: 12px;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #e5e7eb;
+      }
+      .mode-tab {
+        flex: 1;
+        padding: 12px;
+        text-align: center;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        background: #f9fafb;
+        color: #6b7280;
+        border: none;
+        transition: all 0.15s;
+      }
+      .mode-tab.active {
+        background: #1a56db;
+        color: #fff;
+      }
+      .mode-tab:not(.active):hover {
+        background: #e5e7eb;
+      }
+
       .transcript-box {
         flex: 1;
         background: #ffffff;
@@ -67,9 +89,7 @@
         font-size: 14px;
         line-height: 1.6;
       }
-      .transcript-box .turn {
-        margin-bottom: 10px;
-      }
+      .transcript-box .turn { margin-bottom: 10px; }
       .transcript-box .turn.user { color: #1a56db; }
       .transcript-box .turn.assistant { color: #1a1a2e; }
       .transcript-box .turn .latency { color: #9ca3af; font-size: 11px; }
@@ -84,15 +104,48 @@
         color: #1a1a2e;
         line-height: 1.5;
       }
-      .current-response:empty::after {
-        content: "Нажмите и удерживайте кнопку, чтобы говорить";
-        color: #9ca3af;
+
+      /* Push-to-talk controls */
+      .ptt-controls { display: flex; gap: 10px; padding-bottom: 20px; }
+      .ptt-controls.hidden { display: none; }
+
+      /* Streaming controls */
+      .stream-controls { text-align: center; padding-bottom: 20px; }
+      .stream-controls.hidden { display: none; }
+      .stream-status {
+        font-size: 14px;
+        padding: 16px;
+        border-radius: 12px;
+        margin-bottom: 10px;
       }
-      .controls {
-        display: flex;
-        gap: 10px;
-        padding-bottom: 20px;
+      .stream-status.listening {
+        background: #dcfce7;
+        color: #059669;
+        animation: pulse 2s infinite;
       }
+      .stream-status.idle {
+        background: #f3f4f6;
+        color: #6b7280;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+      .btn-mute {
+        border: none;
+        border-radius: 12px;
+        padding: 14px 20px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        background: #dc2626;
+        color: #fff;
+        width: 100%;
+      }
+      .btn-mute.muted {
+        background: #059669;
+      }
+
       .btn {
         border: none;
         border-radius: 12px;
@@ -103,15 +156,6 @@
         transition: all 0.15s;
         -webkit-tap-highlight-color: transparent;
         user-select: none;
-      }
-      .btn-connect {
-        background: #e5e7eb;
-        color: #1a56db;
-        flex: 1;
-      }
-      .btn-connect.connected {
-        background: #1a56db;
-        color: #fff;
       }
       .btn-talk {
         background: #059669;
@@ -132,25 +176,9 @@
         color: #6b7280;
         padding: 14px;
         font-size: 18px;
-      }
-      .btn-download:hover { color: #1a1a2e; }
-      .mode-toggle {
-        text-align: center;
-        margin-bottom: 10px;
-      }
-      .mode-toggle button {
-        background: none;
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        padding: 6px 14px;
-        font-size: 12px;
-        color: #6b7280;
+        border: none;
+        border-radius: 12px;
         cursor: pointer;
-        transition: all 0.15s;
-      }
-      .mode-toggle button:hover {
-        border-color: #1a56db;
-        color: #1a56db;
       }
     </style>
   </head>
@@ -161,20 +189,30 @@
         <p>Голосовой помощник</p>
       </div>
 
-      <div class="status-bar" id="statusBar">Нажмите "Подключить" для начала</div>
+      <div class="status-bar" id="statusBar">Выберите режим для начала</div>
 
-      <div class="transcript-box" id="transcriptBox"></div>
-
-      <div class="current-response" id="currentResponse"></div>
-
-      <div class="mode-toggle">
-        <button id="btnMode" onclick="toggleMode()">Режим: Нажми и говори</button>
+      <!-- Mode selection tabs -->
+      <div class="mode-tabs">
+        <button class="mode-tab" id="tabPTT" onclick="selectMode('ptt')">Нажми и говори</button>
+        <button class="mode-tab" id="tabStream" onclick="selectMode('stream')">Свободный разговор</button>
       </div>
 
-      <div class="controls">
-        <button class="btn btn-connect" id="btnConnect">Подключить</button>
+      <div class="transcript-box" id="transcriptBox"></div>
+      <div class="current-response" id="currentResponse"></div>
+
+      <!-- Push-to-talk controls -->
+      <div class="ptt-controls hidden" id="pttControls">
         <button class="btn btn-talk" id="btnTalk" disabled>Говорить</button>
-        <button class="btn btn-download" id="btnDownload" title="Скачать транскрипт">&#8681;</button>
+        <button class="btn btn-download" id="btnDownloadPTT" title="Скачать транскрипт">&#8681;</button>
+      </div>
+
+      <!-- Streaming controls -->
+      <div class="stream-controls hidden" id="streamControls">
+        <div class="stream-status idle" id="streamStatus">Подключение...</div>
+        <button class="btn-mute muted" id="btnMute" onclick="toggleMute()">Включить микрофон</button>
+        <div style="margin-top:10px">
+          <button class="btn btn-download" id="btnDownloadStream" title="Скачать транскрипт">&#8681;</button>
+        </div>
       </div>
     </div>
 
@@ -191,8 +229,9 @@
     let t0 = 0;
     let firstAudio = false;
     let turns = [];
-    let vadMode = false;
+    let currentMode = null; // 'ptt' or 'stream'
     let continuousStreaming = false;
+    let micMuted = true;
 
     const $ = (s) => document.querySelector(s);
 
@@ -226,37 +265,56 @@
       }
     }
 
-    let audioChunkCount = 0;
-    function toggleMode() {
-      if (!connected) { setStatus("Сначала подключитесь", "warn"); return; }
-      vadMode = !vadMode;
-      const btn = $("#btnMode");
-      const talkBtn = $("#btnTalk");
+    // ---------- Mode selection ----------
+    function selectMode(mode) {
+      if (currentMode === mode) return;
+      currentMode = mode;
 
-      if (vadMode) {
-        btn.textContent = "Режим: Свободный разговор";
-        talkBtn.textContent = "Микрофон вкл";
-        ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
-        startContinuousStream();
-        setStatus("VAD режим включен, говорите", "good");
+      // Update tabs
+      $("#tabPTT").classList.toggle("active", mode === "ptt");
+      $("#tabStream").classList.toggle("active", mode === "stream");
+
+      // Show/hide controls
+      $("#pttControls").classList.toggle("hidden", mode !== "ptt");
+      $("#streamControls").classList.toggle("hidden", mode !== "stream");
+
+      // Connect if not connected
+      if (!connected) {
+        connectWS(mode === "stream");
       } else {
-        btn.textContent = "Режим: Нажми и говори";
-        talkBtn.textContent = "Удерживайте для записи";
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        // Switch mode on existing connection
+        if (mode === "stream") {
+          ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
+          continuousStreaming = true;
+          micMuted = false;
+          $("#btnMute").textContent = "Выключить микрофон";
+          $("#btnMute").classList.remove("muted");
+          $("#streamStatus").textContent = "Слушаю...";
+          $("#streamStatus").className = "stream-status listening";
+        } else {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: false }));
+          continuousStreaming = false;
         }
-        stopContinuousStream();
       }
     }
 
-    function startContinuousStream() {
-      continuousStreaming = true;
+    function toggleMute() {
+      micMuted = !micMuted;
+      continuousStreaming = !micMuted;
+      if (micMuted) {
+        $("#btnMute").textContent = "Включить микрофон";
+        $("#btnMute").classList.add("muted");
+        $("#streamStatus").textContent = "Микрофон выключен";
+        $("#streamStatus").className = "stream-status idle";
+      } else {
+        $("#btnMute").textContent = "Выключить микрофон";
+        $("#btnMute").classList.remove("muted");
+        $("#streamStatus").textContent = "Слушаю...";
+        $("#streamStatus").className = "stream-status listening";
+      }
     }
 
-    function stopContinuousStream() {
-      continuousStreaming = false;
-    }
-
+    // ---------- Audio ----------
     function b64ToInt16(b64) {
       const bin = atob(b64);
       const buf = new Int16Array(bin.length / 2);
@@ -284,11 +342,18 @@
       nextPlayTime += buffer.duration;
     }
 
+    // ---------- WebSocket events ----------
     function handleEvent(evt) {
       if (evt.type === "session.ready") {
         localStorage.setItem("voice_session_id", evt.session_id);
         setStatus("Готов к разговору", "good");
         $("#btnTalk").disabled = false;
+      }
+      if (evt.type === "session.updated") {
+        if (evt.vad_mode && currentMode === "stream") {
+          $("#streamStatus").textContent = "Слушаю...";
+          $("#streamStatus").className = "stream-status listening";
+        }
       }
       if (evt.type === "conversation.item.input_audio_transcription.completed") {
         const text = evt.transcription || evt.transcript || "";
@@ -321,6 +386,13 @@
         } else {
           setStatus("Готов к разговору", "good");
         }
+        // In streaming mode, show listening status after response
+        if (currentMode === "stream" && !micMuted) {
+          setTimeout(() => {
+            $("#streamStatus").textContent = "Слушаю...";
+            $("#streamStatus").className = "stream-status listening";
+          }, 500);
+        }
       }
       if (evt.type === "warning") {
         setStatus(evt.message || "Предупреждение", "warn");
@@ -334,13 +406,12 @@
       }
     }
 
-    async function connect() {
+    // ---------- Connection ----------
+    async function connectWS(startWithVAD) {
       if (connected) return;
       ws = new WebSocket(`${WS_BASE}/ws/voice`);
       ws.onopen = async () => {
         connected = true;
-        $("#btnConnect").textContent = "Подключено";
-        $("#btnConnect").classList.add("connected");
         setStatus("Подключение...", "warn");
 
         // Init audio
@@ -352,43 +423,41 @@
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
           if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
-            audioChunkCount++;
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
             ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
-            if (audioChunkCount % 100 === 0) {
-              console.log(`[audio] sent ${audioChunkCount} chunks, mode: ${vadMode ? 'VAD' : 'PTT'}, streaming: ${continuousStreaming}`);
-            }
           }
         };
         source.connect(recorderNode);
 
-        // Send session init with stored ID (for reconnection) or let server create new
+        // Send session init
         const savedSessionId = localStorage.getItem("voice_session_id");
-        ws.send(JSON.stringify({
-          type: "session.init",
-          session_id: savedSessionId || null,
-        }));
+        ws.send(JSON.stringify({ type: "session.init", session_id: savedSessionId || null }));
+
+        // If starting in streaming mode, enable VAD immediately
+        if (startWithVAD) {
+          ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
+          continuousStreaming = true;
+          micMuted = false;
+          $("#btnMute").textContent = "Выключить микрофон";
+          $("#btnMute").classList.remove("muted");
+        }
       };
       ws.onmessage = (msg) => handleEvent(JSON.parse(msg.data));
       ws.onerror = () => setStatus("Ошибка соединения", "danger");
       ws.onclose = () => {
         connected = false;
-        $("#btnConnect").textContent = "Подключить";
-        $("#btnConnect").classList.remove("connected");
         $("#btnTalk").disabled = true;
-        setStatus("Отключено", "warn");
+        setStatus("Отключено. Выберите режим для подключения.", "warn");
+        if (currentMode === "stream") {
+          $("#streamStatus").textContent = "Отключено";
+          $("#streamStatus").className = "stream-status idle";
+        }
       };
     }
 
+    // ---------- Push-to-talk ----------
     function startTalking() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      // In VAD mode, toggle mute/unmute instead of push-to-talk
-      if (vadMode) {
-        continuousStreaming = !continuousStreaming;
-        $("#btnTalk").textContent = continuousStreaming ? "Микрофон вкл" : "Микрофон выкл";
-        return;
-      }
-      // Interrupt if assistant is speaking
       if (playCtx && nextPlayTime > playCtx.currentTime) {
         stopPlayback();
         ws.send(JSON.stringify({ type: "response.cancel" }));
@@ -401,7 +470,6 @@
     }
 
     function stopTalking() {
-      if (vadMode) return;
       if (!ws || !talking) return;
       talking = false;
       $("#btnTalk").classList.remove("talking");
@@ -412,12 +480,12 @@
       ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     }
 
+    // ---------- Transcript download ----------
     function downloadTranscript() {
       if (!turns.length) return;
       let md = "# Микро Лизинг - Транскрипт голосового разговора\n\n";
       md += `**Дата:** ${new Date().toLocaleDateString("ru-RU")}\n`;
-      md += `**Время:** ${turns[0].time} - ${turns[turns.length - 1].time}\n\n`;
-      md += "---\n\n";
+      md += `**Время:** ${turns[0].time} - ${turns[turns.length - 1].time}\n\n---\n\n`;
       for (const t of turns) {
         const prefix = t.role === "user" ? "**Клиент:**" : "**Ассистент:**";
         const lat = t.latencyMs ? ` *(${t.latencyMs}ms)*` : "";
@@ -430,20 +498,14 @@
       a.click();
     }
 
-    // Event listeners
-    $("#btnConnect").addEventListener("click", () => connect().catch(alert));
-
-    // Mouse events
+    // ---------- Event listeners ----------
     $("#btnTalk").addEventListener("mousedown", startTalking);
     $("#btnTalk").addEventListener("mouseup", stopTalking);
     $("#btnTalk").addEventListener("mouseleave", stopTalking);
-
-    // Touch events (mobile/tablet)
     $("#btnTalk").addEventListener("touchstart", (e) => { e.preventDefault(); startTalking(); });
     $("#btnTalk").addEventListener("touchend", (e) => { e.preventDefault(); stopTalking(); });
-
-    // Download
-    $("#btnDownload").addEventListener("click", downloadTranscript);
+    $("#btnDownloadPTT").addEventListener("click", downloadTranscript);
+    $("#btnDownloadStream").addEventListener("click", downloadTranscript);
     </script>
   </body>
 </html>
