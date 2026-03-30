@@ -30,6 +30,8 @@ class SileroVAD:
     SPEECH_THRESHOLD = 0.5
     """Probability above which a chunk is considered speech."""
 
+    _VAD_RATE = 16000  # Silero VAD only supports 8000 and 16000 Hz
+
     def __init__(
         self,
         sample_rate: int = 16000,
@@ -38,6 +40,7 @@ class SileroVAD:
     ) -> None:
         self.sample_rate = sample_rate
         self.silence_ms = silence_ms
+        self._resample = sample_rate != self._VAD_RATE
 
         if model is not None:
             self._model = model
@@ -76,7 +79,17 @@ class SileroVAD:
         samples = struct.unpack(f"<{n_samples}h", pcm16_bytes)
         tensor = torch.FloatTensor(samples) / 32768.0
 
-        prob = self._model(tensor, self.sample_rate).item()
+        # Resample to 16kHz for VAD model if input is different rate
+        if self._resample:
+            ratio = self._VAD_RATE / self.sample_rate
+            target_len = int(len(tensor) * ratio)
+            vad_tensor = torch.nn.functional.interpolate(
+                tensor.unsqueeze(0).unsqueeze(0), size=target_len, mode="linear", align_corners=False
+            ).squeeze()
+        else:
+            vad_tensor = tensor
+
+        prob = self._model(vad_tensor, self._VAD_RATE).item()
 
         if prob >= self.SPEECH_THRESHOLD:
             if not self._is_speaking:
