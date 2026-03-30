@@ -54,9 +54,10 @@ demo_ui/__pycache__/
 *.zip
 
 # Voice pipeline runtime artifacts
-voices/*.pt
-voices/*.wav
-voices/catalog.json
+**/voices/*.pt
+**/voices/*.wav
+**/voices/catalog.json
+!**/voices/.gitkeep
 models/
 *.log
 .state/
