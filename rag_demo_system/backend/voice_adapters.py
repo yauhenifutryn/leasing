@@ -2,9 +2,33 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from typing import Any
 
 import requests
+
+try:
+    from num2words import num2words as _num2words
+
+    def _number_to_russian(match: re.Match) -> str:
+        """Convert a numeric match to Russian words."""
+        num_str = match.group(0).replace(" ", "").replace("\u00a0", "")
+        try:
+            n = float(num_str) if "." in num_str or "," in num_str else int(num_str)
+            return _num2words(n, lang="ru")
+        except (ValueError, OverflowError):
+            return match.group(0)
+
+    _NUM_RE = re.compile(r"\d[\d\s\u00a0]*[\d.,]*\d|\d+")
+
+    def normalize_numbers_for_tts(text: str) -> str:
+        """Replace digits with Russian words for natural TTS pronunciation."""
+        return _NUM_RE.sub(_number_to_russian, text)
+
+except ImportError:
+    def normalize_numbers_for_tts(text: str) -> str:
+        """Passthrough when num2words is not installed."""
+        return text
 
 
 def _service_status(name: str, base_url: str | None) -> dict[str, Any]:
@@ -72,9 +96,10 @@ def synthesize_audio(text: str, session_id: str) -> dict[str, Any]:
     base_url = os.getenv("SILERO_TTS_BASE_URL")
     if not base_url:
         raise RuntimeError("SILERO_TTS_BASE_URL is not configured")
+    tts_text = normalize_numbers_for_tts(text)
     resp = requests.post(
         base_url.rstrip("/") + "/speak",
-        json={"text": text, "session_id": session_id, "language": "ru"},
+        json={"text": tts_text, "session_id": session_id, "language": "ru"},
         timeout=60,
     )
     resp.raise_for_status()

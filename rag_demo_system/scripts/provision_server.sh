@@ -202,6 +202,7 @@ install_all_venvs() {
     qdrant-client \
     sentence-transformers \
     rank-bm25 \
+    num2words \
     pytest
 
   log "Installing OSS voice venv (.venv-voice-oss) -- Whisper + Silero"
