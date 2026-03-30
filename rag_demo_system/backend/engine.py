@@ -10,7 +10,7 @@ from rank_bm25 import BM25Okapi
 
 from .cache import TTLCache, LRUCache
 from .ingest import Chunk, build_chunks
-from .query import load_abbreviations, normalize_query
+from .query import load_abbreviations, normalize_query, expand_synonyms
 from .rag import ensure_collection, search, upsert_chunks
 from .rerank import Reranker
 from .retrieval_utils import filter_vector_hits
@@ -156,6 +156,7 @@ class RAGEngine:
         timings: dict[str, float] = {}
         t0 = time.perf_counter()
         normalized = normalize_query(query, self.abbrev)
+        normalized = expand_synonyms(normalized)
         timings["normalize_ms"] = (time.perf_counter() - t0) * 1000
         rewritten = normalized
         session_key = session_id or "anon"
