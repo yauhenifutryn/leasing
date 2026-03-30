@@ -852,13 +852,124 @@ async def voice_ws(websocket: WebSocket) -> None:
 
     audio_adapter = WebSocketAudioAdapter(on_chunk=_on_audio_chunk)
 
-    await websocket.send_json(
-        {
-            "type": "session.ready",
+    # ------------------------------------------------------------------
+    # Helper: send text + TTS audio to client (for hardcoded messages)
+    # ------------------------------------------------------------------
+    async def _send_tts_message(text: str) -> None:
+        await websocket.send_json({
+            "type": "response.output_text.delta",
+            "session_id": session_id,
+            "delta": text,
+        })
+        try:
+            audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
+            if audio_resp.get("audio_b64"):
+                await websocket.send_json({
+                    "type": "response.output_audio.delta",
+                    "session_id": session_id,
+                    "delta": audio_resp["audio_b64"],
+                    "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+        await websocket.send_json({
+            "type": "response.done",
             "session_id": session_id,
             "backend": session.backend,
-        }
+            "used_knowledge": [],
+            "citations": [],
+            "timings": {},
+        })
+
+    # ------------------------------------------------------------------
+    # Helper: wait for next voice utterance and return transcript text
+    # ------------------------------------------------------------------
+    async def _wait_for_speech() -> str:
+        while True:
+            event = await websocket.receive_json()
+            event_type = event.get("type")
+            if event_type == "session.init":
+                if event.get("session_id"):
+                    nonlocal session_id
+                    old_id = session_id
+                    session_id = str(event["session_id"])
+                    session.session_id = session_id
+                    voice_sessions.pop(old_id, None)
+                    voice_sessions[session_id] = session
+                continue
+            elif event_type == "session.update":
+                continue
+            elif event_type == "input_audio_buffer.append":
+                audio = event.get("audio") or ""
+                if audio:
+                    raw = _b64mod.b64decode(audio)
+                    await audio_adapter.handle_audio_message(raw)
+            elif event_type == "input_audio_buffer.commit":
+                raw_audio = b"".join(_b64mod.b64decode(c) for c in audio_chunks)
+                audio_chunks.clear()
+                if not raw_audio:
+                    continue
+                audio_b64 = _b64mod.b64encode(raw_audio).decode()
+                try:
+                    transcript = transcribe_audio(audio_b64, session_id=session_id)
+                except Exception:  # noqa: BLE001
+                    continue
+                text = (transcript.get("text") or "").strip()
+                if text:
+                    await websocket.send_json({
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "session_id": session_id,
+                        "provider": transcript.get("provider"),
+                        "transcription": text,
+                    })
+                    return text
+
+    # ------------------------------------------------------------------
+    # Hardcoded consent flow (runs once at start)
+    # ------------------------------------------------------------------
+    await websocket.send_json({
+        "type": "session.ready",
+        "session_id": session_id,
+        "backend": session.backend,
+    })
+
+    # Step 1: Introduce and ask consent
+    await _send_tts_message(
+        "Здравствуйте! Меня зовут Вика, я голосовая помощница компании Микро Лизинг. "
+        "Для продолжения консультации мне нужно ваше согласие на обработку персональных данных. Вы согласны?"
     )
+
+    # Step 2: Wait for consent answer
+    consent_text = await _wait_for_speech()
+    consent_positive = any(w in consent_text.lower() for w in ["да", "согласен", "согласна", "конечно", "ладно", "хорошо", "ок", "окей"])
+    if not consent_positive:
+        await _send_tts_message(
+            "Без согласия на обработку данных я не смогу продолжить консультацию. "
+            "Спасибо за обращение, всего доброго!"
+        )
+        return
+
+    # Step 3: Ask name
+    await _send_tts_message("Спасибо! Как я могу к вам обращаться?")
+    client_name = await _wait_for_speech()
+    # Extract just the name (strip common prefixes)
+    for prefix in ["меня зовут ", "я ", "это ", "мое имя ", "моё имя "]:
+        if client_name.lower().startswith(prefix):
+            client_name = client_name[len(prefix):]
+            break
+    client_name = client_name.strip().strip(".").strip(",").title()
+
+    # Step 4: Greet and start
+    await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
+
+    # Save intro to session transcript so memory block has it
+    chat_session = state.get(session_id) or state.create(session_id)
+    _append_turn(chat_session, f"Меня зовут {client_name}", f"Очень приятно, {client_name}! Чем могу помочь?", settings.app.memory_turns)
+    state.update(chat_session)
+
+    # Consent flow done. From here, all "да"/"нет" are normal conversation.
+    # ------------------------------------------------------------------
+
     try:
         while True:
             event = await websocket.receive_json()
