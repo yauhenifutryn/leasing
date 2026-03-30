@@ -34,15 +34,8 @@ for speaker in ["aidar", "baya", "xenia", "kseniya"]:
     audio = model.apply_tts(text=TEXT, speaker=speaker, sample_rate=24000, put_accent=True, put_yo=True)
     save_wav(audio, f"native_{speaker}")
 
-# Random male-ish voices (random embeddings, some will sound male)
-print("\n--- Random Voices (10 samples) ---")
-for i in range(10):
-    embedding = model.sample_random_speaker()
-    audio = model.apply_tts(text=TEXT, speaker=embedding, sample_rate=24000, put_accent=True, put_yo=True)
-    save_wav(audio, f"random_{i+1:02d}")
-    torch.save(embedding, f"/tmp/voice_samples/random_{i+1:02d}.pt")
-
-print("\nDone! 15 samples generated.")
+print("\nDone! 4 native samples generated.")
+print("Note: this Silero model version does not support random voice generation.")
 print("Download to your Mac:")
 print("  scp -P 50576 root@<IP>:/tmp/voice_samples/*.wav ~/Downloads/voice_samples/")
 PYEOF
