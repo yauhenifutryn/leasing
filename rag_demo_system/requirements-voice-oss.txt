@@ -5,3 +5,4 @@ faster-whisper>=1.0.0
 nvidia-cublas-cu12
 nvidia-cudnn-cu12
 silero>=0.5.0
+scipy

@@ -18,8 +18,13 @@ class SileroTTSSynthesizer:
     def __init__(
         self, speaker: str, sample_rate: int, model_variant: str = "v4_ru", speaker_pt: str | None = None
     ) -> None:
-        from silero import silero_tts
-        self._model, _ = silero_tts(language="ru", speaker=model_variant)
+        self._model, _ = torch.hub.load(
+            repo_or_dir="snakers4/silero-models",
+            model="silero_tts",
+            language="ru",
+            speaker=model_variant,
+            trust_repo=True,
+        )
         self._model.to(torch.device("cpu"))
         self._speaker = speaker
         self._speaker_embedding: torch.Tensor | None = None
@@ -46,7 +51,36 @@ class SileroTTSSynthesizer:
                 put_accent=True,
                 put_yo=True,
             )
-        pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
+        import numpy as np
+        from scipy import signal as sp_signal
+
+        audio_np = audio.detach().cpu().numpy().astype(np.float64)
+
+        # 1. Notch filter at 2.5kHz and 3.5kHz to suppress metallic ringing
+        #    (phase reconstruction artifact from vocoder)
+        for notch_freq in [2500, 3500]:
+            b, a = sp_signal.iirnotch(notch_freq, Q=8.0, fs=self._sample_rate)
+            audio_np = sp_signal.filtfilt(b, a, audio_np)
+
+        # 2. Gentle high-shelf cut above 4kHz to reduce breathiness
+        sos = sp_signal.butter(2, 4000, btype="low", fs=self._sample_rate, output="sos")
+        high_cut = sp_signal.sosfilt(sos, audio_np)
+        # Mix: 70% original + 30% low-passed to preserve clarity
+        audio_np = 0.7 * audio_np + 0.3 * high_cut
+
+        # 3. Noise gate: silence segments below threshold get zeroed
+        frame_size = int(self._sample_rate * 0.02)  # 20ms frames
+        for i in range(0, len(audio_np) - frame_size, frame_size):
+            frame_rms = np.sqrt(np.mean(audio_np[i:i+frame_size] ** 2))
+            if frame_rms < 0.008:  # below noise floor
+                audio_np[i:i+frame_size] *= 0.05  # near-silent, not hard zero
+
+        # 4. Normalize to 90% peak
+        peak = np.abs(audio_np).max()
+        if peak > 0:
+            audio_np = audio_np / peak * 0.9
+
+        pcm16 = (audio_np * 32767).astype(np.int16).tobytes()
         return pcm16, self._sample_rate
 
 
@@ -94,7 +128,7 @@ def create_unavailable_app(reason: str) -> FastAPI:
 
 
 def _build_default_app() -> FastAPI:
-    speaker = (os.getenv("SILERO_TTS_SPEAKER") or "aidar").strip()
+    speaker = (os.getenv("SILERO_TTS_SPEAKER") or "eugene").strip()
     model_variant = (os.getenv("SILERO_TTS_MODEL") or "v4_ru").strip()
     sample_rate = int(os.getenv("SILERO_TTS_SAMPLE_RATE") or "24000")
     speaker_pt = os.getenv("SILERO_TTS_SPEAKER_PT")
