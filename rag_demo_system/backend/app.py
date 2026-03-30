@@ -937,9 +937,11 @@ async def voice_ws(websocket: WebSocket) -> None:
                 session.backend = _selected_backend(event.get("backend"))
                 if "vad_mode" in event:
                     vad_enabled = bool(event["vad_mode"])
+                    print(f"[wait_speech] VAD SET TO {vad_enabled}", flush=True)
                     if vad_enabled and vad is None:
                         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
                         vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
+                        print(f"[wait_speech] VAD MODEL LOADED", flush=True)
                     if not vad_enabled and vad is not None:
                         vad.reset()
                 await websocket.send_json({
