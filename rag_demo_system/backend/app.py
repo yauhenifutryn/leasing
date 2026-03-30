@@ -599,16 +599,12 @@ async def _stream_voice_response(
     context_block = "\n\n".join(
         [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
     )
-    _list_triggers = ["документ", "перечень", "список", "какие нужны", "что нужно", "условия"]
-    expanded = (
-        any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
-        or any(trigger in message.lower() for trigger in _list_triggers)
-    )
+    expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
         "Это голосовой разговор по телефону. Ответь кратко, одно-два предложения. "
         "Дай только самое главное. Если вопрос расплывчатый, задай один короткий уточняющий вопрос."
         if not expanded
-        else "Клиент просит подробный ответ. Перечисли все пункты полностью. Не обрывай список."
+        else "Ответь подробнее, но кратко. Максимум три-четыре предложения."
     )
     weak_context = bool(retrieval.get("weak"))
     weak_hint = (
@@ -634,7 +630,7 @@ async def _stream_voice_response(
         nonlocal t_llm_first_token
         detector = SentenceDetector()
         try:
-            voice_max_tokens = 180 if expanded else 60
+            voice_max_tokens = 120 if expanded else 60
             stream = iter_openai_compatible_stream_events(
                 base_url=effective_base_url, model=effective_model,
                 system_prompt=system_prompt, user_prompt=user_prompt,

@@ -309,6 +309,7 @@
         const totalMs = vt.total_ms || (Date.now() - t0);
         const text = $("#currentResponse").textContent.trim();
         if (text) addTurn("assistant", text, totalMs);
+        $("#currentResponse").textContent = "";
         setStatus(
           vt.stt_ms !== undefined
             ? `STT:${vt.stt_ms} RAG:${vt.rag_ms} LLM:${vt.llm_first_ms} TTS:${vt.tts_first_ms} = ${totalMs}ms`
