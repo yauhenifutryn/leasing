@@ -168,7 +168,7 @@
       <div class="current-response" id="currentResponse"></div>
 
       <div class="mode-toggle">
-        <button id="btnMode" onclick="toggleMode()">Режим: Нажми и говори</button>
+        <button id="btnMode" onclick="toggleMode()" disabled>Режим: Нажми и говори</button>
       </div>
 
       <div class="controls">
@@ -306,16 +306,24 @@
       }
       if (evt.type === "response.done") {
         const vt = evt.voice_timings || {};
-        const totalMs = vt.total_ms || (Date.now() - t0);
+        const totalMs = (t0 > 0) ? (vt.total_ms || (Date.now() - t0)) : 0;
         const text = $("#currentResponse").textContent.trim();
         if (text) addTurn("assistant", text, totalMs);
         $("#currentResponse").textContent = "";
-        setStatus(
-          vt.stt_ms !== undefined
-            ? `STT:${vt.stt_ms} RAG:${vt.rag_ms} LLM:${vt.llm_first_ms} TTS:${vt.tts_first_ms} = ${totalMs}ms`
-            : `Готово: ${totalMs}ms`,
-          "good"
-        );
+        if (totalMs > 0) {
+          setStatus(
+            vt.stt_ms !== undefined
+              ? `STT:${vt.stt_ms} RAG:${vt.rag_ms} LLM:${vt.llm_first_ms} TTS:${vt.tts_first_ms} = ${totalMs}ms`
+              : `Готово: ${totalMs}ms`,
+            "good"
+          );
+          // Enable VAD toggle after first real response (consent flow done)
+          if (vt.stt_ms !== undefined && $("#btnMode").disabled) {
+            $("#btnMode").disabled = false;
+          }
+        } else {
+          setStatus("Готов к разговору", "good");
+        }
       }
       if (evt.type === "warning") {
         setStatus(evt.message || "Предупреждение", "warn");

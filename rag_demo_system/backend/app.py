@@ -898,6 +898,14 @@ async def voice_ws(websocket: WebSocket) -> None:
                     voice_sessions[session_id] = session
                 continue
             elif event_type == "session.update":
+                # Handle VAD toggle even during consent flow
+                if "vad_mode" in event:
+                    vad_enabled = bool(event["vad_mode"])
+                    if vad_enabled and vad is None:
+                        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+                        vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
+                    if not vad_enabled and vad is not None:
+                        vad.reset()
                 continue
             elif event_type == "input_audio_buffer.append":
                 audio = event.get("audio") or ""
