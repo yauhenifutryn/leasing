@@ -25,8 +25,10 @@ case "${1:-up}" in
     "$SUPERVISORD" -c "$CONF"
     sleep 2
 
-    # Start vLLM (autostart=false, needs explicit start)
+    # Start all services (autostart=false, need explicit start)
     "$SUPERVISORCTL" -c "$CONF" start qwen
+    "$SUPERVISORCTL" -c "$CONF" start whisper
+    "$SUPERVISORCTL" -c "$CONF" start silero_tts
     ;;
 
   down)
