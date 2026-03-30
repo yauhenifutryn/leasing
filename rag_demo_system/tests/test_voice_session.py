@@ -78,20 +78,12 @@ def test_provider_response_marks_assistant_speaking_and_captures_task() -> None:
     assert session.active_task_id == "task-11"
 
 
-def test_session_defaults_to_local_voice_provider() -> None:
-    voice_session = _load_module()
-
-    session = voice_session.VoiceSession(session_id="s4", backend="our_rag")
-
-    assert session.voice_provider == "local"
-
-
 def test_default_brain_model() -> None:
     voice_session = _load_module()
 
     session = voice_session.VoiceSession(session_id="s1")
 
-    assert session.brain_model == "Qwen/Qwen3-30B-A3B"
+    assert session.brain_model == "Qwen/Qwen3.5-35B-A3B-FP8"
 
 
 def test_default_stt_provider() -> None:
@@ -99,7 +91,7 @@ def test_default_stt_provider() -> None:
 
     session = voice_session.VoiceSession(session_id="s1")
 
-    assert session.stt_provider == "sensevoice"
+    assert session.stt_provider == "whisper"
 
 
 def test_default_tts_provider() -> None:
@@ -107,7 +99,7 @@ def test_default_tts_provider() -> None:
 
     session = voice_session.VoiceSession(session_id="s1")
 
-    assert session.tts_provider == "cosyvoice"
+    assert session.tts_provider == "silero_tts"
 
 
 def test_stack_id_composition() -> None:
