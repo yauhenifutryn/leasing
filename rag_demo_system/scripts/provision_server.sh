@@ -88,9 +88,12 @@ install_apt_packages() {
 
   # Install ngrok for exposing the backend to the internet (non-fatal)
   if ! command -v ngrok &>/dev/null; then
-    log "Installing ngrok"
-    curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin 2>/dev/null \
-      || log "WARNING: ngrok install failed (server may be down). Install manually later."
+    log "Installing ngrok via apt"
+    curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null 2>&1 \
+      && echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list >/dev/null 2>&1 \
+      && sudo -E apt-get update -y >/dev/null 2>&1 \
+      && sudo -E apt-get install -y ngrok >/dev/null 2>&1 \
+      || log "WARNING: ngrok install failed. Install manually: snap install ngrok"
   fi
 
   # Install Docker and ubuntu-drivers only if not in a container
