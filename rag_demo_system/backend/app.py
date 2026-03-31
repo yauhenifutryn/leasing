@@ -563,9 +563,22 @@ async def _stream_voice_response(
     backend = session.backend
     brain_model = session.brain_model
 
+    # --- Enrich short follow-ups with conversation context for RAG ---
+    rag_query = message
+    _short_followups = {"да", "нет", "давай", "давайте", "расскажи", "подробнее",
+                        "продолжай", "хорошо", "ок", "окей", "угу", "ага", "конечно"}
+    if len(message.split()) <= 4:
+        words = set(message.lower().replace(",", " ").replace(".", " ").split())
+        if words & _short_followups or len(message.split()) <= 2:
+            chat_sess = state.get(session_id)
+            if chat_sess and chat_sess.transcript:
+                last_turns = chat_sess.transcript[-4:]
+                context_words = " ".join(t.get("text", "")[:100] for t in last_turns)
+                rag_query = f"{context_words} {message}"
+
     # --- RAG retrieval ---
     retrieval = await asyncio.to_thread(
-        engine.retrieve, message, True, True, session_id,
+        engine.retrieve, rag_query, True, True, session_id,
     )
     t_retrieval_done = time.time()
     timings: dict[str, Any] = dict(retrieval.get("timings") or {})
@@ -649,7 +662,8 @@ async def _stream_voice_response(
         nonlocal t_llm_first_token
         detector = SentenceDetector()
         try:
-            voice_max_tokens = 120 if expanded else 60
+            is_followup = len(message.split()) <= 4
+            voice_max_tokens = 120 if (expanded or is_followup) else 60
             stream = iter_openai_compatible_stream_events(
                 base_url=effective_base_url, model=effective_model,
                 system_prompt=system_prompt, user_prompt=user_prompt,
