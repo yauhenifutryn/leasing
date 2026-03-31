@@ -563,18 +563,15 @@ async def _stream_voice_response(
     backend = session.backend
     brain_model = session.brain_model
 
-    # --- Enrich short follow-ups with conversation context for RAG ---
+    # --- Enrich RAG query with conversation context ---
+    # Always include recent context so RAG retrieves topic-relevant fragments,
+    # especially critical for short follow-ups like "да", "давай", "подробнее"
     rag_query = message
-    _short_followups = {"да", "нет", "давай", "давайте", "расскажи", "подробнее",
-                        "продолжай", "хорошо", "ок", "окей", "угу", "ага", "конечно"}
-    if len(message.split()) <= 4:
-        words = set(message.lower().replace(",", " ").replace(".", " ").split())
-        if words & _short_followups or len(message.split()) <= 2:
-            chat_sess = state.get(session_id)
-            if chat_sess and chat_sess.transcript:
-                last_turns = chat_sess.transcript[-4:]
-                context_words = " ".join(t.get("text", "")[:100] for t in last_turns)
-                rag_query = f"{context_words} {message}"
+    chat_sess_for_rag = state.get(session_id)
+    if chat_sess_for_rag and chat_sess_for_rag.transcript:
+        last_turns = chat_sess_for_rag.transcript[-4:]
+        context_words = " ".join(t.get("text", "")[:80] for t in last_turns)
+        rag_query = f"{context_words} {message}"
 
     # --- RAG retrieval ---
     retrieval = await asyncio.to_thread(
@@ -644,10 +641,12 @@ async def _stream_voice_response(
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
     user_prompt = (
-        "Ответь строго на основе следующих фрагментов базы знаний. "
-        "Если ответа нет - верни точный отказ.\n\n"
-        f"{memory_block}{length_hint}\n\n"
-        f"{weak_hint}{context_block}\n\nВопрос клиента: {message}"
+        f"{memory_block}"
+        f"Текущий вопрос клиента: {message}\n\n"
+        f"{length_hint}\n\n"
+        "Фрагменты из базы знаний (используй как источник фактов, "
+        "но учитывай контекст диалога выше для понимания что именно спрашивает клиент):\n\n"
+        f"{weak_hint}{context_block}"
     )
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
