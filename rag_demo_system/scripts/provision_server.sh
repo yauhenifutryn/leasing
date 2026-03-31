@@ -64,12 +64,27 @@ install_apt_packages() {
     python3 \
     python3-venv \
     python3-pip \
-    jq
+    jq \
+    software-properties-common
+
+  # Ensure Python 3.12+ (required for type hints and venv compatibility)
+  PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
+  if [ "$(echo "$PY_VER 3.12" | awk '{print ($1 < $2)}')" = "1" ]; then
+    log "Python $PY_VER found, need 3.12+. Installing..."
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt-get update -y
+    sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
+    # Make python3.12 the default python3
+    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+    log "Python 3.12 installed: $(python3.12 --version)"
+  else
+    log "Python $PY_VER OK"
+  fi
 
   # Install ngrok for exposing the backend to the internet
   if ! command -v ngrok &>/dev/null; then
     log "Installing ngrok"
-    curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin
+    curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin
   fi
 
   # Install Docker and ubuntu-drivers only if not in a container
@@ -177,13 +192,16 @@ clone_repo() {
 # ---------------------------------------------------------------------------
 # Step 4: Create virtualenvs and install requirements
 # ---------------------------------------------------------------------------
+# Use python3.12 if available, else python3
+PYTHON_BIN="$(command -v python3.12 2>/dev/null || command -v python3)"
+
 ensure_venv() {
   local target="$1"
   local req_file="$2"
 
   if [ ! -d "$target" ]; then
-    log "Creating venv: $target"
-    python3 -m venv "$target"
+    log "Creating venv: $target ($(${PYTHON_BIN} --version))"
+    "${PYTHON_BIN}" -m venv "$target"
   fi
 
   log "Installing requirements into $target from $req_file"
@@ -199,8 +217,8 @@ install_all_venvs() {
 
   log "Installing backend venv (.venv)"
   if [ ! -d "$APP_DIR/.venv" ]; then
-    log "Creating venv: $APP_DIR/.venv"
-    python3 -m venv "$APP_DIR/.venv"
+    log "Creating venv: $APP_DIR/.venv ($(${PYTHON_BIN} --version))"
+    "${PYTHON_BIN}" -m venv "$APP_DIR/.venv"
   fi
   "$APP_DIR/.venv/bin/pip" install --upgrade pip wheel
   # Install vLLM FIRST. It pulls torch, transformers, pydantic, fastapi, etc.
@@ -359,7 +377,7 @@ RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
 STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR}"
-STACK_WHISPER_CMD="LD_LIBRARY_PATH=./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cublas/lib:./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cudnn/lib:\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
+STACK_WHISPER_CMD="LD_LIBRARY_PATH=\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cublas/lib):\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cudnn/lib):\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
 
 HF_HOME=${MODELS_DIR}

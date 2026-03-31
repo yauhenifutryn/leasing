@@ -55,7 +55,7 @@ RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
 STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR}"
-STACK_WHISPER_CMD="LD_LIBRARY_PATH=./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cublas/lib:./.venv-voice-oss/lib/python3.12/site-packages/nvidia/cudnn/lib:\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
+STACK_WHISPER_CMD="LD_LIBRARY_PATH=\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cublas/lib):\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cudnn/lib):\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
 
 HF_HOME=${MODELS_DIR}
