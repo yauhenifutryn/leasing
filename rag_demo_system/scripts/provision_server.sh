@@ -56,8 +56,9 @@ log() {
 # ---------------------------------------------------------------------------
 install_apt_packages() {
   log "Installing apt packages"
-  sudo apt-get update -y
-  sudo apt-get install -y \
+  export DEBIAN_FRONTEND=noninteractive
+  sudo -E apt-get update -y
+  sudo -E apt-get install -y \
     git \
     curl \
     unzip \
@@ -71,9 +72,9 @@ install_apt_packages() {
   PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
   if [ "$(echo "$PY_VER 3.12" | awk '{print ($1 < $2)}')" = "1" ]; then
     log "Python $PY_VER found, need 3.12+. Installing..."
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update -y
-    sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
+    sudo -E add-apt-repository -y ppa:deadsnakes/ppa
+    sudo -E apt-get update -y
+    sudo -E apt-get install -y python3.12 python3.12-venv python3.12-dev
     # Make python3.12 the default python3
     sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     log "Python 3.12 installed: $(python3.12 --version)"
