@@ -76,6 +76,11 @@ install_apt_packages() {
     sudo -E apt-get update -y
     sudo -E apt-get install -y python3.12 python3.12-venv python3.12-dev
     # Do NOT change system python3 (breaks apt_pkg). Use python3.12 for venvs only.
+    # Fix apt_pkg symlink in case update-alternatives was run previously
+    APT_PKG_SO=$(find /usr/lib/python3/dist-packages -name "apt_pkg.cpython-3*-linux-gnu.so" 2>/dev/null | head -1)
+    if [ -n "$APT_PKG_SO" ] && [ ! -e /usr/lib/python3/dist-packages/apt_pkg.so ]; then
+      sudo ln -sf "$APT_PKG_SO" /usr/lib/python3/dist-packages/apt_pkg.so
+    fi
     log "Python 3.12 installed: $(python3.12 --version)"
   else
     log "Python $PY_VER OK"
@@ -479,7 +484,9 @@ start_stack() {
 # Main
 # ---------------------------------------------------------------------------
 main() {
-  log "=== Provisioning H100 NVL 94GB ==="
+  local _GPU_NAME_LOG
+  _GPU_NAME_LOG=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1 || echo "GPU not detected")
+  log "=== Provisioning: ${_GPU_NAME_LOG} ==="
   log "WORKSPACE=$WORKSPACE"
   log "APP_DIR=$APP_DIR"
   log "MODELS_DIR=$MODELS_DIR"
