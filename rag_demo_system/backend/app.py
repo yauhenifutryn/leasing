@@ -841,7 +841,10 @@ async def voice_ws(websocket: WebSocket) -> None:
 
         if not (vad_enabled and vad is not None):
             # PTT mode: original blocking behavior
-            await response_coro
+            try:
+                await response_coro
+            except (RuntimeError, WebSocketDisconnect):
+                pass
             return
 
         # ---- VAD mode: concurrent barge-in listener ----
@@ -909,7 +912,10 @@ async def voice_ws(websocket: WebSocket) -> None:
                 session.interrupted = True
 
         listener_task = asyncio.create_task(_barge_in_listener())
-        await response_task
+        try:
+            await response_task
+        except (RuntimeError, WebSocketDisconnect):
+            session.interrupted = True
         if not listener_task.done():
             listener_task.cancel()
             try:
