@@ -235,6 +235,10 @@ install_all_venvs() {
   # already provide. This avoids installing torch/transformers twice.
   log "  Installing vLLM + supervisor + hf_transfer (big install, includes torch)"
   "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer
+  # Ensure PyTorch uses cu124 (compatible with driver 570+). vLLM defaults to
+  # cu128 which has a known issue with driver 570 (Error 802).
+  log "  Ensuring PyTorch cu124 compatibility"
+  "$APP_DIR/.venv/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 --force-reinstall 2>/dev/null || true
   log "  Installing backend-only packages (small, no duplicates)"
   "$APP_DIR/.venv/bin/pip" install \
     uvicorn \
