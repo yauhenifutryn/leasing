@@ -416,7 +416,7 @@
 
         // Init audio
         audioCtx = new AudioContext();
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 24000, channelCount: 1 } });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 24000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         await audioCtx.audioWorklet.addModule("recorder-worklet.js");
         recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
         source = audioCtx.createMediaStreamSource(stream);

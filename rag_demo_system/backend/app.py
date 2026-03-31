@@ -690,11 +690,15 @@ async def _stream_voice_response(
             sentence = await sentence_queue.get()
             if sentence is None:
                 break
-            await websocket.send_json({
-                "type": "response.output_text.delta",
-                "session_id": session_id,
-                "delta": sentence + " ",
-            })
+            try:
+                await websocket.send_json({
+                    "type": "response.output_text.delta",
+                    "session_id": session_id,
+                    "delta": sentence + " ",
+                })
+            except (RuntimeError, WebSocketDisconnect):
+                session.interrupted = True
+                break
             try:
                 audio_resp = await asyncio.to_thread(
                     synthesize_audio, sentence, session_id,
@@ -710,11 +714,18 @@ async def _stream_voice_response(
                         "sample_rate_hz": audio_resp.get("sample_rate_hz"),
                     })
                     t_playback_started = time.time()
+            except (RuntimeError, WebSocketDisconnect):
+                session.interrupted = True
+                break
             except Exception as exc:  # noqa: BLE001
-                await websocket.send_json({
-                    "type": "warning", "session_id": session_id,
-                    "message": f"tts_failed: {exc}",
-                })
+                try:
+                    await websocket.send_json({
+                        "type": "warning", "session_id": session_id,
+                        "message": f"tts_failed: {exc}",
+                    })
+                except (RuntimeError, WebSocketDisconnect):
+                    session.interrupted = True
+                    break
 
     all_sentences: list[str] = []
     _orig_put = sentence_queue.put
@@ -842,6 +853,8 @@ async def voice_ws(websocket: WebSocket) -> None:
 
         async def _barge_in_listener() -> None:
             """Read WebSocket events during response for barge-in."""
+            speech_start_at: float | None = None
+            _BARGE_IN_HOLD_SEC = 0.3  # ignore speech < 300ms (echo filter)
             try:
                 while not response_task.done():
                     event = await websocket.receive_json()
@@ -854,20 +867,28 @@ async def voice_ws(websocket: WebSocket) -> None:
                         audio_chunks.append(_b64mod.b64encode(raw).decode())
                         was_speaking = vad.is_speaking
                         vad.feed(raw)
+                        if not was_speaking and vad.is_speaking:
+                            speech_start_at = time.time()
+                        elif was_speaking and not vad.is_speaking:
+                            speech_start_at = None
                         if (
-                            not was_speaking
-                            and vad.is_speaking
+                            vad.is_speaking
                             and session.assistant_speaking
+                            and speech_start_at is not None
+                            and (time.time() - speech_start_at) >= _BARGE_IN_HOLD_SEC
                         ):
                             session.interrupted = True
                             print(
                                 "[BARGE-IN] speech detected during response",
                                 flush=True,
                             )
-                            await websocket.send_json({
-                                "type": "interrupt",
-                                "session_id": session_id,
-                            })
+                            try:
+                                await websocket.send_json({
+                                    "type": "interrupt",
+                                    "session_id": session_id,
+                                })
+                            except (RuntimeError, WebSocketDisconnect):
+                                pass
                             return
                     elif etype == "response.cancel":
                         session.interrupted = True
@@ -876,10 +897,13 @@ async def voice_ws(websocket: WebSocket) -> None:
                             "[BARGE-IN] response.cancel received",
                             flush=True,
                         )
-                        await websocket.send_json({
-                            "type": "interrupt",
-                            "session_id": session_id,
-                        })
+                        try:
+                            await websocket.send_json({
+                                "type": "interrupt",
+                                "session_id": session_id,
+                            })
+                        except (RuntimeError, WebSocketDisconnect):
+                            pass
                         return
             except (WebSocketDisconnect, RuntimeError):
                 session.interrupted = True
