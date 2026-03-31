@@ -278,8 +278,8 @@ download_models() {
   log "  Whisper large-v3 (faster-whisper STT model)"
   "$APP_DIR/.venv-voice-oss/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
 
-  log "  Silero TTS model (v4_ru, eugene voice)"
-  "$APP_DIR/.venv-voice-oss/bin/python" -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-models', model='silero_tts', language='ru', speaker='v4_ru', trust_repo=True); print('Silero TTS v4_ru downloaded')"
+  log "  Silero TTS model (v5_4_ru, xenia voice)"
+  "$APP_DIR/.venv-voice-oss/bin/python" -c "from silero import silero_tts; silero_tts(language='ru', speaker='v5_4_ru'); print('Silero TTS v5_4_ru downloaded')"
 
   log "  Silero VAD model (~2MB)"
   mkdir -p "$APP_DIR/models"

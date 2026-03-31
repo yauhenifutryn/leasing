@@ -16,15 +16,19 @@ class SpeakRequest(BaseModel):
 
 class SileroTTSSynthesizer:
     def __init__(
-        self, speaker: str, sample_rate: int, model_variant: str = "v4_ru", speaker_pt: str | None = None
+        self, speaker: str, sample_rate: int, model_variant: str = "v5_4_ru", speaker_pt: str | None = None
     ) -> None:
-        self._model, _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-models",
-            model="silero_tts",
-            language="ru",
-            speaker=model_variant,
-            trust_repo=True,
-        )
+        if model_variant.startswith("v5"):
+            from silero import silero_tts
+            self._model, _ = silero_tts(language="ru", speaker=model_variant)
+        else:
+            self._model, _ = torch.hub.load(
+                repo_or_dir="snakers4/silero-models",
+                model="silero_tts",
+                language="ru",
+                speaker=model_variant,
+                trust_repo=True,
+            )
         self._model.to(torch.device("cpu"))
         self._speaker = speaker
         self._speaker_embedding: torch.Tensor | None = None
@@ -99,8 +103,8 @@ def create_unavailable_app(reason: str) -> FastAPI:
 
 
 def _build_default_app() -> FastAPI:
-    speaker = (os.getenv("SILERO_TTS_SPEAKER") or "eugene").strip()
-    model_variant = (os.getenv("SILERO_TTS_MODEL") or "v4_ru").strip()
+    speaker = (os.getenv("SILERO_TTS_SPEAKER") or "xenia").strip()
+    model_variant = (os.getenv("SILERO_TTS_MODEL") or "v5_4_ru").strip()
     sample_rate = int(os.getenv("SILERO_TTS_SAMPLE_RATE") or "24000")
     speaker_pt = os.getenv("SILERO_TTS_SPEAKER_PT")
     try:
