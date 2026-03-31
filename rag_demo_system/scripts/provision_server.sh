@@ -82,10 +82,11 @@ install_apt_packages() {
     log "Python $PY_VER OK"
   fi
 
-  # Install ngrok for exposing the backend to the internet
+  # Install ngrok for exposing the backend to the internet (non-fatal)
   if ! command -v ngrok &>/dev/null; then
     log "Installing ngrok"
-    curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin
+    curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin 2>/dev/null \
+      || log "WARNING: ngrok install failed (server may be down). Install manually later."
   fi
 
   # Install Docker and ubuntu-drivers only if not in a container
