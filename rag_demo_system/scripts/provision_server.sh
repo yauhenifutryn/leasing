@@ -114,36 +114,22 @@ _is_container() {
   [ -f /.dockerenv ] || grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null
 }
 
-_install_cuda_toolkit() {
-  # Install CUDA 12.8 toolkit + cuDNN via NVIDIA's official apt repo.
-  # This is the universal method that works on Ubuntu 22.04 and 24.04.
-  # Ref: https://developer.nvidia.com/cuda-downloads
-  local DISTRO
-  DISTRO=$(. /etc/os-release && echo "${ID}${VERSION_ID}" | tr -d '.')
-  # e.g. ubuntu2204 or ubuntu2404
-
-  log "Adding NVIDIA CUDA apt repository for $DISTRO"
-  local KEYRING="/usr/share/keyrings/cuda-archive-keyring.gpg"
-  curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/${DISTRO}/x86_64/cuda-keyring_1.1-1_all.deb" \
-    -o /tmp/cuda-keyring.deb
-  sudo dpkg -i /tmp/cuda-keyring.deb
-  rm -f /tmp/cuda-keyring.deb
-  sudo apt-get update -y
-
-  log "Installing CUDA toolkit 12.8 + cuDNN"
-  sudo apt-get install -y cuda-toolkit-12-8 libcudnn9-cuda-12 libcudnn9-dev-cuda-12
-
-  # Add CUDA to PATH and LD_LIBRARY_PATH for this session and future logins
-  local CUDA_PROFILE="/etc/profile.d/cuda.sh"
-  if [ ! -f "$CUDA_PROFILE" ]; then
-    log "Writing CUDA environment to $CUDA_PROFILE"
-    sudo tee "$CUDA_PROFILE" > /dev/null <<'CUDAEOF'
-export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
-export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
-CUDAEOF
-  fi
-  export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
-  export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+_clean_system_cuda() {
+  # Remove any system CUDA toolkit that conflicts with pip-bundled CUDA.
+  # PyTorch and vLLM bundle their own CUDA runtime via pip wheels.
+  # System CUDA (from apt) causes "Error 802: system not yet initialized"
+  # due to version mismatch between system libcudart and pip libcudart.
+  log "Cleaning system CUDA to prevent conflicts with pip CUDA wheels"
+  for cuda_dir in /usr/local/cuda /usr/local/cuda-*; do
+    if [ -d "$cuda_dir" ] && [ ! -L "$cuda_dir" ]; then
+      log "  Moving $cuda_dir -> ${cuda_dir}.disabled"
+      sudo mv "$cuda_dir" "${cuda_dir}.disabled" 2>/dev/null || true
+    fi
+  done
+  # Remove CUDA from LD_LIBRARY_PATH
+  sudo rm -f /etc/profile.d/cuda.sh 2>/dev/null || true
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  sudo ldconfig 2>/dev/null || true
 }
 
 check_nvidia_driver() {
@@ -162,19 +148,13 @@ check_nvidia_driver() {
     exit 1
   fi
 
-  # Check CUDA toolkit (nvcc). Containers usually have it; bare-metal may not.
-  if command -v nvcc &>/dev/null; then
-    log "CUDA toolkit OK: $(nvcc --version | grep 'release' | head -1)"
-  elif _is_container; then
-    # Containers on Vast.ai/RunPod have CUDA in non-standard paths; pip packages
-    # bundle their own CUDA libs (nvidia-cublas-cu12, nvidia-cudnn-cu12).
-    # nvcc may not be in PATH but CUDA works via pip wheels. This is fine.
-    log "CUDA toolkit not in PATH (container). pip CUDA wheels will provide libs."
-  else
-    log "CUDA toolkit not found on bare-metal -- installing"
-    _install_cuda_toolkit
-    log "CUDA toolkit installed: $(nvcc --version | grep 'release' | head -1)"
-  fi
+  # Clean any system CUDA toolkit to prevent conflicts with pip CUDA wheels.
+  # PyTorch/vLLM bundle their own CUDA runtime (nvidia-cublas-cu12, etc).
+  # System CUDA from apt causes libcudart version mismatch (Error 802).
+  _clean_system_cuda
+
+  # Enable GPU persistence mode (prevents Error 802 on some VMs)
+  sudo nvidia-smi -pm 1 2>/dev/null || true
 
   # Verify nvidia-smi works after all installs
   if ! nvidia-smi &>/dev/null; then
@@ -235,10 +215,6 @@ install_all_venvs() {
   # already provide. This avoids installing torch/transformers twice.
   log "  Installing vLLM + supervisor + hf_transfer (big install, includes torch)"
   "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer
-  # Ensure PyTorch uses cu124 (compatible with driver 570+). vLLM defaults to
-  # cu128 which has a known issue with driver 570 (Error 802).
-  log "  Ensuring PyTorch cu124 compatibility"
-  "$APP_DIR/.venv/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 --force-reinstall 2>/dev/null || true
   log "  Installing backend-only packages (small, no duplicates)"
   "$APP_DIR/.venv/bin/pip" install \
     uvicorn \
