@@ -57,7 +57,8 @@ elif [ "$MODE" = "after" ]; then
       | python3 -c "import json,sys; print(f'Chunks: {json.load(sys.stdin).get(\"result\",{}).get(\"points_count\",0)}')" 2>/dev/null \
       || echo "KB not indexed"
     echo "--- .env config ---"
-    cat /workspace/leasing/rag_demo_system/.env 2>/dev/null || echo ".env not found"
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    cat "$SCRIPT_DIR/../.env" 2>/dev/null || echo ".env not found"
     echo "--- Disk ---"
     df -h /
     echo "=== END ==="

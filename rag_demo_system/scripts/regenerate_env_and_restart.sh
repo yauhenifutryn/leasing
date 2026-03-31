@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORKSPACE="${WORKSPACE:-/workspace}"
+if [ -n "${WORKSPACE:-}" ]; then :; elif [ -d "/workspace" ]; then WORKSPACE="/workspace"; else WORKSPACE="$HOME"; fi
 MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 VLLM_PORT=8787
 

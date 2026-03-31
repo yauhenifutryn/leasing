@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ -n "${WORKSPACE:-}" ]; then :; elif [ -d "/workspace" ]; then WORKSPACE="/workspace"; else WORKSPACE="$HOME"; fi
 SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
 CONF="$APP_DIR/scripts/supervisord.conf"
 VLLM_PORT=8787
@@ -98,12 +99,12 @@ rm -f "$APP_DIR/.state/supervisord.pid" "$APP_DIR/.state/supervisor.sock"
 echo ""
 echo "[restart] Step 6: Starting Qdrant..."
 if ! curl -fsS http://localhost:6333/healthz >/dev/null 2>&1; then
-  QDRANT_DIR="/workspace/qdrant"
+  QDRANT_DIR="$WORKSPACE/qdrant"
   if [ -f "$QDRANT_DIR/qdrant" ]; then
     pkill -f "qdrant" 2>/dev/null || true
     sleep 1
-    mkdir -p /workspace/qdrant_storage
-    QDRANT__STORAGE__STORAGE_PATH=/workspace/qdrant_storage nohup "$QDRANT_DIR/qdrant" > /workspace/qdrant.log 2>&1 &
+    mkdir -p "$WORKSPACE/qdrant_storage"
+    QDRANT__STORAGE__STORAGE_PATH="$WORKSPACE/qdrant_storage" nohup "$QDRANT_DIR/qdrant" > "$WORKSPACE/qdrant.log" 2>&1 &
     sleep 3
   fi
 fi

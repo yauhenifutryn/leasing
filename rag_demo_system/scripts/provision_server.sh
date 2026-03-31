@@ -26,7 +26,15 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 REPO_URL="${REPO_URL:-https://github.com/yauhenifutryn/leasing.git}"
 REPO_BRANCH="${REPO_BRANCH:-feature/voice-pipeline}"
-WORKSPACE="${WORKSPACE:-/workspace}"
+# Auto-detect workspace: /workspace (Vast.ai/RunPod) or $HOME (bare-metal VMs)
+if [ -n "${WORKSPACE:-}" ]; then
+  : # explicit override, use as-is
+elif [ -d "/workspace" ]; then
+  WORKSPACE="/workspace"
+else
+  WORKSPACE="$HOME"
+fi
+mkdir -p "$WORKSPACE"
 APP_DIR="$WORKSPACE/leasing/rag_demo_system"
 MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 
