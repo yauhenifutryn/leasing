@@ -75,8 +75,7 @@ install_apt_packages() {
     sudo -E add-apt-repository -y ppa:deadsnakes/ppa
     sudo -E apt-get update -y
     sudo -E apt-get install -y python3.12 python3.12-venv python3.12-dev
-    # Make python3.12 the default python3
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+    # Do NOT change system python3 (breaks apt_pkg). Use python3.12 for venvs only.
     log "Python 3.12 installed: $(python3.12 --version)"
   else
     log "Python $PY_VER OK"
