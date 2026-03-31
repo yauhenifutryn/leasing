@@ -852,8 +852,10 @@ async def voice_ws(websocket: WebSocket) -> None:
             question_id=question_id,
         )
 
+        print(f"[UTTERANCE] vad_enabled={vad_enabled} vad={'yes' if vad is not None else 'no'}", flush=True)
         if not (vad_enabled and vad is not None):
             # PTT mode: original blocking behavior
+            print("[UTTERANCE] PTT path (no listener)", flush=True)
             try:
                 await response_coro
             except (RuntimeError, WebSocketDisconnect):
@@ -865,17 +867,21 @@ async def voice_ws(websocket: WebSocket) -> None:
         # events so incoming audio is fed to VAD.  When VAD detects
         # speech start during assistant playback, set session.interrupted
         # (already checked by both llm_producer and tts_consumer).
+        print("[UTTERANCE] VAD path (barge-in listener active)", flush=True)
         response_task = asyncio.create_task(response_coro)
 
         async def _barge_in_listener() -> None:
             """Read WebSocket events during response for barge-in."""
-            speech_start_at: float | None = None
-            _BARGE_IN_HOLD_SEC = 0.3  # ignore speech < 300ms (echo filter)
+            chunk_count = 0
+            speech_chunks = 0
+            _BARGE_IN_MIN_CHUNKS = 8  # ~250ms of speech audio
             try:
+                print("[LISTENER] started", flush=True)
                 while not response_task.done():
                     event = await websocket.receive_json()
                     etype = event.get("type")
                     if etype == "input_audio_buffer.append":
+                        chunk_count += 1
                         audio = event.get("audio", "")
                         if not audio:
                             continue
@@ -883,19 +889,22 @@ async def voice_ws(websocket: WebSocket) -> None:
                         audio_chunks.append(_b64mod.b64encode(raw).decode())
                         was_speaking = vad.is_speaking
                         vad.feed(raw)
-                        if not was_speaking and vad.is_speaking:
-                            speech_start_at = time.time()
-                        elif was_speaking and not vad.is_speaking:
-                            speech_start_at = None
+                        if vad.is_speaking:
+                            speech_chunks += 1
+                        else:
+                            speech_chunks = 0
+                        if chunk_count <= 3 or chunk_count % 50 == 0:
+                            print(
+                                f"[LISTENER] chunk={chunk_count} vad={vad.is_speaking} speech_chunks={speech_chunks}",
+                                flush=True,
+                            )
                         if (
-                            vad.is_speaking
+                            speech_chunks >= _BARGE_IN_MIN_CHUNKS
                             and session.assistant_speaking
-                            and speech_start_at is not None
-                            and (time.time() - speech_start_at) >= _BARGE_IN_HOLD_SEC
                         ):
                             session.interrupted = True
                             print(
-                                "[BARGE-IN] speech detected during response",
+                                f"[BARGE-IN] speech detected ({speech_chunks} chunks)",
                                 flush=True,
                             )
                             try:
