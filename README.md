@@ -84,8 +84,8 @@ Notes on Torch/CUDA:
 - To enable diarization with WhisperX, create a free Hugging Face token (pyannote models) and place it in `.env` (see `.env.example`).
 - Set `OPENAI_MODEL` (pipeline scripts) and `REVIEW_OPENAI_MODEL` (Streamlit UI, default `gpt-5.1`) to the chat-completions models you plan to use, e.g., `gpt-5.1` for `make analyze-calls` and the review app.
 - Ensure you comply with client privacy requirements before exporting any data.
-- На сервере используйте только одно окружение `conda` (`lease`); не смешивайте с `.venv`.
-- VAD (silero) отключён по умолчанию (`vad_model=None`) для стабильности; диаризацию pyannote можно включать флагом `--disable-diarization`/токеном HF при необходимости.
+- On the server, use only the `conda` environment (`lease`); do not mix with `.venv`.
+- VAD (silero) is disabled by default (`vad_model=None`) for stability; pyannote diarization can be enabled via `--disable-diarization` flag / HF token when needed.
 
 ## Makefile Targets
 
@@ -143,15 +143,15 @@ source .venv/bin/activate
 streamlit run scripts/review_app.py
 ```
 
-The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой записи можно:
+The UI cycles through `knowledge_base/kb_faq_ru.json`. For each entry you can:
 
-- отметить ответ корректным (кнопка «Подтвердить корректность» снимает `pending_review`) или указать исправленную формулировку;
-- добавить комментарий/причину правки;
-- связанные Q&A (из `nlu_output/nlu_pairs.jsonl`) подбираются автоматически, показываются с исходными ответами и обновляются вместе с записью; LLM корректирует только неточные фрагменты;
-- автоматически обновить `knowledge_base`, `insights_global/global_faq_clusters_dedup.json`, `nlu_output/nlu_pairs.jsonl` и сохранить запись в `corrections/corrections.jsonl`.
-- панель "История правок" отображает последние действия и позволяет откатить последнюю правку (кнопка «Отменить последнюю правку» возвращает исходный ответ и пересобирает `nlu_output`).
+- Mark the answer as correct (the "Confirm correctness" button clears `pending_review`) or provide a corrected version;
+- Add a comment or reason for the edit;
+- Related Q&A pairs (from `nlu_output/nlu_pairs.jsonl`) are matched automatically, shown with their original answers, and updated together with the entry; the LLM only corrects inaccurate fragments;
+- Automatically update `knowledge_base`, `insights_global/global_faq_clusters_dedup.json`, `nlu_output/nlu_pairs.jsonl` and save the entry to `corrections/corrections.jsonl`.
+- The "Edit History" panel shows recent actions and allows undoing the last edit (the "Undo last edit" button restores the original answer and rebuilds `nlu_output`).
 
-Перед запуском убедитесь, что выполнены `make analyze-calls`, `make dedup`, `make kb` и `make nlu-export`, чтобы все необходимые файлы существовали.
+Before running, make sure `make analyze-calls`, `make dedup`, `make kb`, and `make nlu-export` have been executed so that all required files exist.
 
 ## Testing & Validation
 
@@ -164,70 +164,70 @@ The UI cycles through `knowledge_base/kb_faq_ru.json`. For каждой запи
 - I’ll keep pushing fixes/enhancements to `main` in this GitHub repo.
 - On your machine, run `git pull` inside the project folder to pick up the latest changes before starting a new processing run.
 
-## Серверный запуск (GPU, Rus)
+## Server Run (GPU)
 
-1) Выбор GPU  
-   - Рекомендуемый вариант: **A100 40 GB**. Скорость: ~9 мин 20 с на 20 аудио ~10 мин. Цена: ~**$0.6/час** на vast.ai.  
-   - Альтернатива: **4090** (дешевле, но менее стабильна под длительной нагрузкой).  
-   - Не брать **5090/Blackwell** — требует свежих драйверов, часто не работает “из коробки”.
+1) GPU selection  
+   - Recommended: **A100 40 GB**. Speed: ~9 min 20 sec for 20 audio files (~10 min each). Price: ~**$0.6/hr** on vast.ai.  
+   - Alternative: **4090** (cheaper, but less stable under sustained load).  
+   - Avoid **5090/Blackwell**: requires bleeding-edge drivers, often does not work out of the box.
 
-2) Подготовка окружения на сервере  
+2) Server environment setup  
    ```bash
    cd /workspace
    rm -rf leasing
-   git clone https://github.com/yauhenifutryn/leasing.git   # auth: SSH key или personal access token
+   git clone https://github.com/yauhenifutryn/leasing.git   # auth: SSH key or personal access token
    cd leasing
 
    conda create -y -n lease python=3.10
    conda activate lease
-   make install   # ставит PyTorch cu121 для A100 + прочее
+   make install   # installs PyTorch cu121 for A100 + dependencies
    ```
 
-3) Папка с аудио  
+3) Audio folder  
    ```bash
    mkdir -p /workspace/leasing/audio
    ```
-   Пример загрузки с Mac (нужен доступ по SSH к серверу; подставьте свой порт/хост):
+   Upload from Mac (requires SSH access to the server; substitute your port/host):
    ```bash
    rsync -avz --partial --progress -e "ssh -p <PORT>" \
      audio/ root@<HOST>:/workspace/leasing/audio/
    ```
 
-4) Запуск транскрипции на сервере  
+4) Run transcription on server  
    ```bash
    cd /workspace/leasing
    conda activate lease
    make transcribe-gpu
    ```
-   Результаты: `/workspace/leasing/transcripts_clean/`.
+   Results: `/workspace/leasing/transcripts_clean/`.
 
-5) Скачать результаты на локальный компьютер (Mac → Downloads)  
+5) Download results to local machine (Mac, Downloads)  
    ```bash
    rsync -avz --progress -e "ssh -p <PORT>" \
      root@<HOST>:/workspace/leasing/transcripts_clean/ \
      ~/Downloads/transcripts_clean/
    ```
 
-   Если нужен HF токен для диаризации, перед запуском экспортируйте его:
+   If you need an HF token for diarization, export it before running:
    ```bash
-   export HUGGINGFACE_TOKEN="hf_..."  # или свой токен; примите условия модели https://huggingface.co/pyannote/speaker-diarization-3.1
+   export HUGGINGFACE_TOKEN="hf_..."  # accept the model license at https://huggingface.co/pyannote/speaker-diarization-3.1
    ```
 
-   Важно: на сервере используйте только окружение `conda activate lease` (не активируйте `.venv`), VAD отключён в коде.
+   Important: on the server, use only the `conda activate lease` environment (do not activate `.venv`); VAD is disabled in the code.
 
-6) “Пассивный” запуск (чтобы не упало при обрыве SSH) — tmux  
+6) Background run (survives SSH disconnects) with tmux  
    ```bash
-   tmux new -s work          # создать сессию
-   make transcribe-gpu       # запустить внутри
-   # отсоединиться: Ctrl+b, затем d
-   tmux attach -t work       # вернуться позже
-   tmux ls                   # список сессий
-   tmux kill-session -t work # убить сессию при необходимости
+   tmux new -s work          # create session
+   make transcribe-gpu       # run inside
+   # detach: Ctrl+b, then d
+   tmux attach -t work       # reconnect later
+   tmux ls                   # list sessions
+   tmux kill-session -t work # kill session if needed
    ```
 
-## Demo UI (локально)
+## Demo UI (local)
 
-Локальный демо‑интерфейс для запуска `make ...` шагов, просмотра логов, базовой визуализации метрик и просмотра JSON.
+Local demo interface for running `make ...` steps, viewing logs, basic metrics visualization, and JSON inspection.
 
 ```bash
 cd leasing
@@ -235,7 +235,28 @@ source .venv/bin/activate
 python demo_ui/server.py
 ```
 
-Открыть: `http://127.0.0.1:8787`
+Open: `http://127.0.0.1:8787`
+
+## Voice Assistant (`rag_demo_system/`)
+
+Production voice assistant built on top of the knowledge base generated by the call analysis pipeline above. Browser-based, Russian language, knowledge-grounded answers about leasing products.
+
+**Stack:** Whisper STT + Silero TTS + Qwen3.5-35B-A3B-FP8 (vLLM) + Qdrant RAG
+
+```bash
+git clone --branch feature/voice-pipeline https://github.com/yauhenifutryn/leasing.git
+cd leasing/rag_demo_system
+HF_TOKEN=hf_YOUR_TOKEN bash scripts/provision_server.sh
+```
+
+See [rag_demo_system/README.md](rag_demo_system/README.md) for full details and [docs/server_deployment_playbook.md](docs/server_deployment_playbook.md) for deployment guide.
+
+## Branches
+
+| Branch | Purpose |
+|--------|---------|
+| `feature/voice-pipeline` | Production voice assistant (clean, client-ready) |
+| `claude/qwen-voice-next` | Experimental: benchmark framework, multi-model testing (Qwen3-Omni, Qwen3-TTS, Qwen3-ASR, Voxtral, SenseVoice) |
 
 ## License
 
