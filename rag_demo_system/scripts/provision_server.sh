@@ -58,16 +58,39 @@ install_apt_packages() {
   log "Installing apt packages"
   export DEBIAN_FRONTEND=noninteractive
   sudo -E apt-get update -y
+
+  # Core utilities
   sudo -E apt-get install -y \
     git \
     curl \
+    wget \
     unzip \
-    python3 \
-    python3-venv \
-    python3-pip \
     jq \
-    ninja-build \
+    lsof \
     software-properties-common
+
+  # Build tools (required by flashinfer JIT, vLLM native extensions, CTranslate2).
+  # Vast.ai Docker images include these; bare VMs do not.
+  sudo -E apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    ccache \
+    pkg-config
+
+  # Python + dev headers (python3-dev needed for C extension builds)
+  sudo -E apt-get install -y \
+    python3 \
+    python3-dev \
+    python3-venv \
+    python3-pip
+
+  # Libraries required by vLLM, PyTorch, and audio processing
+  sudo -E apt-get install -y \
+    ffmpeg \
+    libssl-dev \
+    libnuma-dev \
+    libtcmalloc-minimal4 || true
 
   # Ensure Python 3.12+ (required for type hints and venv compatibility)
   PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
@@ -159,6 +182,14 @@ _clean_system_cuda() {
       log "  Restoring /usr/local/cuda from .disabled"
       sudo mv /usr/local/cuda.disabled /usr/local/cuda
     fi
+  fi
+
+  # Set CUDA_HOME so flashinfer JIT can find nvcc and headers.
+  # flashinfer probes: CUDA_HOME -> which nvcc -> /usr/local/cuda
+  if [ -d /usr/local/cuda ]; then
+    export CUDA_HOME=/usr/local/cuda
+    export PATH="${CUDA_HOME}/bin:${PATH}"
+    log "  CUDA_HOME=$CUDA_HOME (nvcc: $(nvcc --version 2>/dev/null | tail -1 || echo 'not found'))"
   fi
 }
 
@@ -446,6 +477,8 @@ STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tt
 HF_HOME=${MODELS_DIR}
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
+CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
+PATH=${CUDA_HOME:-/usr/local/cuda}/bin:\$PATH
 ENVEOF
 }
 
