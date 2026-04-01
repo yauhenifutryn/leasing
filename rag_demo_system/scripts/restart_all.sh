@@ -57,6 +57,16 @@ sleep 2
 # --- Step 4: Check GPU memory ---
 echo ""
 echo "[restart] Step 4: GPU memory check..."
+# On KVM VMs (Jarvis Labs), nvidia modules may not auto-load after reboot.
+if ! nvidia-smi &>/dev/null; then
+  echo "[restart]   nvidia-smi failed. Loading kernel modules..."
+  sudo modprobe nvidia 2>/dev/null || true
+  sudo modprobe nvidia-uvm 2>/dev/null || true
+  if command -v nvidia-modprobe &>/dev/null; then
+    sudo nvidia-modprobe -u -c=0 2>/dev/null || true
+  fi
+  sleep 2
+fi
 if nvidia-smi &>/dev/null; then
   USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
   TOTAL_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
