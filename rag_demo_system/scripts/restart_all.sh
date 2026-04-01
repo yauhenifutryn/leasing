@@ -68,6 +68,7 @@ if ! nvidia-smi &>/dev/null; then
   sleep 2
 fi
 if nvidia-smi &>/dev/null; then
+  echo "[restart]   GPU detected: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
   USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
   TOTAL_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
   FREE_MIB=$((TOTAL_MIB - USED_MIB))
@@ -94,6 +95,14 @@ if nvidia-smi &>/dev/null; then
     echo "[restart]   FIX: Restart the instance from your provider's dashboard."
     exit 1
   fi
+else
+  echo ""
+  echo "[restart]   *** GPU NOT VISIBLE ***"
+  echo "[restart]   nvidia-smi failed even after loading kernel modules."
+  echo "[restart]   On KVM VMs: restart the instance from the provider dashboard."
+  echo "[restart]   On bare metal: check dmesg | grep -i nvidia"
+  echo "[restart]   DO NOT reinstall the driver; it will break GPU passthrough."
+  exit 1
 fi
 
 # --- Step 5: Clean state files ---

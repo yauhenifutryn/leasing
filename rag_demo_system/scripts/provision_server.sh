@@ -192,18 +192,17 @@ _clean_system_cuda() {
   fi
 
   if [ "$NEED_NVCC" = true ]; then
-    # Try 12.8 first (best compatibility), fall back to 12.6
-    log "  Installing CUDA toolkit >= 12.6 for flashinfer JIT"
-    if sudo apt-get install -y cuda-toolkit-12-8 2>/dev/null; then
-      log "  Installed cuda-toolkit-12-8"
-    elif sudo apt-get install -y cuda-toolkit-12-6 2>/dev/null; then
-      log "  Installed cuda-toolkit-12-6"
-    elif sudo apt-get install -y cuda-nvcc-12-8 2>/dev/null; then
-      log "  Installed cuda-nvcc-12-8"
-    elif sudo apt-get install -y cuda-nvcc-12-6 2>/dev/null; then
-      log "  Installed cuda-nvcc-12-6"
+    # Install ONLY the compiler (cuda-nvcc), NOT the full toolkit (cuda-toolkit).
+    # cuda-toolkit includes runtime libs (libcudart, libcublas) that conflict
+    # with the pip-bundled CUDA libs and cause Whisper PTX version mismatches.
+    # flashinfer JIT only needs nvcc + headers, not runtime libs.
+    log "  Installing CUDA nvcc >= 12.6 for flashinfer JIT (compiler only)"
+    if sudo -E apt-get install -y cuda-nvcc-12-8 cuda-cudart-dev-12-8 2>/dev/null; then
+      log "  Installed cuda-nvcc-12-8 + headers"
+    elif sudo -E apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6 2>/dev/null; then
+      log "  Installed cuda-nvcc-12-6 + headers"
     else
-      log "  WARNING: Could not install CUDA >= 12.6. flashinfer JIT may fail."
+      log "  WARNING: Could not install CUDA nvcc >= 12.6. flashinfer JIT may fail."
       log "  Add NVIDIA apt repo: https://developer.nvidia.com/cuda-downloads"
     fi
   fi
@@ -251,6 +250,27 @@ check_nvidia_driver() {
     log "If using RunPod/Vast.ai, select a GPU-enabled template."
     exit 1
   else
+    # Check if the driver package is installed but just not loading.
+    # On KVM VMs, the host controls the driver version. NEVER upgrade it;
+    # a mismatched driver breaks GPU passthrough permanently.
+    local NVIDIA_PKG_INSTALLED
+    NVIDIA_PKG_INSTALLED=$(dpkg -l 2>/dev/null | grep -c "nvidia-driver" || echo "0")
+
+    if [ "$NVIDIA_PKG_INSTALLED" -gt 0 ]; then
+      log "ERROR: NVIDIA driver package is installed but GPU is not visible."
+      log "This typically happens on KVM VMs after reboot when the host"
+      log "does not re-attach the GPU. This is a platform issue."
+      log ""
+      log "Try these steps:"
+      log "  1. Restart the instance from the provider dashboard (not sudo reboot)"
+      log "  2. If that fails, delete and recreate the instance"
+      log "  3. If on bare metal, check: dmesg | grep -i nvidia"
+      log ""
+      log "DO NOT reinstall the driver. The existing driver must match the host."
+      exit 1
+    fi
+
+    # No driver installed at all (true bare metal first-time setup)
     log "NVIDIA driver not found -- installing via ubuntu-drivers"
     sudo apt-get install -y ubuntu-drivers-common
     sudo ubuntu-drivers install
