@@ -231,6 +231,18 @@ _clean_system_cuda() {
 }
 
 check_nvidia_driver() {
+  # On KVM VMs (Jarvis Labs), nvidia kernel modules may not auto-load after
+  # reboot. Try loading them before concluding the driver is missing.
+  if ! nvidia-smi &>/dev/null; then
+    log "nvidia-smi failed. Trying to load kernel modules..."
+    sudo modprobe nvidia 2>/dev/null || true
+    sudo modprobe nvidia-uvm 2>/dev/null || true
+    if command -v nvidia-modprobe &>/dev/null; then
+      sudo nvidia-modprobe -u -c=0 2>/dev/null || true
+    fi
+    sleep 2
+  fi
+
   if nvidia-smi &>/dev/null; then
     log "NVIDIA driver OK: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
   elif _is_container; then
