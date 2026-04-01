@@ -49,5 +49,22 @@ For a bare metal server, the client needs:
 
 1. **Hardware**: Match or exceed the specs above
 2. **OS**: Ubuntu 22.04 or 24.04 LTS (fresh install)
-3. **NVIDIA Driver**: Install via `sudo ubuntu-drivers install && sudo reboot`
-4. **Everything else**: Handled by `provision_server.sh`
+3. **Run `provision_server.sh`**: It handles everything, including NVIDIA driver
+
+### First Run on a Bare Metal Server (No Driver Installed)
+
+```bash
+git clone --branch feature/voice-pipeline https://github.com/yauhenifutryn/leasing.git
+cd leasing/rag_demo_system
+HF_TOKEN=hf_YOUR_TOKEN bash scripts/provision_server.sh
+# Script installs NVIDIA driver and exits with "REBOOT REQUIRED"
+sudo reboot
+# After reboot, SSH back in and re-run:
+cd leasing/rag_demo_system
+HF_TOKEN=hf_YOUR_TOKEN bash scripts/provision_server.sh
+# This time it proceeds through all steps. Wait ~30 min for models to download.
+sleep 120 && bash scripts/smoke_test.sh
+```
+
+The reboot is needed only once (NVIDIA driver requires it). All subsequent
+runs of `provision_server.sh` skip the driver step.
