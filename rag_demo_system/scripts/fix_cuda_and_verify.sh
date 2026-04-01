@@ -158,8 +158,10 @@ fi
 # -------------------------------------------------------------------------
 echo ""
 echo "--- Step 5: GPU Health (Xid Errors) ---"
-XID_COUNT=$(dmesg 2>/dev/null | grep -ci "xid" || echo "0")
-if [ "$XID_COUNT" -gt 0 ]; then
+XID_COUNT=$(dmesg 2>/dev/null | grep -ci "xid" || true)
+XID_COUNT="${XID_COUNT:-0}"
+XID_COUNT=$(echo "$XID_COUNT" | tr -d '[:space:]' | head -c 10)
+if [ "${XID_COUNT:-0}" -gt 0 ] 2>/dev/null; then
   warn "$XID_COUNT Xid error(s) in kernel log"
   dmesg 2>/dev/null | grep -i "xid" | tail -5 | while read -r line; do
     info "  $line"
@@ -233,15 +235,10 @@ for candidate in \
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-  warn "No Python with PyTorch found. Installing torch for testing..."
-  if command -v pip3 &>/dev/null; then
-    pip3 install torch --quiet 2>/dev/null
-    PYTHON_BIN=$(which python3)
-  else
-    fail "Cannot test CUDA: no Python with torch available"
-    info "Run provision_server.sh first to install venvs, then re-run this script."
-    FATAL=1
-  fi
+  warn "No Python with PyTorch found (expected on fresh instance)"
+  info "CUDA device nodes look good. Skipping torch test."
+  info "provision_server.sh will install PyTorch. Re-run this script after to verify."
+  SKIP_TORCH_TEST=1
 fi
 
 if [ -n "$PYTHON_BIN" ]; then
@@ -330,6 +327,25 @@ if [ "${CUDA_WORKS:-0}" -eq 1 ]; then
   info "Next steps:"
   info "  HF_TOKEN=hf_... bash rag_demo_system/scripts/provision_server.sh"
   exit 0
+elif [ "${SKIP_TORCH_TEST:-0}" -eq 1 ] && [ "$FATAL" -eq 0 ]; then
+  # All device nodes exist, UVM loaded, no hardware errors, just no PyTorch to test
+  ALL_DEVS_OK=true
+  for dev in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm; do
+    [ -e "$dev" ] || ALL_DEVS_OK=false
+  done
+  if [ "$ALL_DEVS_OK" = true ]; then
+    pass "CUDA devices look ready (no PyTorch to run allocation test)"
+    echo ""
+    info "All device nodes present, UVM module loaded, no hardware errors."
+    info "Proceed with provisioning; re-run this script after to confirm CUDA."
+    info ""
+    info "Next steps:"
+    info "  HF_TOKEN=hf_... bash scripts/provision_server.sh"
+    exit 0
+  else
+    fail "Some CUDA device nodes missing"
+    exit 1
+  fi
 elif [ "$FATAL" -eq 1 ]; then
   fail "CUDA is broken and cannot be fixed from inside this VM"
   echo ""
