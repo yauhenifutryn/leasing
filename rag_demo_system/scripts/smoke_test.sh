@@ -253,3 +253,27 @@ info "  Backend: health + index + chat"
 info "  KB: $KB_COUNT chunks"
 info "  Voice: Whisper STT + Silero TTS"
 info "============================================="
+
+# ---------------------------------------------------------------------------
+# Suggest ngrok for public access
+# ---------------------------------------------------------------------------
+info ""
+if command -v ngrok &>/dev/null; then
+  if ngrok config check &>/dev/null 2>&1; then
+    info "To expose the UI publicly:"
+    info "  ngrok http 8000"
+  else
+    info "ngrok is installed but not authenticated."
+    info "To expose the UI publicly:"
+    info "  1. Get your auth token from https://dashboard.ngrok.com/get-started/your-authtoken"
+    info "  2. Run: ngrok config add-authtoken YOUR_TOKEN"
+    info "  3. Run: ngrok http 8000"
+  fi
+else
+  info "To expose the UI publicly, install ngrok:"
+  info "  curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null"
+  info "  echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' | sudo tee /etc/apt/sources.list.d/ngrok.list"
+  info "  sudo apt-get update && sudo apt-get install -y ngrok"
+  info "  ngrok config add-authtoken YOUR_TOKEN"
+  info "  ngrok http 8000"
+fi
