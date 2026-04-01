@@ -95,6 +95,11 @@ install_apt_packages() {
       && sudo -E apt-get install -y ngrok >/dev/null 2>&1 \
       || log "WARNING: ngrok install failed. Install manually: snap install ngrok"
   fi
+  # Configure ngrok auth token if provided
+  if [ -n "${NGROK_AUTHTOKEN:-}" ] && command -v ngrok &>/dev/null; then
+    log "Configuring ngrok auth token"
+    ngrok config add-authtoken "$NGROK_AUTHTOKEN" 2>/dev/null || true
+  fi
 
   # Install Docker and ubuntu-drivers only if not in a container
   if [ -f /proc/1/cgroup ] && grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null || [ -f /.dockerenv ]; then
