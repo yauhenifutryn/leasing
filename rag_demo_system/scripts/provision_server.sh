@@ -66,6 +66,7 @@ install_apt_packages() {
     python3-venv \
     python3-pip \
     jq \
+    ninja-build \
     software-properties-common
 
   # Ensure Python 3.12+ (required for type hints and venv compatibility)
@@ -261,8 +262,8 @@ install_all_venvs() {
   # Install vLLM FIRST. It pulls torch, transformers, pydantic, fastapi, etc.
   # Then install only the small backend-specific packages that vLLM does not
   # already provide. This avoids installing torch/transformers twice.
-  log "  Installing vLLM + supervisor + hf_transfer (big install, includes torch)"
-  "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer
+  log "  Installing vLLM + supervisor + hf_transfer + ninja (big install, includes torch)"
+  "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer ninja
   log "  Installing backend-only packages (small, no duplicates)"
   "$APP_DIR/.venv/bin/pip" install \
     uvicorn \
