@@ -72,22 +72,40 @@ install_apt_packages() {
 check_nvidia_driver() {
   if nvidia-smi &>/dev/null; then
     log "NVIDIA driver OK: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
-    return 0
-  fi
+  else
+    # In a container, drivers come from the host; we cannot install them
+    if [ -f /.dockerenv ] || grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null; then
+      log "ERROR: nvidia-smi not found inside container. The host must have NVIDIA drivers installed."
+      log "If using RunPod/Vast.ai, select a GPU-enabled template."
+      exit 1
+    fi
 
-  # In a container, drivers come from the host; we cannot install them
-  if [ -f /.dockerenv ] || grep -qE 'docker|containerd' /proc/1/cgroup 2>/dev/null; then
-    log "ERROR: nvidia-smi not found inside container. The host must have NVIDIA drivers installed."
-    log "If using RunPod/Vast.ai, select a GPU-enabled template."
+    log "NVIDIA driver not found -- installing via ubuntu-drivers"
+    sudo ubuntu-drivers install
+
+    log "Driver installed. REBOOT REQUIRED before continuing."
+    log "After reboot, re-run: HF_TOKEN=\$HF_TOKEN bash $0"
     exit 1
   fi
 
-  log "NVIDIA driver not found -- installing via ubuntu-drivers"
-  sudo ubuntu-drivers install
+  # Ensure nvidia-uvm module is loaded (required for CUDA runtime).
+  # nvidia-smi works without UVM, but torch.cuda.is_available() does not.
+  # This is the #1 root cause of CUDA failures on KVM-virtualized GPU VMs.
+  if ! lsmod | grep -q nvidia_uvm; then
+    log "Loading nvidia-uvm kernel module (required for CUDA runtime)"
+    sudo modprobe nvidia-uvm || true
+  fi
+  if command -v nvidia-modprobe &>/dev/null; then
+    sudo nvidia-modprobe -u -c=0 2>/dev/null || true
+  fi
 
-  log "Driver installed. REBOOT REQUIRED before continuing."
-  log "After reboot, re-run: HF_TOKEN=\$HF_TOKEN bash $0"
-  exit 1
+  # Verify CUDA device nodes exist
+  for dev in /dev/nvidia-uvm /dev/nvidiactl; do
+    if [ ! -e "$dev" ]; then
+      log "WARNING: $dev not found. CUDA may not work."
+      log "Run: bash scripts/fix_cuda_and_verify.sh for full diagnostics."
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------
