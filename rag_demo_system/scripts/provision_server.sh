@@ -57,6 +57,17 @@ log() {
 install_apt_packages() {
   log "Installing apt packages"
   export DEBIAN_FRONTEND=noninteractive
+
+  # Add NVIDIA CUDA apt repository if not already configured.
+  # Required for installing cuda-toolkit-12-6+ on systems that only ship 12.4.
+  if ! apt-cache policy cuda-toolkit-12-6 2>/dev/null | grep -q "Candidate:"; then
+    log "Adding NVIDIA CUDA apt repository"
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb 2>/dev/null \
+      && sudo dpkg -i /tmp/cuda-keyring.deb 2>/dev/null \
+      && rm -f /tmp/cuda-keyring.deb \
+      || log "WARNING: Could not add NVIDIA apt repo. CUDA toolkit install may fail."
+  fi
+
   sudo -E apt-get update -y
 
   # Core utilities
