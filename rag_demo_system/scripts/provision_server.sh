@@ -208,25 +208,26 @@ _clean_system_cuda() {
     fi
   fi
 
-  # Point /usr/local/cuda symlink to the newest installed CUDA toolkit
+  # Point /usr/local/cuda symlink to the newest installed CUDA toolkit.
+  # Systems may have /usr/local/cuda -> /etc/alternatives/cuda -> cuda-12.4
+  # even after installing cuda-12.8. Force the symlink to the newest version.
   local CUDA_DIR
-  CUDA_DIR=$(find /usr/local -maxdepth 1 -name "cuda-*" -type d 2>/dev/null | sort -V | tail -1)
+  CUDA_DIR=$(find /usr/local -maxdepth 1 -name "cuda-1*" -type d 2>/dev/null | sort -V | tail -1)
   if [ -n "$CUDA_DIR" ]; then
-    if [ "$(readlink -f /usr/local/cuda 2>/dev/null)" != "$(readlink -f "$CUDA_DIR")" ]; then
-      log "  Updating symlink: /usr/local/cuda -> $CUDA_DIR"
-      sudo ln -sf "$CUDA_DIR" /usr/local/cuda
-    fi
+    log "  Setting symlink: /usr/local/cuda -> $CUDA_DIR"
+    sudo rm -f /usr/local/cuda
+    sudo ln -sf "$CUDA_DIR" /usr/local/cuda
   elif [ ! -e /usr/local/cuda ] && [ -d "/usr/local/cuda.disabled" ]; then
     log "  Restoring /usr/local/cuda from .disabled"
     sudo mv /usr/local/cuda.disabled /usr/local/cuda
   fi
 
-  # Set CUDA_HOME so flashinfer JIT can find nvcc and headers.
-  # flashinfer probes: CUDA_HOME -> which nvcc -> /usr/local/cuda
+  # Set CUDA_HOME and put the correct nvcc FIRST in PATH.
+  # Remove any old cuda paths from PATH to prevent stale nvcc being found.
   if [ -d /usr/local/cuda ]; then
     export CUDA_HOME=/usr/local/cuda
-    export PATH="${CUDA_HOME}/bin:${PATH}"
-    log "  CUDA_HOME=$CUDA_HOME (nvcc: $(nvcc --version 2>/dev/null | tail -1 || echo 'not found'))"
+    export PATH="${CUDA_HOME}/bin:$(echo "$PATH" | tr ':' '\n' | grep -v '/cuda' | tr '\n' ':' | sed 's/:$//')"
+    log "  CUDA_HOME=$CUDA_HOME (nvcc: $(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9.]+' || echo 'not found'))"
   fi
 }
 
