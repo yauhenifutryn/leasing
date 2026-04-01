@@ -153,6 +153,25 @@ check_nvidia_driver() {
   # System CUDA from apt causes libcudart version mismatch (Error 802).
   _clean_system_cuda
 
+  # Ensure nvidia-uvm module is loaded (required for CUDA runtime).
+  # nvidia-smi works without UVM, but torch.cuda.is_available() does not.
+  # This is the #1 root cause of CUDA failures on KVM-virtualized GPU VMs.
+  if ! lsmod | grep -q nvidia_uvm; then
+    log "Loading nvidia-uvm kernel module (required for CUDA runtime)"
+    sudo modprobe nvidia-uvm || true
+  fi
+  if command -v nvidia-modprobe &>/dev/null; then
+    sudo nvidia-modprobe -u -c=0 2>/dev/null || true
+  fi
+
+  # Verify CUDA device nodes exist
+  for dev in /dev/nvidia-uvm /dev/nvidiactl; do
+    if [ ! -e "$dev" ]; then
+      log "WARNING: $dev not found. CUDA may not work."
+      log "Run: bash scripts/fix_cuda_and_verify.sh for full diagnostics."
+    fi
+  done
+
   # Enable GPU persistence mode (prevents Error 802 on some VMs)
   sudo nvidia-smi -pm 1 2>/dev/null || true
 
