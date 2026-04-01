@@ -162,26 +162,52 @@ _clean_system_cuda() {
   export LD_LIBRARY_PATH=$(echo "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | grep -v cuda | tr '\n' ':' | sed 's/:$//')
   sudo ldconfig 2>/dev/null || true
 
-  # Ensure nvcc is installed (may have been removed by previous provisioning)
+  # Ensure nvcc >= 12.6 is installed for flashinfer JIT compilation.
+  # flashinfer 0.6+ GDN kernels require CUDA 12.6+ headers. The system may
+  # only have 12.4 (Jarvis Labs, older Ubuntu). The NVIDIA driver 550+ supports
+  # CUDA 12.6 even if the system toolkit is older; we just need the compiler.
+  local NEED_NVCC=false
   if ! command -v nvcc &>/dev/null; then
-    local CUDA_MAJOR_MINOR
-    CUDA_MAJOR_MINOR=$(nvidia-smi | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || echo "12.4")
-    local CUDA_PKG="cuda-nvcc-${CUDA_MAJOR_MINOR//./-}"
-    log "  Installing $CUDA_PKG for flashinfer JIT compilation"
-    sudo apt-get install -y "$CUDA_PKG" 2>/dev/null || true
+    NEED_NVCC=true
+  else
+    local NVCC_VER
+    NVCC_VER=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+' || echo "0.0")
+    local NVCC_MAJOR=$(echo "$NVCC_VER" | cut -d. -f1)
+    local NVCC_MINOR=$(echo "$NVCC_VER" | cut -d. -f2)
+    if [ "$NVCC_MAJOR" -lt 12 ] || { [ "$NVCC_MAJOR" -eq 12 ] && [ "$NVCC_MINOR" -lt 6 ]; }; then
+      log "  nvcc $NVCC_VER is too old for flashinfer (need >= 12.6)"
+      NEED_NVCC=true
+    fi
   fi
 
-  # Ensure /usr/local/cuda symlink exists (flashinfer looks for it)
-  if [ ! -e /usr/local/cuda ]; then
-    local CUDA_DIR
-    CUDA_DIR=$(find /usr/local -maxdepth 1 -name "cuda-*" -type d 2>/dev/null | sort -V | tail -1)
-    if [ -n "$CUDA_DIR" ]; then
-      log "  Creating symlink: /usr/local/cuda -> $CUDA_DIR"
-      sudo ln -sf "$CUDA_DIR" /usr/local/cuda
-    elif [ -d "/usr/local/cuda.disabled" ]; then
-      log "  Restoring /usr/local/cuda from .disabled"
-      sudo mv /usr/local/cuda.disabled /usr/local/cuda
+  if [ "$NEED_NVCC" = true ]; then
+    # Try 12.8 first (best compatibility), fall back to 12.6
+    log "  Installing CUDA toolkit >= 12.6 for flashinfer JIT"
+    if sudo apt-get install -y cuda-toolkit-12-8 2>/dev/null; then
+      log "  Installed cuda-toolkit-12-8"
+    elif sudo apt-get install -y cuda-toolkit-12-6 2>/dev/null; then
+      log "  Installed cuda-toolkit-12-6"
+    elif sudo apt-get install -y cuda-nvcc-12-8 2>/dev/null; then
+      log "  Installed cuda-nvcc-12-8"
+    elif sudo apt-get install -y cuda-nvcc-12-6 2>/dev/null; then
+      log "  Installed cuda-nvcc-12-6"
+    else
+      log "  WARNING: Could not install CUDA >= 12.6. flashinfer JIT may fail."
+      log "  Add NVIDIA apt repo: https://developer.nvidia.com/cuda-downloads"
     fi
+  fi
+
+  # Point /usr/local/cuda symlink to the newest installed CUDA toolkit
+  local CUDA_DIR
+  CUDA_DIR=$(find /usr/local -maxdepth 1 -name "cuda-*" -type d 2>/dev/null | sort -V | tail -1)
+  if [ -n "$CUDA_DIR" ]; then
+    if [ "$(readlink -f /usr/local/cuda 2>/dev/null)" != "$(readlink -f "$CUDA_DIR")" ]; then
+      log "  Updating symlink: /usr/local/cuda -> $CUDA_DIR"
+      sudo ln -sf "$CUDA_DIR" /usr/local/cuda
+    fi
+  elif [ ! -e /usr/local/cuda ] && [ -d "/usr/local/cuda.disabled" ]; then
+    log "  Restoring /usr/local/cuda from .disabled"
+    sudo mv /usr/local/cuda.disabled /usr/local/cuda
   fi
 
   # Set CUDA_HOME so flashinfer JIT can find nvcc and headers.
