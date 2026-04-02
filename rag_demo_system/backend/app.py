@@ -1098,6 +1098,16 @@ async def voice_ws(websocket: WebSocket) -> None:
         client_name = client_name_raw.strip().split()[0].title()
     if not client_name or len(client_name) > 20 or len(client_name) < 2:
         client_name = "друг"
+    else:
+        # Normalize to nominative case: "Никиту" -> "Никита"
+        try:
+            import pymorphy3
+            _morph_name = pymorphy3.MorphAnalyzer()
+            parsed = _morph_name.parse(client_name)[0]
+            if "Name" in parsed.tag:
+                client_name = parsed.normal_form.title()
+        except Exception:  # noqa: BLE001
+            pass
 
     # Step 4: Greet and start
     await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")

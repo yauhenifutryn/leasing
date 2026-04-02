@@ -37,19 +37,38 @@ def clean_answer(text: str) -> str:
     return cleaned.strip()
 
 
+def _name_forms(name: str) -> list[str]:
+    """Get all grammatical case forms of a Russian name using pymorphy3."""
+    forms = {name.lower()}
+    try:
+        import pymorphy3
+        morph = pymorphy3.MorphAnalyzer()
+        parsed = morph.parse(name)[0]
+        # Add nominative (base form)
+        forms.add(parsed.normal_form)
+        # Add all case forms
+        for case in ("nomn", "gent", "datv", "accs", "ablt", "loct"):
+            inflected = parsed.inflect({case})
+            if inflected:
+                forms.add(inflected.word)
+    except Exception:  # noqa: BLE001
+        pass
+    return sorted(forms, key=len, reverse=True)  # longest first to avoid partial matches
+
+
 def strip_name_from_response(text: str, name: str, turn_number: int) -> str:
     """Control client name frequency in responses.
 
     Name is allowed on turns 1, 6, 11, ... (every 5th). On other turns,
-    ALL occurrences of the name are removed (start, middle, end).
+    ALL occurrences of the name (in any grammatical case) are removed.
     """
     if not name or not text:
         return text
     if turn_number > 0 and turn_number % 5 == 1:
         return text  # allow name on this turn
-    # Remove all patterns: "Name, " / ", Name," / ", Name!" / "Name "
-    text = re.sub(r",?\s*" + re.escape(name) + r"[,!]?\s*", " ", text, flags=re.I)
-    # Clean up double spaces
+    # Remove all case forms of the name
+    for form in _name_forms(name):
+        text = re.sub(r",?\s*" + re.escape(form) + r"[,!]?\s*", " ", text, flags=re.I)
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip()
 
@@ -62,29 +81,38 @@ _ADDRESS_RE = re.compile(
     re.I,
 )
 
-_SAFE_ADDRESS_FALLBACK = "Точный адрес уточняйте на сайте компании или по телефону."
-
-
 def validate_addresses(text: str, context_chunks: list[str]) -> str:
-    """Replace hallucinated addresses with safe fallback.
+    """Remove sentences with hallucinated addresses.
 
-    Any street address in the LLM response that doesn't appear in the
-    retrieved context chunks is considered hallucinated and replaced.
+    If an address in the LLM response doesn't appear in the retrieved
+    context, the ENTIRE sentence containing it is removed (not just the
+    address) to avoid garbled output like "офис находится на Точный адрес...".
     """
     if not context_chunks:
         return text
     context_joined = " ".join(context_chunks).lower()
 
-    def _check_address(match: re.Match) -> str:
-        addr = match.group(0)
-        # Extract the street name (without numbers) for fuzzy matching
-        street_words = re.findall(r"[А-ЯЁа-яё]{3,}", addr)
-        for word in street_words:
-            if word.lower() in context_joined:
-                return addr  # street name found in context, keep it
-        return _SAFE_ADDRESS_FALLBACK
+    # Split into sentences, check each for hallucinated addresses
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    clean_sentences = []
+    for sentence in sentences:
+        addresses = _ADDRESS_RE.findall(sentence)
+        if not addresses:
+            clean_sentences.append(sentence)
+            continue
+        # Check if ALL addresses in this sentence are in context
+        all_valid = True
+        for addr in addresses:
+            street_words = re.findall(r"[А-ЯЁа-яё]{3,}", addr)
+            found = any(w.lower() in context_joined for w in street_words)
+            if not found:
+                all_valid = False
+                break
+        if all_valid:
+            clean_sentences.append(sentence)
+        # else: drop the entire sentence silently
 
-    return _ADDRESS_RE.sub(_check_address, text)
+    return " ".join(clean_sentences)
 
 
 def sanitize_rewrite(text: str) -> str:
