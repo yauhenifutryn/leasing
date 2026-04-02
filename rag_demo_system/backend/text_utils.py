@@ -10,6 +10,12 @@ _BANNED_PHRASES = [
     "понимаю вашу ситуацию",
     "в базе знаний нет информации",
     "в предоставленных фрагментах базы знаний",
+    "в моей базе знаний",
+    "в базе знаний не указан",
+    "в базе знаний не прописан",
+    "в базе знаний не содержится",
+    "в базе знаний такого нет",
+    "в нашей базе знаний",
 ]
 
 
@@ -29,20 +35,21 @@ def clean_answer(text: str) -> str:
     return cleaned.strip()
 
 
-def strip_leading_name(text: str, name: str, turn_number: int) -> str:
-    """Remove client name from the start of response unless it's a 'name turn'.
+def strip_name_from_response(text: str, name: str, turn_number: int) -> str:
+    """Control client name frequency in responses.
 
-    Name is allowed on turns 1, 5, 10, ... (every 5th) and when the text
-    naturally uses the name mid-sentence. This prevents the LLM habit of
-    starting every response with the client's name.
+    Name is allowed on turns 1, 6, 11, ... (every 5th). On other turns,
+    ALL occurrences of the name are removed (start, middle, end).
     """
     if not name or not text:
         return text
     if turn_number > 0 and turn_number % 5 == 1:
         return text  # allow name on this turn
-    # Strip "Name, " or "Name! " from the beginning
-    pattern = re.compile(r"^" + re.escape(name) + r"[,!]?\s*", re.I)
-    return pattern.sub("", text)
+    # Remove all patterns: "Name, " / ", Name," / ", Name!" / "Name "
+    text = re.sub(r",?\s*" + re.escape(name) + r"[,!]?\s*", " ", text, flags=re.I)
+    # Clean up double spaces
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
 
 
 def sanitize_rewrite(text: str) -> str:
