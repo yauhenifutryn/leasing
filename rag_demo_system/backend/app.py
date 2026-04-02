@@ -1084,10 +1084,13 @@ async def voice_ws(websocket: WebSocket) -> None:
 
     # Fast check: if input looks like a question, skip name extraction
     _raw_lower = client_name_raw.strip().lower()
-    _QUESTION_MARKERS = ("кто", "что", "какой", "какая", "какие", "где", "когда",
-                         "сколько", "можно", "а ", "у вас", "ваш", "хочу", "мне",
-                         "расскажи", "подскажи", "объясни")
-    _is_question = "?" in client_name_raw or any(_raw_lower.startswith(m) for m in _QUESTION_MARKERS)
+    # Words that indicate a question/request, not a name introduction
+    _QUESTION_WORDS = {"кто", "что", "какой", "какая", "какие", "где", "когда",
+                       "сколько", "можно", "хочу", "мне", "расскажи", "подскажи",
+                       "объясни", "привет", "здравствуйте", "добрый", "адрес",
+                       "документы", "условия", "ставка", "аванс", "офис", "лизинг"}
+    _words_in_input = set(_raw_lower.replace(",", " ").replace(".", " ").split())
+    _is_question = "?" in client_name_raw or bool(_words_in_input & _QUESTION_WORDS)
 
     from .llm import call_openai_compatible
     if _is_question:

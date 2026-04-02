@@ -29,6 +29,8 @@ def clean_answer(text: str) -> str:
     cleaned = re.sub(r"^\s*\*{0,2}ответ\*{0,2}\s*[:\-]\s*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"^\s*ответ\s*[:\-]\s*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"^\s*\*+\s*", "", cleaned)
+    # Strip "Ксения:" role label the LLM sometimes outputs
+    cleaned = re.sub(r"^Ксения\s*:\s*", "", cleaned, flags=re.I)
     # Strip banned phrases the LLM ignores prompt rules about
     for phrase in _BANNED_PHRASES:
         cleaned = re.sub(re.escape(phrase) + r"[,.]?\s*", "", cleaned, flags=re.I)
