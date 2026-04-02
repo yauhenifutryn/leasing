@@ -1110,16 +1110,39 @@ async def voice_ws(websocket: WebSocket) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    # Step 4: Greet and start
-    await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
+    # If no name was found, the first message is likely a question, not a name.
+    # Skip the "Очень приятно" greeting and process it as a real question.
+    first_question = None
+    if client_name == "друг":
+        first_question = client_name_raw  # save the original message to process as question
+        await _send_tts_message("Чем могу помочь?")
+    else:
+        await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
 
     # Save intro to session transcript so model knows the name
     session.client_name = client_name
     chat_session = state.get(session_id) or state.create(session_id)
-    _append_turn(chat_session, f"Меня зовут {client_name}", f"Очень приятно, {client_name}! Чем могу помочь?", settings.app.memory_turns)
+    if client_name != "друг":
+        _append_turn(chat_session, f"Меня зовут {client_name}", f"Очень приятно, {client_name}! Чем могу помочь?", settings.app.memory_turns)
     state.update(chat_session)
 
-    # Consent flow done. From here, all "да"/"нет" are normal conversation.
+    # If the first message was a question (not a name), answer it immediately
+    if first_question and first_question.strip():
+        question_id = str(uuid.uuid4())
+        t_now = time.time()
+        await websocket.send_json({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "session_id": session_id,
+            "provider": "intro",
+            "transcription": first_question,
+        })
+        await _stream_voice_response(
+            websocket=websocket, session=session, session_id=session_id,
+            message=first_question, tts_provider="silero_tts",
+            t_speech_stopped=t_now, t_stt_done=t_now, question_id=question_id,
+        )
+
+    # From here, all messages are normal conversation.
     # ------------------------------------------------------------------
 
     try:
