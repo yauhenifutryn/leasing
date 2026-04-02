@@ -517,13 +517,14 @@ async def _stream_voice_response(
 
     # --- Enrich RAG query with conversation context ---
     # Always include recent context so RAG retrieves topic-relevant fragments,
-    # especially critical for short follow-ups like "да", "давай", "подробнее"
+    # especially critical for short follow-ups like "да", "давай", "Минск"
     rag_query = message
     chat_sess_for_rag = state.get(session_id)
-    if chat_sess_for_rag and chat_sess_for_rag.transcript:
-        last_turns = chat_sess_for_rag.transcript[-4:]
-        context_words = " ".join(t.get("text", "")[:80] for t in last_turns)
-        rag_query = f"{context_words} {message}"
+    if chat_sess_for_rag and chat_sess_for_rag.transcript and len(message.split()) <= 5:
+        # For short messages, prepend recent USER messages only (less noise than assistant responses)
+        user_msgs = [t.get("text", "") for t in chat_sess_for_rag.transcript[-6:] if t.get("role") == "user"]
+        if user_msgs:
+            rag_query = " ".join(m[:60] for m in user_msgs[-2:]) + " " + message
 
     # --- RAG retrieval ---
     retrieval = await asyncio.to_thread(
