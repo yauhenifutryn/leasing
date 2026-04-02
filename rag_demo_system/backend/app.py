@@ -183,56 +183,9 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     session = state.get(session_id) or state.create(session_id)
     timings: dict[str, Any] = {}
 
-    decision = detect_consent(message)
-    if session.consent_denied:
-        response = {
-            "ok": True,
-            "session_id": session_id,
-            "backend": backend_name,
-            "answer": consent_denied_response(),
-            "consent": "denied",
-            "chunks": [],
-            "citations": [],
-        }
-        return _stream_or_json(response, stream)
-
-    if not session.consent_given:
-        if decision == "denied":
-            session.consent_denied = True
-            state.update(session)
-            response = {
-                "ok": True,
-                "session_id": session_id,
-                "backend": backend_name,
-                "answer": consent_denied_response(),
-                "consent": "denied",
-                "chunks": [],
-                "citations": [],
-            }
-            return _stream_or_json(response, stream)
-        if decision == "granted":
-            session.consent_given = True
-            state.update(session)
-            response = {
-                "ok": True,
-                "session_id": session_id,
-                "backend": backend_name,
-                "answer": consent_granted_response(),
-                "consent": "granted",
-                "chunks": [],
-                "citations": [],
-            }
-            return _stream_or_json(response, stream)
-        response = {
-            "ok": True,
-            "session_id": session_id,
-            "backend": backend_name,
-            "answer": consent_request(),
-            "consent": "needed",
-            "chunks": [],
-            "citations": [],
-        }
-        return _stream_or_json(response, stream)
+    # Consent is granted implicitly via UI disclaimer banner.
+    # The interactive consent flow (detect_consent / consent_request) is disabled.
+    # To re-enable, uncomment the block in git history (commit before this change).
 
     t_route = time.perf_counter()
     routed = route_non_rag(message, settings.llm.base_url, settings.llm.model)
@@ -1104,60 +1057,18 @@ async def voice_ws(websocket: WebSocket) -> None:
             except asyncio.QueueEmpty:
                 continue
 
-    # ------------------------------------------------------------------
-    # Hardcoded consent flow (runs once at start)
-    # ------------------------------------------------------------------
-    _CONSENT_YES = {"да", "согласен", "согласна", "конечно", "ладно", "хорошо",
-                    "ок", "окей", "давай", "давайте", "угу", "ага", "можно", "yes"}
-    _CONSENT_NO = {"нет", "не согласен", "не согласна", "не хочу", "отказываюсь", "no"}
-
-    def _classify_consent(text: str) -> str:
-        """Return 'yes', 'no', or 'unclear'."""
-        words = set(text.lower().replace(",", " ").replace(".", " ").split())
-        if words & _CONSENT_YES:
-            return "yes"
-        if words & _CONSENT_NO:
-            return "no"
-        return "unclear"
-
     await websocket.send_json({
         "type": "session.ready",
         "session_id": session_id,
         "backend": session.backend,
     })
 
-    # Step 1: Introduce and ask consent
+    # Consent is granted implicitly via UI disclaimer banner.
+    # Introduce and ask name in one step (no consent question).
     await _send_tts_message(
         "Здравствуйте! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
-        "Для продолжения консультации мне нужно ваше согласие на обработку персональных данных. Вы согласны?"
+        "Как я могу к вам обращаться?"
     )
-
-    # Step 2: Wait for consent (with retries for ambiguous answers)
-    consent_given = False
-    for _attempt in range(3):
-        consent_text = await _wait_for_speech()
-        result = _classify_consent(consent_text)
-        if result == "yes":
-            consent_given = True
-            break
-        elif result == "no":
-            await _send_tts_message(
-                "Без согласия на обработку данных я не смогу продолжить консультацию. "
-                "Спасибо за обращение, всего доброго!"
-            )
-            return
-        else:
-            # Ambiguous: "а зачем?", "что это значит?", random phrase
-            await _send_tts_message(
-                "Это стандартная процедура для консультации. Ваши данные защищены и не передаются третьим лицам. "
-                "Вы согласны на обработку персональных данных?"
-            )
-    if not consent_given:
-        await _send_tts_message("Не удалось получить согласие. Спасибо за обращение!")
-        return
-
-    # Step 3: Ask name
-    await _send_tts_message("Спасибо! Как я могу к вам обращаться?")
     client_name_raw = await _wait_for_speech()
     # Use LLM to extract the name (handles any phrasing naturally)
     from .llm import call_openai_compatible
