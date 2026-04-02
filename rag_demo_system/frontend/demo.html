@@ -358,7 +358,10 @@
       }
       if (evt.type === "conversation.item.input_audio_transcription.completed") {
         const text = evt.transcription || evt.transcript || "";
-        if (text) addTurn("user", text);
+        if (text && text !== window._lastUserText) {
+          addTurn("user", text);
+          window._lastUserText = text;
+        }
         setStatus(`Обработка... (STT: ${Date.now() - t0}ms)`, "warn");
       }
       if (evt.type === "response.output_text.delta") {
