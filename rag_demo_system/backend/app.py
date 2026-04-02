@@ -1081,34 +1081,46 @@ async def voice_ws(websocket: WebSocket) -> None:
         "Как я могу к вам обращаться?"
     )
     client_name_raw = await _wait_for_speech()
-    # Use LLM to extract the name (handles any phrasing naturally)
+
+    # Fast check: if input looks like a question, skip name extraction
+    _raw_lower = client_name_raw.strip().lower()
+    _QUESTION_MARKERS = ("кто", "что", "какой", "какая", "какие", "где", "когда",
+                         "сколько", "можно", "а ", "у вас", "ваш", "хочу", "мне",
+                         "расскажи", "подскажи", "объясни")
+    _is_question = "?" in client_name_raw or any(_raw_lower.startswith(m) for m in _QUESTION_MARKERS)
+
     from .llm import call_openai_compatible
-    try:
-        name_resp = await asyncio.to_thread(
-            call_openai_compatible,
-            base_url=settings.llm.fast_base_url or settings.llm.base_url,
-            model=settings.llm.fast_model or settings.llm.model,
-            system_prompt="Извлеки имя человека из текста. Верни ТОЛЬКО имя, одно слово, без пояснений. Если имя не найдено, верни слово 'друг'.",
-            user_prompt=client_name_raw,
-            temperature=0.0,
-            max_tokens=10,
-            timeout_sec=5,
-        )
-        client_name = name_resp.text.strip().strip('"').strip("'").strip(".").title()
-    except Exception:  # noqa: BLE001
-        client_name = client_name_raw.strip().split()[0].title()
-    if not client_name or len(client_name) > 20 or len(client_name) < 2:
+    if _is_question:
         client_name = "друг"
     else:
-        # Normalize to nominative case: "Никиту" -> "Никита"
         try:
-            import pymorphy3
-            _morph_name = pymorphy3.MorphAnalyzer()
-            parsed = _morph_name.parse(client_name)[0]
-            if "Name" in parsed.tag:
-                client_name = parsed.normal_form.title()
+            name_resp = await asyncio.to_thread(
+                call_openai_compatible,
+                base_url=settings.llm.fast_base_url or settings.llm.base_url,
+                model=settings.llm.fast_model or settings.llm.model,
+                system_prompt="Извлеки имя человека из текста. Верни ТОЛЬКО имя, одно слово, без пояснений. Если имя не найдено, верни слово 'друг'.",
+                user_prompt=client_name_raw,
+                temperature=0.0,
+                max_tokens=10,
+                timeout_sec=5,
+            )
+            client_name = name_resp.text.strip().strip('"').strip("'").strip(".").title()
         except Exception:  # noqa: BLE001
-            pass
+            client_name = client_name_raw.strip().split()[0].title()
+        if not client_name or len(client_name) > 20 or len(client_name) < 2:
+            client_name = "друг"
+        else:
+            # Verify it's actually a name using pymorphy3, normalize to nominative
+            try:
+                import pymorphy3
+                _morph_name = pymorphy3.MorphAnalyzer()
+                parsed = _morph_name.parse(client_name)[0]
+                if "Name" in parsed.tag:
+                    client_name = parsed.normal_form.title()
+                else:
+                    client_name = "друг"
+            except Exception:  # noqa: BLE001
+                pass
 
     # If no name was found, the first message is likely a question, not a name.
     # Skip the "Очень приятно" greeting and process it as a real question.
