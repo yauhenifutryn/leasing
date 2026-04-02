@@ -194,26 +194,12 @@ fi
 info ""
 info "--- Phase 4: Chat ---"
 
-# Consent: retry up to MAX_RETRIES times (backend may be slow after index)
-info "Consent (retries: $MAX_RETRIES, timeout: ${TIMEOUT}s each)..."
-CONSENT_RESP=$(retry_curl "Consent" "$MAX_RETRIES" \
-  -s --max-time "$TIMEOUT" -X POST "$BASE_URL/api/chat" \
-  -H 'Content-Type: application/json' -d '{"message":"да, согласен"}')
-if [ -z "$CONSENT_RESP" ]; then
-  fail "Consent -- no response after $MAX_RETRIES retries (backend may be stuck; try: supervisorctl restart backend)"
-fi
-SESSION_ID=$(echo "$CONSENT_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || true)
-if [ -z "$SESSION_ID" ]; then
-  fail "Consent -- response received but no session_id. Response: $(echo "$CONSENT_RESP" | head -c 200)"
-fi
-pass "Consent (session: ${SESSION_ID:0:8}...)"
-
-# Chat with RAG: use the same session, retry
+# Chat with RAG (consent is implicit via UI banner, no interactive consent needed)
 info "Chat + RAG (retries: $MAX_RETRIES, timeout: ${LONG_TIMEOUT}s)..."
 CHAT_RESP=$(retry_curl "Chat" "$MAX_RETRIES" \
   -s --max-time "$LONG_TIMEOUT" -X POST "$BASE_URL/api/chat" \
   -H 'Content-Type: application/json' \
-  -d "{\"message\":\"Какой минимальный аванс по лизингу?\",\"backend\":\"our_rag\",\"session_id\":\"$SESSION_ID\"}")
+  -d '{"message":"Какой минимальный аванс по лизингу?","backend":"our_rag"}')
 if [ -z "$CHAT_RESP" ]; then
   fail "Chat -- no response after $MAX_RETRIES retries"
 fi
@@ -228,10 +214,6 @@ except:
     sys.exit(1)
 answer = data.get('answer', '')
 used = data.get('used_knowledge') or []
-consent = data.get('consent', '')
-if consent == 'needed':
-    print('[smoke][FAIL] Chat -- consent not carried over (session_id mismatch)')
-    sys.exit(1)
 if not answer:
     print('[smoke][FAIL] Chat -- empty answer')
     sys.exit(1)
