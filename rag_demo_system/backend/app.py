@@ -1160,6 +1160,24 @@ async def voice_ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        # Post-session quality analysis (async, non-blocking)
+        try:
+            chat_session = state.get(session_id)
+            if chat_session and len(chat_session.transcript) >= 4:
+                from .session_analyzer import analyze_session, save_report
+                from .llm import call_openai_compatible
+                report = await asyncio.to_thread(
+                    analyze_session,
+                    chat_session.transcript,
+                    call_openai_compatible,
+                    settings.llm.base_url,
+                    settings.llm.model,
+                )
+                report["session_id"] = session_id
+                save_report(report, Path(__file__).resolve().parents[1] / ".state")
+                state.log({"event": "session_analysis", "session_id": session_id, "overall_score": report.get("overall_score")})
+        except Exception:  # noqa: BLE001
+            pass  # Analysis failure should never break the session cleanup
         voice_sessions.pop(session_id, None)
 
 

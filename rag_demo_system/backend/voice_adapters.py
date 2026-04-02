@@ -94,16 +94,14 @@ try:
         return f"{h_word} {m_word}"
 
     _GENITIVE_PREPS = {"от", "до", "с", "без", "после", "более", "менее", "свыше"}
-    # Words that are part of compound numbers (should stay in genitive zone)
-    _NUMBER_WORDS = {
-        "ноль", "один", "одна", "одно", "два", "две", "три", "четыре",
-        "пять", "шесть", "семь", "восемь", "девять", "десять",
-        "одиннадцать", "двенадцать", "тринадцать", "четырнадцать",
-        "пятнадцать", "шестнадцать", "семнадцать", "восемнадцать",
-        "девятнадцать", "двадцать", "тридцать", "сорок", "пятьдесят",
-        "шестьдесят", "семьдесят", "восемьдесят", "девяносто", "сто",
-        "двести", "триста", "четыреста", "пятьсот", "тысяча", "тысяч",
-    }
+
+    def _is_number_word(word: str) -> bool:
+        """Check if word is a numeral using pymorphy3 POS tagging."""
+        if _morph is None:
+            return False
+        tag = _morph.parse(word)[0].tag
+        # NUMR = cardinal numeral; Anum = adjectival numeral ("один", "два")
+        return tag.POS == "NUMR" or "Anum" in tag
 
     def _to_genitive(word: str) -> str:
         """Inflect a Russian word to genitive case using pymorphy3."""
@@ -115,6 +113,8 @@ try:
 
     def _fix_genitives_after_preps(text: str) -> str:
         """Fix nominative -> genitive after prepositions requiring genitive case."""
+        if _morph is None:
+            return text
         words = text.split()
         result = []
         apply_genitive = False
@@ -123,11 +123,10 @@ try:
                 apply_genitive = True
                 result.append(w)
                 continue
-            if apply_genitive and w.lower() in _NUMBER_WORDS:
+            if apply_genitive and _is_number_word(w):
                 result.append(_to_genitive(w))
             else:
-                if w.lower() not in _NUMBER_WORDS:
-                    apply_genitive = False
+                apply_genitive = False
                 result.append(w)
         return " ".join(result)
 
