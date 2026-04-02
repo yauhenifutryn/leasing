@@ -1132,8 +1132,8 @@ async def voice_ws(websocket: WebSocket) -> None:
     # Skip the "Очень приятно" greeting and process it as a real question.
     first_question = None
     if client_name == "друг":
-        first_question = client_name_raw  # save the original message to process as question
-        await _send_tts_message("Чем могу помочь?")
+        first_question = client_name_raw  # save the original message, answer it directly
+        # No greeting -- go straight to answering the question
     else:
         await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
 
