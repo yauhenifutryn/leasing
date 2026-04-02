@@ -1,13 +1,18 @@
 fastapi==0.115.6
 uvicorn==0.30.6
 pydantic==2.10.2
-# CTranslate2 (used by faster-whisper) must match the NVIDIA driver's PTX support.
-# CTranslate2 >= 4.5.0 is compiled with CUDA 12.8 (PTX ISA 8.7), which requires
-# driver >= 570. Jarvis Labs and many bare metal servers ship driver 550 (PTX ISA 8.4).
-# Pin CTranslate2 < 4.5.0 to avoid PTX version mismatch on driver 550.
-ctranslate2>=4.0.0,<4.5.0
-faster-whisper>=1.0.0,<1.1.0
+# CTranslate2 (used by faster-whisper) PTX compatibility:
+# All recent CTranslate2 pip wheels are compiled with CUDA 12.8 (PTX ISA 8.7),
+# which requires NVIDIA driver >= 570. Servers with driver 550 (PTX ISA 8.4)
+# get cudaErrorUnsupportedPtxVersion on H100 (sm_90, no native SASS in wheel).
+#
+# Workaround: provision_server.sh detects driver < 570 and sets WHISPER_DEVICE=cpu.
+# CPU Whisper (int8, large-v3) runs at ~2-3s per utterance on Xeon, acceptable
+# for voice assistant use. GPU Whisper requires driver 570+ or building CTranslate2
+# from source with CUDA 12.4 targeting sm_90.
+faster-whisper>=1.0.0
 nvidia-cublas-cu12
 nvidia-cudnn-cu12
+requests
 silero>=0.5.0
 scipy
