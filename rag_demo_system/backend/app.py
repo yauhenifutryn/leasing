@@ -1157,7 +1157,7 @@ async def voice_ws(websocket: WebSocket) -> None:
             })
             await _stream_voice_response(
                 websocket=websocket, session=session, session_id=session_id,
-                message=first_question, tts_provider=session.tts_provider,
+                message=first_question,
                 t_speech_stopped=t_now, t_stt_done=t_now, question_id=question_id,
             )
         except Exception as exc:  # noqa: BLE001
