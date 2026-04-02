@@ -44,9 +44,21 @@ try:
     _RE_SPACED_NUM = re.compile(r"\d{1,3}(?:[\s\u00a0]\d{3})+")
     _RE_PLAIN_NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
-    _RE_TIME = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+    # Time with preposition: "с 9:00" -> "с девяти", "до 18:00" -> "до восемнадцати"
+    _RE_TIME_WITH_PREP = re.compile(r"(с|до|в|после|к)\s+(\d{1,2}):(\d{2})\b", re.I)
+    _RE_TIME_PLAIN = re.compile(r"\b(\d{1,2}):(\d{2})\b")
 
-    _HOUR_WORDS = {
+    # Nominative -> genitive for hours (after с/до/от/после)
+    _HOUR_GENITIVE = {
+        "0": "нуля", "1": "часа", "2": "двух", "3": "трёх", "4": "четырёх",
+        "5": "пяти", "6": "шести", "7": "семи", "8": "восьми", "9": "девяти",
+        "10": "десяти", "11": "одиннадцати", "12": "двенадцати",
+        "13": "тринадцати", "14": "четырнадцати", "15": "пятнадцати",
+        "16": "шестнадцати", "17": "семнадцати", "18": "восемнадцати",
+        "19": "девятнадцати", "20": "двадцати", "21": "двадцати одного",
+        "22": "двадцати двух", "23": "двадцати трёх",
+    }
+    _HOUR_NOMINATIVE = {
         "0": "ноль", "1": "час", "2": "два", "3": "три", "4": "четыре",
         "5": "пять", "6": "шесть", "7": "семь", "8": "восемь", "9": "девять",
         "10": "десять", "11": "одиннадцать", "12": "двенадцать",
@@ -56,21 +68,66 @@ try:
         "22": "двадцать два", "23": "двадцать три",
     }
 
-    def _time_to_russian(match: re.Match) -> str:
+    def _time_with_prep(match: re.Match) -> str:
+        prep, h, m = match.group(1), match.group(2), match.group(3)
+        # "с" and "до" require genitive; "в" requires accusative (same as nominative for time)
+        use_genitive = prep.lower() in ("с", "до", "после", "от")
+        table = _HOUR_GENITIVE if use_genitive else _HOUR_NOMINATIVE
+        h_word = table.get(h, _num2words(int(h), lang="ru"))
+        if m == "00":
+            return f"{prep} {h_word}"
+        m_word = _num2words(int(m), lang="ru")
+        return f"{prep} {h_word} {m_word}"
+
+    def _time_plain(match: re.Match) -> str:
         h, m = match.group(1), match.group(2)
-        h_word = _HOUR_WORDS.get(h, _num2words(int(h), lang="ru"))
+        h_word = _HOUR_NOMINATIVE.get(h, _num2words(int(h), lang="ru"))
         if m == "00":
             return h_word
         m_word = _num2words(int(m), lang="ru")
         return f"{h_word} {m_word}"
 
+    # Genitive forms for common numbers after prepositions "от", "до", "с", "без"
+    _NOM_TO_GEN = {
+        "один": "одного", "два": "двух", "три": "трёх", "четыре": "четырёх",
+        "пять": "пяти", "шесть": "шести", "семь": "семи", "восемь": "восьми",
+        "девять": "девяти", "десять": "десяти", "одиннадцать": "одиннадцати",
+        "двенадцать": "двенадцати", "тринадцать": "тринадцати",
+        "пятнадцать": "пятнадцати", "шестнадцать": "шестнадцати",
+        "двадцать": "двадцати", "тридцать": "тридцати",
+        "сорок": "сорока", "пятьдесят": "пятидесяти", "сто": "ста",
+    }
+    _GENITIVE_PREPS = {"от", "до", "с", "без", "после", "более", "менее", "свыше"}
+
+    def _fix_genitives_after_preps(text: str) -> str:
+        """Fix nominative -> genitive after prepositions requiring genitive case."""
+        words = text.split()
+        result = []
+        apply_genitive = False
+        for w in words:
+            if w.lower() in _GENITIVE_PREPS:
+                apply_genitive = True
+                result.append(w)
+                continue
+            if apply_genitive and w.lower() in _NOM_TO_GEN:
+                result.append(_NOM_TO_GEN[w.lower()])
+            else:
+                if w.lower() not in _NOM_TO_GEN:
+                    apply_genitive = False
+                result.append(w)
+        return " ".join(result)
+
     def normalize_numbers_for_tts(text: str) -> str:
         """Replace digits, percentages, dollar amounts, and times with Russian words."""
-        text = _RE_TIME.sub(_time_to_russian, text)
+        # Times with prepositions first (genitive case)
+        text = _RE_TIME_WITH_PREP.sub(_time_with_prep, text)
+        text = _RE_TIME_PLAIN.sub(_time_plain, text)
         text = _RE_PCT.sub(_pct_to_russian, text)
         text = _RE_DOLLAR.sub(_dollar_to_russian, text)
         text = _RE_SPACED_NUM.sub(_number_to_russian, text)
         text = _RE_PLAIN_NUM.sub(_number_to_russian, text)
+        # Fix genitive after prepositions (от десять -> от десяти, до тридцать девять -> до тридцати девяти)
+        text = _fix_genitives_after_preps(text)
         return text
 
 except ImportError:
