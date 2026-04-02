@@ -547,8 +547,8 @@ STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tt
 HF_HOME=${MODELS_DIR}
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
-CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
-PATH=${CUDA_HOME:-/usr/local/cuda}/bin:\$PATH
+CUDA_HOME=/usr/local/cuda
+PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENVEOF
 }
 
