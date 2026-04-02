@@ -10,7 +10,7 @@ from rank_bm25 import BM25Okapi
 
 from .cache import TTLCache, LRUCache
 from .ingest import Chunk, build_chunks
-from .query import load_abbreviations, normalize_query, expand_synonyms
+from .query import load_abbreviations, normalize_query, expand_synonyms, llm_expand_query
 from .rag import ensure_collection, search, upsert_chunks
 from .rerank import Reranker
 from .retrieval_utils import filter_vector_hits
@@ -158,7 +158,10 @@ class RAGEngine:
         normalized = normalize_query(query, self.abbrev)
         normalized = expand_synonyms(normalized)
         timings["normalize_ms"] = (time.perf_counter() - t0) * 1000
-        rewritten = normalized
+        # LLM query expansion: rewrite query with synonyms for better retrieval
+        t_expand = time.perf_counter()
+        rewritten = llm_expand_query(normalized, self.settings.llm.base_url, self.settings.llm.model)
+        timings["llm_expand_ms"] = (time.perf_counter() - t_expand) * 1000
         session_key = session_id or "anon"
         cache_key = f"{session_key}:{rewritten}:fast={fast}:voice={voice_fast}"
 

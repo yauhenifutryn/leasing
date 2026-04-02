@@ -11,8 +11,8 @@ embedding:
   batch_size: 32
   device: "cuda"
   max_characters: 6000
-  chunk_size_tokens: 700
-  chunk_overlap_tokens: 120
+  chunk_size_tokens: 450
+  chunk_overlap_tokens: 100
 
 qdrant:
   url: "http://localhost:6333"

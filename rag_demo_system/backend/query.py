@@ -49,6 +49,37 @@ def normalize_query(text: str, expansions: dict[str, str]) -> str:
     return " ".join(out).strip()
 
 
+def llm_expand_query(query: str, base_url: str, model: str) -> str:
+    """Use LLM to rewrite query with synonyms for better retrieval.
+
+    Adds ~150-250ms latency but dramatically improves recall when the user's
+    phrasing doesn't match KB terminology.
+    """
+    if not base_url or not model:
+        return query
+    try:
+        from .llm import call_openai_compatible
+        resp = call_openai_compatible(
+            base_url=base_url,
+            model=model,
+            system_prompt=(
+                "Ты помощник по поиску в базе знаний лизинговой компании. "
+                "Перепиши вопрос клиента как набор ключевых слов и синонимов для поиска. "
+                "Верни ТОЛЬКО ключевые слова через пробел, без предложений. Максимум 15 слов."
+            ),
+            user_prompt=query,
+            temperature=0.0,
+            max_tokens=40,
+            timeout_sec=5,
+        )
+        expanded = resp.text.strip().strip('"').strip("'")
+        if expanded and 3 < len(expanded) < 200:
+            return f"{query} {expanded}"
+    except Exception:  # noqa: BLE001
+        pass  # Fallback to original query on any error
+    return query
+
+
 def expand_synonyms(query: str) -> str:
     """Append synonyms to the query for better embedding retrieval.
 
