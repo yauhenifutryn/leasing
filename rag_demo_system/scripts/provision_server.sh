@@ -489,24 +489,24 @@ write_env_file() {
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> vLLM utilization ${GPU_UTIL} (minimum)"
   fi
 
-  # Auto-detect CUDA lib path for Whisper.
-  # Pip packages bundle CUDA libs under nvidia/ in the venv. The directory
-  # name changes between versions: cu12 (cublas/lib, cudnn/lib) vs cu13
-  # (cu13/lib). Detect whichever exists.
+  # Auto-detect CUDA lib path for Whisper (faster-whisper / CTranslate2).
+  # CTranslate2 is compiled against CUDA 12. It CANNOT use cu13 libs even
+  # if they exist in the venv. Always prefer the cu12 layout (cublas/lib +
+  # cudnn/lib). Only fall back to cu13 if cu12 is not available.
   local WHISPER_CUDA_LIB_PATH=""
   local VOICE_VENV="$APP_DIR/.venv-voice-oss"
   local PY_VER_DIR
   PY_VER_DIR=$(ls -d "$VOICE_VENV"/lib/python3.* 2>/dev/null | head -1)
   if [ -n "$PY_VER_DIR" ]; then
     local NVIDIA_DIR="$PY_VER_DIR/site-packages/nvidia"
-    if [ -d "$NVIDIA_DIR/cu13/lib" ]; then
-      # New layout: all CUDA 13 libs in one directory
-      WHISPER_CUDA_LIB_PATH="$NVIDIA_DIR/cu13/lib"
-      log "Whisper CUDA libs: cu13 layout ($WHISPER_CUDA_LIB_PATH)"
-    elif [ -d "$NVIDIA_DIR/cublas/lib" ]; then
-      # Old layout: separate directories per library
+    if [ -d "$NVIDIA_DIR/cublas/lib" ] && [ -d "$NVIDIA_DIR/cudnn/lib" ]; then
+      # CTranslate2 needs CUDA 12 libs (cublas + cudnn separate directories)
       WHISPER_CUDA_LIB_PATH="$NVIDIA_DIR/cublas/lib:$NVIDIA_DIR/cudnn/lib"
       log "Whisper CUDA libs: cu12 layout ($WHISPER_CUDA_LIB_PATH)"
+    elif [ -d "$NVIDIA_DIR/cu13/lib" ]; then
+      # Fallback: cu13 layout (may not work with CTranslate2)
+      WHISPER_CUDA_LIB_PATH="$NVIDIA_DIR/cu13/lib"
+      log "WARNING: Whisper using cu13 libs. CTranslate2 may fail with PTX errors."
     else
       log "WARNING: No CUDA libs found in $NVIDIA_DIR. Whisper may fail on GPU."
     fi
