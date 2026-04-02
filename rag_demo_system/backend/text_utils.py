@@ -28,6 +28,23 @@ def clean_answer(text: str) -> str:
         cleaned = re.sub(re.escape(phrase) + r"[,.]?\s*", "", cleaned, flags=re.I)
     return cleaned.strip()
 
+
+def strip_leading_name(text: str, name: str, turn_number: int) -> str:
+    """Remove client name from the start of response unless it's a 'name turn'.
+
+    Name is allowed on turns 1, 5, 10, ... (every 5th) and when the text
+    naturally uses the name mid-sentence. This prevents the LLM habit of
+    starting every response with the client's name.
+    """
+    if not name or not text:
+        return text
+    if turn_number > 0 and turn_number % 5 == 1:
+        return text  # allow name on this turn
+    # Strip "Name, " or "Name! " from the beginning
+    pattern = re.compile(r"^" + re.escape(name) + r"[,!]?\s*", re.I)
+    return pattern.sub("", text)
+
+
 def sanitize_rewrite(text: str) -> str:
     cleaned = clean_answer(text)
     if not cleaned:

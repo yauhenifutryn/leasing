@@ -691,9 +691,16 @@ async def _stream_voice_response(
 
     all_sentences: list[str] = []
     _orig_put = sentence_queue.put
+    _is_first_sentence = True
 
     async def _tracking_put(item: str | None) -> None:
+        nonlocal _is_first_sentence
         if item is not None:
+            # Strip client name from first sentence of response (unless it's a "name turn")
+            if _is_first_sentence and session.client_name:
+                from .text_utils import strip_leading_name
+                item = strip_leading_name(item, session.client_name, session.turn_count)
+                _is_first_sentence = False
             all_sentences.append(item)
         await _orig_put(item)
 
@@ -710,6 +717,7 @@ async def _stream_voice_response(
     if session.interrupted and full_answer:
         full_answer += " [прервано клиентом]"
     if full_answer:
+        session.turn_count += 1
         chat_session = state.get(session_id) or state.create(session_id)
         _append_turn(chat_session, message, full_answer, settings.app.memory_turns)
         state.update(chat_session)
@@ -1093,6 +1101,7 @@ async def voice_ws(websocket: WebSocket) -> None:
     await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
 
     # Save intro to session transcript so model knows the name
+    session.client_name = client_name
     chat_session = state.get(session_id) or state.create(session_id)
     _append_turn(chat_session, f"Меня зовут {client_name}", f"Очень приятно, {client_name}! Чем могу помочь?", settings.app.memory_turns)
     state.update(chat_session)

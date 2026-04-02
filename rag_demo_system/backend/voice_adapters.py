@@ -44,8 +44,29 @@ try:
     _RE_SPACED_NUM = re.compile(r"\d{1,3}(?:[\s\u00a0]\d{3})+")
     _RE_PLAIN_NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
+    _RE_TIME = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+
+    _HOUR_WORDS = {
+        "0": "ноль", "1": "час", "2": "два", "3": "три", "4": "четыре",
+        "5": "пять", "6": "шесть", "7": "семь", "8": "восемь", "9": "девять",
+        "10": "десять", "11": "одиннадцать", "12": "двенадцать",
+        "13": "тринадцать", "14": "четырнадцать", "15": "пятнадцать",
+        "16": "шестнадцать", "17": "семнадцать", "18": "восемнадцать",
+        "19": "девятнадцать", "20": "двадцать", "21": "двадцать один",
+        "22": "двадцать два", "23": "двадцать три",
+    }
+
+    def _time_to_russian(match: re.Match) -> str:
+        h, m = match.group(1), match.group(2)
+        h_word = _HOUR_WORDS.get(h, _num2words(int(h), lang="ru"))
+        if m == "00":
+            return h_word
+        m_word = _num2words(int(m), lang="ru")
+        return f"{h_word} {m_word}"
+
     def normalize_numbers_for_tts(text: str) -> str:
-        """Replace digits, percentages, and dollar amounts with Russian words."""
+        """Replace digits, percentages, dollar amounts, and times with Russian words."""
+        text = _RE_TIME.sub(_time_to_russian, text)
         text = _RE_PCT.sub(_pct_to_russian, text)
         text = _RE_DOLLAR.sub(_dollar_to_russian, text)
         text = _RE_SPACED_NUM.sub(_number_to_russian, text)

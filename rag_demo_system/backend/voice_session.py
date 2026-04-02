@@ -15,6 +15,8 @@ class VoiceSession:
     interrupted: bool = False
     active_task_id: str | None = None
     last_user_message: str = ""
+    client_name: str = ""
+    turn_count: int = 0
 
     @property
     def stack_id(self) -> str:
