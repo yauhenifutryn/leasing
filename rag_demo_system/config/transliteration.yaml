@@ -1,0 +1,65 @@
+# Known terms: brand names, messengers, financial abbreviations
+# Keys are case-insensitive during lookup
+
+# Automotive
+Volkswagen: Фольксваген
+Toyota: Тойота
+BMW: бэ эм вэ
+Mercedes: Мерседес
+Mercedes-Benz: Мерседес Бенц
+Audi: Ауди
+Hyundai: Хёндай
+Kia: Киа
+Nissan: Ниссан
+Honda: Хонда
+Ford: Форд
+Chevrolet: Шевроле
+Renault: Рено
+Peugeot: Пежо
+Skoda: Шкода
+Mazda: Мазда
+Subaru: Субару
+Mitsubishi: Мицубиси
+Lexus: Лексус
+Land Rover: Ленд Ровер
+Range Rover: Рейндж Ровер
+Polo: Поло
+Sedan: Седан
+SUV: эсюви
+Hatchback: хэтчбек
+Crossover: кроссовер
+Geely: Джили
+Chery: Чери
+Haval: Хавал
+JAC: Джак
+Lada: Лада
+GAZ: ГАЗ
+MAZ: МАЗ
+BelAZ: БелАЗ
+
+# Communication
+Viber: Вайбер
+WhatsApp: Вотсапп
+Telegram: Телеграм
+e-mail: имейл
+email: имейл
+E-mail: имейл
+SMS: эс эм эс
+Wi-Fi: вай-фай
+
+# Finance and business
+VIN: вин
+SWIFT: свифт
+IBAN: ибан
+BYN: белорусских рублей
+USD: долларов
+EUR: евро
+RUB: российских рублей
+CRM: сиэрэм
+IT: айти
+GPS: джипиэс
+
+# Web
+www: дабл-ю дабл-ю дабл-ю
+http: эйч-ти-ти-пи
+https: эйч-ти-ти-пи-эс

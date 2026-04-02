@@ -296,7 +296,6 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         return _stream_or_json(response, stream)
 
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    system_prompt = system_prompt + "\n\nСогласие на обработку данных уже получено, не запрашивай его."
     memory_block = build_memory_block(session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
         [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
@@ -622,7 +621,6 @@ async def _stream_voice_response(
 
     # --- Build prompt ---
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    system_prompt += "\n\nСогласие на обработку данных уже получено, не запрашивай его."
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
@@ -630,8 +628,7 @@ async def _stream_voice_response(
     )
     expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
-        "Это голосовой разговор по телефону. Ответь кратко, одно-два предложения. "
-        "Дай только самое главное. Если вопрос расплывчатый, задай один короткий уточняющий вопрос."
+        "Это голосовой разговор. Ответ: 2-3 коротких предложения. Самое важное сначала. Не повторяй то, что клиент уже знает."
         if not expanded
         else "Ответь подробнее, но кратко. Максимум три-четыре предложения."
     )
@@ -661,8 +658,7 @@ async def _stream_voice_response(
         nonlocal t_llm_first_token
         detector = SentenceDetector()
         try:
-            is_followup = len(message.split()) <= 4
-            voice_max_tokens = 120 if (expanded or is_followup) else 60
+            voice_max_tokens = 150  # 2-3 sentences
             stream = iter_openai_compatible_stream_events(
                 base_url=effective_base_url, model=effective_model,
                 system_prompt=system_prompt, user_prompt=user_prompt,
