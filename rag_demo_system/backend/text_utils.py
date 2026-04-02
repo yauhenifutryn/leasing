@@ -4,6 +4,15 @@ import re
 from collections.abc import Iterable, Iterator
 
 
+_BANNED_PHRASES = [
+    "к сожалению",
+    "понимаю ваше беспокойство",
+    "понимаю вашу ситуацию",
+    "в базе знаний нет информации",
+    "в предоставленных фрагментах базы знаний",
+]
+
+
 def clean_answer(text: str) -> str:
     cleaned = text.strip()
     cleaned = re.sub(r"(?is)<think>.*?</think>", "", cleaned)
@@ -14,6 +23,9 @@ def clean_answer(text: str) -> str:
     cleaned = re.sub(r"^\s*\*{0,2}ответ\*{0,2}\s*[:\-]\s*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"^\s*ответ\s*[:\-]\s*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"^\s*\*+\s*", "", cleaned)
+    # Strip banned phrases the LLM ignores prompt rules about
+    for phrase in _BANNED_PHRASES:
+        cleaned = re.sub(re.escape(phrase) + r"[,.]?\s*", "", cleaned, flags=re.I)
     return cleaned.strip()
 
 def sanitize_rewrite(text: str) -> str:
