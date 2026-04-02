@@ -8,14 +8,11 @@ _BANNED_PHRASES = [
     "к сожалению",
     "понимаю ваше беспокойство",
     "понимаю вашу ситуацию",
-    "в базе знаний нет информации",
-    "в предоставленных фрагментах базы знаний",
-    "в моей базе знаний",
-    "в базе знаний не указан",
-    "в базе знаний не прописан",
-    "в базе знаний не содержится",
-    "в базе знаний такого нет",
-    "в нашей базе знаний",
+]
+# Regex patterns for phrases the LLM varies creatively
+_BANNED_PATTERNS = [
+    re.compile(r"в\s+(моей\s+|нашей\s+)?базе\s+(знаний\s+|данных\s+)?[^.]*?(нет|не\s+указан|не\s+прописан|не\s+содержится|такого\s+нет)[^.]*?[.,]?\s*", re.I),
+    re.compile(r"в\s+предоставленных\s+фрагментах[^.]*?[.,]?\s*", re.I),
 ]
 
 
@@ -32,6 +29,8 @@ def clean_answer(text: str) -> str:
     # Strip banned phrases the LLM ignores prompt rules about
     for phrase in _BANNED_PHRASES:
         cleaned = re.sub(re.escape(phrase) + r"[,.]?\s*", "", cleaned, flags=re.I)
+    for pattern in _BANNED_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
     return cleaned.strip()
 
 

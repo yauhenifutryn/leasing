@@ -691,16 +691,13 @@ async def _stream_voice_response(
 
     all_sentences: list[str] = []
     _orig_put = sentence_queue.put
-    _is_first_sentence = True
 
     async def _tracking_put(item: str | None) -> None:
-        nonlocal _is_first_sentence
         if item is not None:
-            # Strip client name from first sentence of response (unless it's a "name turn")
-            if _is_first_sentence and session.client_name:
+            # Strip client name from ALL sentences (unless it's a "name turn")
+            if session.client_name:
                 from .text_utils import strip_name_from_response
                 item = strip_name_from_response(item, session.client_name, session.turn_count)
-                _is_first_sentence = False
             all_sentences.append(item)
         await _orig_put(item)
 
