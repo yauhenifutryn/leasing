@@ -1084,13 +1084,16 @@ async def voice_ws(websocket: WebSocket) -> None:
 
     # Fast check: if input looks like a question, skip name extraction
     _raw_lower = client_name_raw.strip().lower()
-    # Words that indicate a question/request, not a name introduction
-    _QUESTION_WORDS = {"кто", "что", "какой", "какая", "какие", "где", "когда",
-                       "сколько", "можно", "хочу", "мне", "расскажи", "подскажи",
-                       "объясни", "привет", "здравствуйте", "добрый", "адрес",
-                       "документы", "условия", "ставка", "аванс", "офис", "лизинг"}
-    _words_in_input = set(_raw_lower.replace(",", " ").replace(".", " ").split())
-    _is_question = "?" in client_name_raw or bool(_words_in_input & _QUESTION_WORDS)
+    # Topic words that indicate a business question, not a name introduction.
+    # "привет" and "здравствуйте" are NOT here because "Привет, я Евгений" is a name.
+    _QUESTION_TOPICS = {"какой", "какая", "какие", "где", "когда", "сколько",
+                        "можно", "расскажи", "подскажи", "объясни",
+                        "адрес", "документы", "условия", "ставка", "аванс",
+                        "офис", "процент", "ставку", "погода", "директор"}
+    _words_in_input = set(_raw_lower.replace(",", " ").replace(".", " ").replace("?", " ").split())
+    # It's a question if it contains topic words AND doesn't look like a name intro
+    _has_name_intro = any(w in _raw_lower for w in ("меня зовут", "я ", "мне имя", "зовите"))
+    _is_question = "?" in client_name_raw or (bool(_words_in_input & _QUESTION_TOPICS) and not _has_name_intro)
 
     from .llm import call_openai_compatible
     if _is_question:
@@ -1158,8 +1161,9 @@ async def voice_ws(websocket: WebSocket) -> None:
                 t_speech_stopped=t_now, t_stt_done=t_now, question_id=question_id,
             )
         except Exception as exc:  # noqa: BLE001
-            state.log({"event": "first_question_error", "error": str(exc), "session_id": session_id})
-            # Fallback: just acknowledge, client will ask again
+            import traceback
+            state.log({"event": "first_question_error", "error": str(exc), "traceback": traceback.format_exc(), "session_id": session_id, "question": first_question})
+            print(f"[first_question_error] {exc}\n{traceback.format_exc()}", flush=True)
             await _send_tts_message("Одну секунду, я готова вас слушать.")
 
     # From here, all messages are normal conversation.
