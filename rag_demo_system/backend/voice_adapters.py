@@ -13,6 +13,7 @@ from .yandex_speechkit import (
     synthesize_audio as synthesize_with_yandex_speechkit,
     transcribe_audio as transcribe_with_yandex_speechkit,
 )
+from .tts_normalize import normalize_for_tts
 from .yandex_realtime import build_status as build_yandex_realtime_status
 
 # STT providers that hard-fail when their BASE_URL is unset (no fallback allowed)
@@ -189,6 +190,7 @@ def synthesize_audio(text: str, session_id: str, preferred: str = "cosyvoice") -
 
 
 def synthesize_audio_with_provider(text: str, session_id: str, preferred: str = "cosyvoice") -> dict[str, Any]:
+    text = normalize_for_tts(text)
     if preferred == "yandex_speechkit":
         data = synthesize_with_yandex_speechkit(text)
         data.setdefault("session_id", session_id)

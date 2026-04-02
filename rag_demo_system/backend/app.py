@@ -20,12 +20,6 @@ from pydantic import BaseModel
 from .citations import attach_citations
 from .text_utils import clean_answer, iter_final_text
 from .memory import build_memory_block
-from .consent import (
-    consent_denied_response,
-    consent_granted_response,
-    consent_request,
-    detect_consent,
-)
 from .engine import RAGEngine
 from .dify_client import chat_once as dify_chat_once, stop_generation as dify_stop_generation
 from .rag_backends import build_backend_status
@@ -240,7 +234,6 @@ def _voice_chat_streaming_sync(
 
     # Build prompts — same logic as chat()
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    system_prompt = system_prompt + "\n\nСогласие на обработку данных уже получено, не запрашивай его."
 
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
@@ -250,7 +243,7 @@ def _voice_chat_streaming_sync(
     )
     expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
-        f"Ответ должен быть {settings.llm.concise_sentences_min}–{settings.llm.concise_sentences_max} коротких предложений."
+        "Это голосовой разговор. Ответ: 2-3 коротких предложения. Самое важное сначала. Не повторяй то, что клиент уже знает."
         if not expanded
         else "Можно ответить подробнее, но только на основе контекста."
     )
@@ -392,7 +385,6 @@ async def _stream_voice_response(
 
     # --- Build prompt ---
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    system_prompt += "\n\nСогласие на обработку данных уже получено, не запрашивай его."
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
@@ -400,7 +392,7 @@ async def _stream_voice_response(
     )
     expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
-        "Это голосовой разговор по телефону. СТРОГО одно предложение. Дай только самое главное. Если вопрос расплывчатый, задай один короткий уточняющий вопрос."
+        "Это голосовой разговор. Ответ: 2-3 коротких предложения. Самое важное сначала. Не повторяй то, что клиент уже знает."
         if not expanded
         else "Можно ответить подробнее, но только на основе контекста."
     )
@@ -432,7 +424,7 @@ async def _stream_voice_response(
                 base_url=effective_base_url, model=effective_model,
                 system_prompt=system_prompt, user_prompt=user_prompt,
                 temperature=settings.llm.temperature,
-                max_tokens=60,  # Voice: one sentence only
+                max_tokens=150,  # Voice: 2-3 sentences
                 timeout_sec=settings.llm.timeout_sec,
             )
             for event in stream:
@@ -599,56 +591,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
     session = state.get(session_id) or state.create(session_id)
     timings: dict[str, Any] = {}
 
-    decision = detect_consent(message)
-    if session.consent_denied:
-        response = {
-            "ok": True,
-            "session_id": session_id,
-            "backend": backend_name,
-            "answer": consent_denied_response(),
-            "consent": "denied",
-            "chunks": [],
-            "citations": [],
-        }
-        return _stream_or_json(response, stream)
-
-    if not session.consent_given:
-        if decision == "denied":
-            session.consent_denied = True
-            state.update(session)
-            response = {
-                "ok": True,
-                "session_id": session_id,
-                "backend": backend_name,
-                "answer": consent_denied_response(),
-                "consent": "denied",
-                "chunks": [],
-                "citations": [],
-            }
-            return _stream_or_json(response, stream)
-        if decision == "granted":
-            session.consent_given = True
-            state.update(session)
-            response = {
-                "ok": True,
-                "session_id": session_id,
-                "backend": backend_name,
-                "answer": consent_granted_response(),
-                "consent": "granted",
-                "chunks": [],
-                "citations": [],
-            }
-            return _stream_or_json(response, stream)
-        response = {
-            "ok": True,
-            "session_id": session_id,
-            "backend": backend_name,
-            "answer": consent_request(),
-            "consent": "needed",
-            "chunks": [],
-            "citations": [],
-        }
-        return _stream_or_json(response, stream)
+    # Consent is granted implicitly via UI banner; no interactive check needed.
 
     t_route = time.perf_counter()
     routed = route_non_rag(message, settings.llm.base_url, settings.llm.model)
@@ -660,7 +603,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "session_id": session_id,
             "backend": backend_name,
             "answer": routed.response,
-            "consent": "granted",
+
             "chunks": [],
             "citations": [],
             "timings": timings,
@@ -680,7 +623,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 "session_id": session_id,
                 "backend": backend_name,
                 "answer": "Dify не настроен. Проверьте DIFY_API_BASE_URL и DIFY_API_KEY.",
-                "consent": "granted",
+    
                 "chunks": [],
                 "used_knowledge": [],
                 "citations": [],
@@ -718,7 +661,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "session_id": session_id,
             "backend": provider_resp.backend,
             "answer": provider_resp.answer or settings.app.strict_refusal_text,
-            "consent": "granted",
+
             "chunks": [],
             "used_knowledge": provider_resp.used_knowledge,
             "citations": provider_resp.citations,
@@ -738,7 +681,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "session_id": session_id,
             "backend": backend_name,
             "answer": settings.app.strict_refusal_text,
-            "consent": "granted",
+
             "chunks": [],
             "citations": [],
             "timings": timings,
@@ -758,7 +701,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "session_id": session_id,
             "backend": backend_name,
             "answer": settings.app.strict_refusal_text,
-            "consent": "granted",
+
             "chunks": [],
             "citations": [],
             "timings": timings,
@@ -770,7 +713,6 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         return _stream_or_json(response, stream)
 
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    system_prompt = system_prompt + "\n\nСогласие на обработку данных уже получено, не запрашивай его."
     memory_block = build_memory_block(session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
         [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
@@ -848,7 +790,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                         "LLM не настроен или недоступен. "
                         "Проверьте RAG_LLM_BASE_URL и RAG_LLM_MODEL, затем перезапустите backend."
                     ),
-                    "consent": "granted",
+        
                     "chunks": [],
                     "used_knowledge": [],
                     "citations": [],
@@ -904,7 +846,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 "session_id": session_id,
                 "backend": backend_name,
                 "answer": answer_text,
-                "consent": "granted",
+    
                 "chunks": final_chunks if had_final else [],
                 "used_knowledge": used_knowledge,
                 "citations": citations,
@@ -944,7 +886,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
                 "LLM не настроен или недоступен. "
                 "Проверьте RAG_LLM_BASE_URL и RAG_LLM_MODEL, затем перезапустите backend."
             ),
-            "consent": "granted",
+
             "chunks": [],
             "citations": [],
             "timings": timings,
@@ -980,7 +922,6 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         "session_id": session_id,
         "backend": backend_name,
         "answer": answer,
-        "consent": "granted",
         "chunks": final_chunks,
         "used_knowledge": used_knowledge,
         "citations": citations,

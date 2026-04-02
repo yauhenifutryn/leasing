@@ -7,7 +7,7 @@ let chunksCollapsed = false;
 const STREAMING = true;
 let activeTimer = null;
 let requestStartMs = null;
-let consentState = "needed";
+let consentState = "granted";
 let voiceFast = false;
 let selectedBackend = "our_rag";
 let selectedVoiceProvider = "local";
@@ -59,13 +59,11 @@ function setSessionId(id) {
 
 function setConsentState(state) {
   if (!state) return;
-  consentState = state;
-  localStorage.setItem("rag_consent", state);
-  const granted = state === "granted";
-  $("#chatInput").disabled = !granted;
-  $("#btnSend").disabled = !granted;
-  $("#btnConsent").disabled = granted;
-  $("#chatInput").placeholder = granted ? "Введите вопрос..." : "Сначала подтвердите согласие...";
+  consentState = "granted";
+  localStorage.setItem("rag_consent", "granted");
+  $("#chatInput").disabled = false;
+  $("#btnSend").disabled = false;
+  $("#chatInput").placeholder = "Введите вопрос...";
 }
 
 function setStatus(text, level = "warn") {

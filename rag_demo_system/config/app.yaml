@@ -4,7 +4,7 @@ app:
   system_prompt_path: "config/system_prompt_ru.txt"
   kb_markdown_path: "../knowledge_base/kb_faq_ru.md"
   strict_refusal_text: "К сожалению, в базе знаний нет точной информации по этому вопросу. Давайте уточню или передам специалисту"
-  memory_turns: 4
+  memory_turns: 50
 
 embedding:
   model_name: "intfloat/multilingual-e5-large"
