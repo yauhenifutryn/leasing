@@ -692,12 +692,17 @@ async def _stream_voice_response(
     all_sentences: list[str] = []
     _orig_put = sentence_queue.put
 
+    _chunk_texts = [c.get("text", "") for c in final_chunks]
+
     async def _tracking_put(item: str | None) -> None:
         if item is not None:
             # Strip client name from ALL sentences (unless it's a "name turn")
             if session.client_name:
                 from .text_utils import strip_name_from_response
                 item = strip_name_from_response(item, session.client_name, session.turn_count)
+            # Validate addresses against retrieved context (catch hallucinations)
+            from .text_utils import validate_addresses
+            item = validate_addresses(item, _chunk_texts)
             all_sentences.append(item)
         await _orig_put(item)
 

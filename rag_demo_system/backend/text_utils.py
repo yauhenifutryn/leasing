@@ -8,6 +8,9 @@ _BANNED_PHRASES = [
     "к сожалению",
     "понимаю ваше беспокойство",
     "понимаю вашу ситуацию",
+    "шутки не работают",
+    "нет шутки в запасе",
+    "не нарушать деловой этикет",
 ]
 # Regex patterns for phrases the LLM varies creatively
 _BANNED_PATTERNS = [
@@ -49,6 +52,39 @@ def strip_name_from_response(text: str, name: str, turn_number: int) -> str:
     # Clean up double spaces
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip()
+
+
+# Regex to detect street addresses in Russian text (all grammatical cases)
+_ADDRESS_RE = re.compile(
+    r"(?:улиц[аеыуой]|ул\.|проспект[аеуом]?|пр-т[аеуом]?|пр\."
+    r"|переулк[аеуом]?|пер\.|бульвар[аеуом]?|б-р|набережн[аяойуюые]|наб\.)"
+    r"\s+[А-ЯЁа-яё][А-ЯЁа-яё\s\-]+,?\s*(?:дом\s+)?\d+[А-Яа-я]?",
+    re.I,
+)
+
+_SAFE_ADDRESS_FALLBACK = "Точный адрес уточняйте на сайте компании или по телефону."
+
+
+def validate_addresses(text: str, context_chunks: list[str]) -> str:
+    """Replace hallucinated addresses with safe fallback.
+
+    Any street address in the LLM response that doesn't appear in the
+    retrieved context chunks is considered hallucinated and replaced.
+    """
+    if not context_chunks:
+        return text
+    context_joined = " ".join(context_chunks).lower()
+
+    def _check_address(match: re.Match) -> str:
+        addr = match.group(0)
+        # Extract the street name (without numbers) for fuzzy matching
+        street_words = re.findall(r"[А-ЯЁа-яё]{3,}", addr)
+        for word in street_words:
+            if word.lower() in context_joined:
+                return addr  # street name found in context, keep it
+        return _SAFE_ADDRESS_FALLBACK
+
+    return _ADDRESS_RE.sub(_check_address, text)
 
 
 def sanitize_rewrite(text: str) -> str:

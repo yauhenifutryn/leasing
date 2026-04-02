@@ -51,8 +51,10 @@ try:
     _RE_PLAIN_NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
     # Time with preposition: "с 9:00" -> "с девяти", "до 18:00" -> "до восемнадцати"
-    _RE_TIME_WITH_PREP = re.compile(r"(с|до|в|после|к)\s+(\d{1,2}):(\d{2})\b", re.I)
-    _RE_TIME_PLAIN = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+    # Handles colon (:), dot (.), and dash-separated ranges (09:00-17:30)
+    _RE_TIME_WITH_PREP = re.compile(r"(с|до|в|после|к)\s+(\d{1,2})[:.](\d{2})\b", re.I)
+    _RE_TIME_RANGE = re.compile(r"\b(\d{1,2})[:.](\d{2})\s*[-–—]\s*(\d{1,2})[:.](\d{2})\b")
+    _RE_TIME_PLAIN = re.compile(r"\b(\d{1,2})[:.](\d{2})\b")
 
     # Nominative -> genitive for hours (after с/до/от/после)
     _HOUR_GENITIVE = {
@@ -93,6 +95,17 @@ try:
         m_word = _num2words(int(m), lang="ru")
         return f"{h_word} {m_word}"
 
+    def _time_range(match: re.Match) -> str:
+        """Handle '09:00-17:30' or '9.00–18.00' as 'с девяти до семнадцати тридцати'."""
+        h1, m1, h2, m2 = match.group(1), match.group(2), match.group(3), match.group(4)
+        t1 = _HOUR_GENITIVE.get(h1, _num2words(int(h1), lang="ru"))
+        if m1 != "00":
+            t1 += " " + _num2words(int(m1), lang="ru")
+        t2 = _HOUR_GENITIVE.get(h2, _num2words(int(h2), lang="ru"))
+        if m2 != "00":
+            t2 += " " + _num2words(int(m2), lang="ru")
+        return f"с {t1} до {t2}"
+
     _GENITIVE_PREPS = {"от", "до", "с", "без", "после", "более", "менее", "свыше"}
 
     def _is_number_word(word: str) -> bool:
@@ -132,7 +145,8 @@ try:
 
     def normalize_numbers_for_tts(text: str) -> str:
         """Replace digits, percentages, dollar amounts, and times with Russian words."""
-        # Times with prepositions first (genitive case)
+        # Times: ranges first, then prepositions, then standalone
+        text = _RE_TIME_RANGE.sub(_time_range, text)
         text = _RE_TIME_WITH_PREP.sub(_time_with_prep, text)
         text = _RE_TIME_PLAIN.sub(_time_plain, text)
         text = _RE_PCT.sub(_pct_to_russian, text)
