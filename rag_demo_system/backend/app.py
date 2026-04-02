@@ -582,7 +582,7 @@ async def _stream_voice_response(
     )
     expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
-        "Это голосовой разговор. Ответ: 2-3 коротких предложения. Самое важное сначала. Не повторяй то, что клиент уже знает."
+        "Это голосовой разговор. Ответ: 1-2 коротких предложения. Самое важное. Не заканчивай каждый ответ вопросом. Задавай вопрос только если тебе реально нужна информация для продолжения."
         if not expanded
         else "Ответь подробнее, но кратко. Максимум три-четыре предложения."
     )
@@ -612,7 +612,7 @@ async def _stream_voice_response(
         nonlocal t_llm_first_token
         detector = SentenceDetector()
         try:
-            voice_max_tokens = 150  # 2-3 sentences
+            voice_max_tokens = 120  # 1-2 sentences
             stream = iter_openai_compatible_stream_events(
                 base_url=effective_base_url, model=effective_model,
                 system_prompt=system_prompt, user_prompt=user_prompt,
@@ -1150,7 +1150,7 @@ async def voice_ws(websocket: WebSocket) -> None:
         })
         await _stream_voice_response(
             websocket=websocket, session=session, session_id=session_id,
-            message=first_question, tts_provider="silero_tts",
+            message=first_question, tts_provider=session.tts_provider,
             t_speech_stopped=t_now, t_stt_done=t_now, question_id=question_id,
         )
 
