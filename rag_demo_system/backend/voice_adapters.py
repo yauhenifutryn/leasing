@@ -10,6 +10,12 @@ import requests
 import yaml
 
 try:
+    import pymorphy3
+    _morph = pymorphy3.MorphAnalyzer()
+except ImportError:
+    _morph = None
+
+try:
     from num2words import num2words as _num2words
 
     def _number_to_russian(match: re.Match) -> str:
@@ -87,17 +93,25 @@ try:
         m_word = _num2words(int(m), lang="ru")
         return f"{h_word} {m_word}"
 
-    # Genitive forms for common numbers after prepositions "от", "до", "с", "без"
-    _NOM_TO_GEN = {
-        "один": "одного", "два": "двух", "три": "трёх", "четыре": "четырёх",
-        "пять": "пяти", "шесть": "шести", "семь": "семи", "восемь": "восьми",
-        "девять": "девяти", "десять": "десяти", "одиннадцать": "одиннадцати",
-        "двенадцать": "двенадцати", "тринадцать": "тринадцати",
-        "пятнадцать": "пятнадцати", "шестнадцать": "шестнадцати",
-        "двадцать": "двадцати", "тридцать": "тридцати",
-        "сорок": "сорока", "пятьдесят": "пятидесяти", "сто": "ста",
-    }
     _GENITIVE_PREPS = {"от", "до", "с", "без", "после", "более", "менее", "свыше"}
+    # Words that are part of compound numbers (should stay in genitive zone)
+    _NUMBER_WORDS = {
+        "ноль", "один", "одна", "одно", "два", "две", "три", "четыре",
+        "пять", "шесть", "семь", "восемь", "девять", "десять",
+        "одиннадцать", "двенадцать", "тринадцать", "четырнадцать",
+        "пятнадцать", "шестнадцать", "семнадцать", "восемнадцать",
+        "девятнадцать", "двадцать", "тридцать", "сорок", "пятьдесят",
+        "шестьдесят", "семьдесят", "восемьдесят", "девяносто", "сто",
+        "двести", "триста", "четыреста", "пятьсот", "тысяча", "тысяч",
+    }
+
+    def _to_genitive(word: str) -> str:
+        """Inflect a Russian word to genitive case using pymorphy3."""
+        if _morph is None:
+            return word
+        parsed = _morph.parse(word)[0]
+        inflected = parsed.inflect({"gent"})
+        return inflected.word if inflected else word
 
     def _fix_genitives_after_preps(text: str) -> str:
         """Fix nominative -> genitive after prepositions requiring genitive case."""
@@ -109,10 +123,10 @@ try:
                 apply_genitive = True
                 result.append(w)
                 continue
-            if apply_genitive and w.lower() in _NOM_TO_GEN:
-                result.append(_NOM_TO_GEN[w.lower()])
+            if apply_genitive and w.lower() in _NUMBER_WORDS:
+                result.append(_to_genitive(w))
             else:
-                if w.lower() not in _NOM_TO_GEN:
+                if w.lower() not in _NUMBER_WORDS:
                     apply_genitive = False
                 result.append(w)
         return " ".join(result)

@@ -9,3 +9,4 @@ rank-bm25==0.2.2
 pytest==8.3.4
 huggingface-hub==0.24.5
 num2words==0.5.14
+pymorphy3==2.0.6

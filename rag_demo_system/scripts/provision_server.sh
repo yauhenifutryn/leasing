@@ -374,6 +374,7 @@ install_all_venvs() {
     sentence-transformers \
     rank-bm25 \
     num2words \
+    pymorphy3 \
     pytest
 
   log "Installing OSS voice venv (.venv-voice-oss) -- Whisper + Silero"
