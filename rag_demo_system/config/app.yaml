@@ -22,7 +22,7 @@ retrieval:
   vector_top_k: 8
   bm25_top_k: 8
   final_top_n: 6
-  score_threshold: 0.22
+  score_threshold: 0.28
   min_rerank_score: 0.08
   context_max_tokens: 1800
   fast_vector_top_k: 4

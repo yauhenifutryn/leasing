@@ -243,22 +243,22 @@ def transliterate_latin(text: str) -> str:
 # Silero TTS reads abbreviations as words, not letter-by-letter.
 # This map expands them to how they should be spoken aloud.
 _ABBREV_TTS: dict[str, str] = {
-    "НДФЛ": "эн-дэ-фэ-эл",
-    "ИП": "и-пэ",
-    "ИНН": "и-эн-эн",
-    "УНП": "у-эн-пэ",
-    "НДС": "эн-дэ-эс",
-    "ВНЖ": "вэ-эн-жэ",
-    "ВУ": "вэ-у",
-    "BYN": "бэ-уай-эн",
+    "НДФЛ": "эн дэ фэ эл",
+    "ИП": "и пэ",
+    "ИНН": "и эн эн",
+    "УНП": "у эн пэ",
+    "НДС": "эн дэ эс",
+    "ВНЖ": "вэ эн жэ",
+    "ВУ": "вэ у",
+    "BYN": "бэ уай эн",
     "USD": "долларов",
     "EUR": "евро",
-    "GPS": "джи-пи-эс",
+    "GPS": "джи пи эс",
     "КАСКО": "каско",
     "ОСАГО": "осаго",
-    "ООО": "о-о-о",
-    "ЗАО": "зэ-а-о",
-    "ОАО": "о-а-о",
+    "ООО": "о о о",
+    "ЗАО": "зэ а о",
+    "ОАО": "о а о",
 }
 
 # Build regex that matches any abbreviation (longest first to avoid partial matches)

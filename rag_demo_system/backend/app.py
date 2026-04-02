@@ -1140,19 +1140,24 @@ async def voice_ws(websocket: WebSocket) -> None:
 
     # If the first message was a question (not a name), answer it immediately
     if first_question and first_question.strip():
-        question_id = str(uuid.uuid4())
-        t_now = time.time()
-        await websocket.send_json({
-            "type": "conversation.item.input_audio_transcription.completed",
-            "session_id": session_id,
-            "provider": "intro",
-            "transcription": first_question,
-        })
-        await _stream_voice_response(
-            websocket=websocket, session=session, session_id=session_id,
-            message=first_question, tts_provider=session.tts_provider,
-            t_speech_stopped=t_now, t_stt_done=t_now, question_id=question_id,
-        )
+        try:
+            question_id = str(uuid.uuid4())
+            t_now = time.time()
+            await websocket.send_json({
+                "type": "conversation.item.input_audio_transcription.completed",
+                "session_id": session_id,
+                "provider": "intro",
+                "transcription": first_question,
+            })
+            await _stream_voice_response(
+                websocket=websocket, session=session, session_id=session_id,
+                message=first_question, tts_provider=session.tts_provider,
+                t_speech_stopped=t_now, t_stt_done=t_now, question_id=question_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            state.log({"event": "first_question_error", "error": str(exc), "session_id": session_id})
+            # Fallback: just acknowledge, client will ask again
+            await _send_tts_message("Одну секунду, я готова вас слушать.")
 
     # From here, all messages are normal conversation.
     # ------------------------------------------------------------------
