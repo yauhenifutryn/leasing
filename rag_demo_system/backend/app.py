@@ -976,13 +976,21 @@ async def voice_ws(websocket: WebSocket) -> None:
         })
         try:
             audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
-            if audio_resp.get("audio_b64"):
-                await websocket.send_json({
-                    "type": "response.output_audio.delta",
-                    "session_id": session_id,
-                    "delta": audio_resp["audio_b64"],
-                    "sample_rate_hz": audio_resp.get("sample_rate_hz"),
-                })
+            audio_b64 = audio_resp.get("audio_b64") or ""
+            if audio_b64:
+                if rtc_handler is not None:
+                    # Route TTS through RTC track so Chrome AEC gets precise reference
+                    pcm16 = _b64mod.b64decode(audio_b64)
+                    rtc_handler.tts_track.push_audio(pcm16)
+                    rtc_handler.tts_track.flush()
+                else:
+                    # No RTC: send via WebSocket (PTT mode)
+                    await websocket.send_json({
+                        "type": "response.output_audio.delta",
+                        "session_id": session_id,
+                        "delta": audio_b64,
+                        "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+                    })
         except Exception:  # noqa: BLE001
             pass
         await websocket.send_json({
@@ -1089,15 +1097,28 @@ async def voice_ws(websocket: WebSocket) -> None:
                 if rtc_handler is not None:
                     await rtc_handler.close()
 
+                _intro_cb_count = 0
+
                 async def _rtc_on_audio_intro(pcm16: bytes) -> None:
                     """RTC audio during intro -> VAD -> speech queue."""
-                    nonlocal vad, vad_enabled
+                    nonlocal vad, vad_enabled, _intro_cb_count
+                    _intro_cb_count += 1
+                    if _intro_cb_count <= 3 or _intro_cb_count % 500 == 0:
+                        print(f"[RTC-INTRO] cb={_intro_cb_count} vad_en={vad_enabled} vad={'ok' if vad else 'None'} len={len(pcm16)}", flush=True)
                     if not vad_enabled or vad is None:
                         return
+                    was_speaking = vad.is_speaking
                     speech_audio = vad.feed(pcm16)
+                    if not was_speaking and vad.is_speaking:
+                        print("[VAD-RTC-INTRO] speech_start", flush=True)
+                    if was_speaking and not vad.is_speaking and speech_audio is not None:
+                        print(f"[VAD-RTC-INTRO] speech_end ({len(speech_audio)} bytes)", flush=True)
                     if speech_audio is not None and len(speech_audio) >= 28800:
                         vad_b64 = _b64mod.b64encode(speech_audio).decode()
+                        print(f"[VAD-RTC-INTRO] dispatching to speech queue ({len(speech_audio)} bytes)", flush=True)
                         await _transcribe_and_enqueue(vad_b64)
+                    elif speech_audio is not None:
+                        print(f"[VAD-RTC-INTRO] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
 
                 rtc_handler = RTCAudioHandler(
                     on_audio=_rtc_on_audio_intro,
