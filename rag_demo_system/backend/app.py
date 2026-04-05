@@ -1223,8 +1223,46 @@ async def voice_ws(websocket: WebSocket) -> None:
     # From here, all messages are normal conversation.
     # ------------------------------------------------------------------
 
-    # RTC is now established before the intro (client sends rtc.offer
-    # immediately after WebSocket opens). No rtc.offer_needed signal needed.
+    # RTC was established during the intro. Swap the callback from the
+    # intro version (feeds _speech_queue) to the main loop version
+    # (calls _process_voice_utterance directly with barge-in detection).
+    if rtc_handler is not None:
+        async def _rtc_on_audio_main(pcm16: bytes) -> None:
+            """RTC audio during main conversation loop."""
+            nonlocal vad, vad_enabled
+            if not vad_enabled or vad is None:
+                return
+            was_speaking = vad.is_speaking
+            speech_audio = vad.feed(pcm16)
+            if not was_speaking and vad.is_speaking:
+                print("[VAD-RTC] speech_start", flush=True)
+            if was_speaking and not vad.is_speaking and speech_audio is not None:
+                print(f"[VAD-RTC] speech_end ({len(speech_audio)} bytes)", flush=True)
+            # Barge-in: user speaking while assistant responds
+            if vad.is_speaking and session.assistant_speaking and not session.interrupted:
+                session.interrupted = True
+                print("[BARGE-IN-RTC] speech during response", flush=True)
+                try:
+                    await websocket.send_json({
+                        "type": "interrupt",
+                        "session_id": session_id,
+                    })
+                except (RuntimeError, WebSocketDisconnect):
+                    pass
+            # Speech ended: dispatch response
+            _MIN_SPEECH_BYTES = 28800
+            if speech_audio is not None:
+                if len(speech_audio) < _MIN_SPEECH_BYTES:
+                    print(f"[VAD-RTC] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
+                elif session.assistant_speaking:
+                    print(f"[VAD-RTC] speech_end IGNORED (assistant speaking)", flush=True)
+                else:
+                    vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
+                    print(f"[VAD-RTC] dispatching ({len(speech_audio)} bytes)", flush=True)
+                    asyncio.create_task(_process_voice_utterance(vad_audio_b64))
+
+        rtc_handler._on_audio = _rtc_on_audio_main
+        print("[RTC] switched to main conversation callback", flush=True)
 
     try:
         while True:
