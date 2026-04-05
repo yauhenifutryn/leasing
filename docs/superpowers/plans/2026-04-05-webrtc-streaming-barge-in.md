@@ -414,7 +414,17 @@ In the main `while True:` loop (after `elif event_type == "session.update":` blo
                     await rtc_handler.close()
 
                 async def _rtc_on_audio(pcm16: bytes) -> None:
-                    """RTC inbound audio -> VAD pipeline."""
+                    """RTC inbound audio -> VAD pipeline.
+
+                    CRITICAL: this callback must NEVER block. It is called
+                    for every 20ms audio frame by _consume_inbound. If it
+                    blocks (e.g. awaiting _process_voice_utterance), no
+                    further frames are processed and barge-in freezes.
+
+                    Solution: VAD + barge-in run inline (fast).
+                    _process_voice_utterance is fired as a task (non-blocking).
+                    Guard with session.assistant_speaking to prevent overlap.
+                    """
                     nonlocal vad, vad_enabled
                     if not vad_enabled or vad is None:
                         return
@@ -435,10 +445,10 @@ In the main `while True:` loop (after `elif event_type == "session.update":` blo
                             })
                         except (RuntimeError, WebSocketDisconnect):
                             pass
-                    # Speech ended: process utterance
-                    if speech_audio is not None:
+                    # Speech ended: fire-and-forget response (don't block audio processing)
+                    if speech_audio is not None and not session.assistant_speaking:
                         vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
-                        await _process_voice_utterance(vad_audio_b64)
+                        asyncio.create_task(_process_voice_utterance(vad_audio_b64))
 
                 rtc_handler = RTCAudioHandler(
                     on_audio=_rtc_on_audio,
