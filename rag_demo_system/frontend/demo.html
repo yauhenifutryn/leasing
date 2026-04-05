@@ -475,6 +475,15 @@
       }
       if (evt.type === "interrupt") {
         stopPlayback();
+        // Also mute RTC audio playback if active
+        const rtcAudio = $("#rtcAudio");
+        if (rtcAudio && rtcAudio.srcObject) {
+          rtcAudio.srcObject.getAudioTracks().forEach(t => t.enabled = false);
+          // Re-enable after a short delay (server will send new audio for next response)
+          setTimeout(() => {
+            if (rtcAudio.srcObject) rtcAudio.srcObject.getAudioTracks().forEach(t => t.enabled = true);
+          }, 500);
+        }
         setStatus("Слушаю...", "warn");
       }
       if (evt.type === "rtc.answer") {
