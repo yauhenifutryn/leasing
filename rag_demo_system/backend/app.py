@@ -828,6 +828,12 @@ async def voice_ws(websocket: WebSocket) -> None:
         # speech start during assistant playback, set session.interrupted
         # (already checked by both llm_producer and tts_consumer).
         print("[UTTERANCE] VAD path (barge-in listener active)", flush=True)
+        # Set assistant_speaking BEFORE launching the response task.
+        # _stream_voice_response sets it too (line 712), but the response
+        # does RAG + prompt building first -- the listener would miss early
+        # barge-in attempts if we waited for that.
+        session.assistant_speaking = True
+        session.interrupted = False
         response_task = asyncio.create_task(response_coro)
 
         async def _barge_in_listener() -> None:
@@ -855,7 +861,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                             speech_chunks = 0
                         if chunk_count <= 3 or chunk_count % 50 == 0:
                             print(
-                                f"[LISTENER] chunk={chunk_count} vad={vad.is_speaking} speech_chunks={speech_chunks}",
+                                f"[LISTENER] chunk={chunk_count} vad={vad.is_speaking} speech_chunks={speech_chunks} asst={session.assistant_speaking}",
                                 flush=True,
                             )
                         if (
