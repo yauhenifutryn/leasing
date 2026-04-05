@@ -229,6 +229,7 @@
     let recorderNode = null;
     let source = null;
     let micStream = null; // single mic stream shared by WebSocket AudioWorklet + RTC
+    let assistantSpeaking = false; // true when TTS is playing, used for echo gate
     let playCtx = null;
     let nextPlayTime = 0;
     let t0 = 0;
@@ -434,6 +435,7 @@
         setStatus(`Обработка... (STT: ${Date.now() - t0}ms)`, "warn");
       }
       if (evt.type === "response.output_text.delta") {
+        assistantSpeaking = true;
         $("#currentResponse").textContent += evt.delta || "";
       }
       if (evt.type === "response.output_audio.delta" && evt.delta) {
@@ -444,6 +446,7 @@
         }
       }
       if (evt.type === "response.done") {
+        assistantSpeaking = false;
         const vt = evt.voice_timings || {};
         const totalMs = (t0 > 0) ? (vt.total_ms || (Date.now() - t0)) : 0;
         const text = $("#currentResponse").textContent.trim();
@@ -474,6 +477,7 @@
         setStatus(evt.error || "Ошибка", "danger");
       }
       if (evt.type === "interrupt") {
+        assistantSpeaking = false;
         stopPlayback();
         // Also mute RTC audio playback if active
         const rtcAudio = $("#rtcAudio");
@@ -515,11 +519,10 @@
         source = audioCtx.createMediaStreamSource(micStream);
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
-          // Hybrid: WebSocket audio for STT (always), RTC for barge-in (parallel).
-          // Gate WebSocket audio during TTS playback to prevent echo in STT.
-          // RTC still flows during playback for barge-in detection (AEC handles echo).
-          const isPlaying = playCtx && nextPlayTime > playCtx.currentTime;
-          if (!talking && isPlaying) return; // half-duplex gate during TTS
+          // Hybrid: WebSocket audio for STT, RTC for barge-in.
+          // Gate WebSocket audio during TTS to prevent echo in STT.
+          // assistantSpeaking is set by response.output_text.delta, cleared by response.done/interrupt.
+          if (!talking && assistantSpeaking) return;
           if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
             ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
@@ -542,8 +545,9 @@
 
         if (startWithVAD) {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
-          // Don't set continuousStreaming; RTC handles audio.
-          // Fallback sets it if RTC fails.
+          // Hybrid: WebSocket audio always flows for STT.
+          // RTC handles barge-in in parallel.
+          continuousStreaming = true;
         }
       };
       ws.onmessage = (msg) => handleEvent(JSON.parse(msg.data));
