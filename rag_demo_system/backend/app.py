@@ -1022,7 +1022,7 @@ async def voice_ws(websocket: WebSocket) -> None:
     # Helper: wait for next voice utterance (works with both modes)
     # ------------------------------------------------------------------
     async def _wait_for_speech() -> str:
-        nonlocal vad_enabled, vad, session_id
+        nonlocal vad_enabled, vad, session_id, rtc_handler
         while True:
             # Check if VAD already pushed something
             try:
