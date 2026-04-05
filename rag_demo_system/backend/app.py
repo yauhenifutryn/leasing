@@ -33,6 +33,7 @@ from .voice_adapters import build_llm_status, build_voice_statuses, synthesize_a
 from .voice_session import VoiceSession
 from .vad import SileroVAD
 from .audio_input import WebSocketAudioAdapter
+from .rtc_audio import RTCAudioHandler
 
 settings = load_settings()
 state = StateStore(Path(__file__).resolve().parents[1] / ".state")
@@ -502,6 +503,7 @@ async def _stream_voice_response(
     t_speech_stopped: float,
     t_stt_done: float,
     question_id: str,
+    rtc_handler: Any | None = None,
 ) -> None:
     """Sentence-level LLM->TTS streaming for low-latency voice responses.
 
@@ -670,12 +672,17 @@ async def _stream_voice_response(
                 if audio_b64:
                     if t_tts_first_chunk is None:
                         t_tts_first_chunk = time.time()
-                    await websocket.send_json({
-                        "type": "response.output_audio.delta",
-                        "session_id": session_id,
-                        "delta": audio_b64,
-                        "sample_rate_hz": audio_resp.get("sample_rate_hz"),
-                    })
+                    if rtc_handler is not None:
+                        import base64 as _b64
+                        pcm16 = _b64.b64decode(audio_b64)
+                        rtc_handler.tts_track.push_audio(pcm16)
+                    else:
+                        await websocket.send_json({
+                            "type": "response.output_audio.delta",
+                            "session_id": session_id,
+                            "delta": audio_b64,
+                            "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+                        })
                     t_playback_started = time.time()
             except (RuntimeError, WebSocketDisconnect):
                 session.interrupted = True
@@ -715,6 +722,8 @@ async def _stream_voice_response(
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
     session.assistant_speaking = False
+    if rtc_handler is not None:
+        rtc_handler.tts_track.flush()
 
     full_answer = " ".join(all_sentences)
     if session.interrupted and full_answer:
@@ -810,16 +819,25 @@ async def voice_ws(websocket: WebSocket) -> None:
             t_speech_stopped=t_speech_stopped,
             t_stt_done=t_stt_done,
             question_id=question_id,
+            rtc_handler=rtc_handler,
         )
 
-        print(f"[UTTERANCE] vad_enabled={vad_enabled} vad={'yes' if vad is not None else 'no'}", flush=True)
         if not (vad_enabled and vad is not None):
             # PTT mode: original blocking behavior
-            print("[UTTERANCE] PTT path (no listener)", flush=True)
             try:
                 await response_coro
             except (RuntimeError, WebSocketDisconnect):
                 pass
+            return
+
+        if rtc_handler is not None:
+            # RTC mode: barge-in handled by RTC audio callback, no WS listener needed
+            session.assistant_speaking = True
+            session.interrupted = False
+            try:
+                await response_coro
+            except (RuntimeError, WebSocketDisconnect):
+                session.interrupted = True
             return
 
         # ---- VAD mode: concurrent barge-in listener ----
@@ -827,7 +845,6 @@ async def voice_ws(websocket: WebSocket) -> None:
         # events so incoming audio is fed to VAD.  When VAD detects
         # speech start during assistant playback, set session.interrupted
         # (already checked by both llm_producer and tts_consumer).
-        print("[UTTERANCE] VAD path (barge-in listener active)", flush=True)
         # Set assistant_speaking BEFORE launching the response task.
         # _stream_voice_response sets it too (line 712), but the response
         # does RAG + prompt building first -- the listener would miss early
@@ -842,7 +859,6 @@ async def voice_ws(websocket: WebSocket) -> None:
             speech_chunks = 0
             _BARGE_IN_MIN_CHUNKS = 8  # ~250ms of speech audio
             try:
-                print("[LISTENER] started", flush=True)
                 while not response_task.done():
                     event = await websocket.receive_json()
                     etype = event.get("type")
@@ -859,11 +875,6 @@ async def voice_ws(websocket: WebSocket) -> None:
                             speech_chunks += 1
                         else:
                             speech_chunks = 0
-                        if chunk_count <= 3 or chunk_count % 50 == 0:
-                            print(
-                                f"[LISTENER] chunk={chunk_count} vad={vad.is_speaking} speech_chunks={speech_chunks} asst={session.assistant_speaking}",
-                                flush=True,
-                            )
                         if (
                             speech_chunks >= _BARGE_IN_MIN_CHUNKS
                             and session.assistant_speaking
@@ -952,6 +963,7 @@ async def voice_ws(websocket: WebSocket) -> None:
             await _process_voice_utterance(vad_audio_b64)
 
     audio_adapter = WebSocketAudioAdapter(on_chunk=_on_audio_chunk)
+    rtc_handler: RTCAudioHandler | None = None
 
     # ------------------------------------------------------------------
     # Helper: send text + TTS audio to client (for hardcoded messages)
@@ -1175,6 +1187,13 @@ async def voice_ws(websocket: WebSocket) -> None:
     # From here, all messages are normal conversation.
     # ------------------------------------------------------------------
 
+    # If streaming mode was requested, signal client to establish RTC
+    if vad_enabled:
+        await websocket.send_json({
+            "type": "rtc.offer_needed",
+            "session_id": session_id,
+        })
+
     try:
         while True:
             event = await websocket.receive_json()
@@ -1207,6 +1226,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                     }
                 )
             elif event_type == "input_audio_buffer.append":
+                if rtc_handler is not None:
+                    continue  # audio comes via RTC, skip WebSocket audio
                 audio = event.get("audio") or ""
                 if audio:
                     raw = _b64mod.b64decode(audio)
@@ -1223,6 +1244,66 @@ async def voice_ws(websocket: WebSocket) -> None:
                 session.assistant_speaking = False
                 session.interrupted = True
                 await websocket.send_json({"type": "response.cancelled", "session_id": session_id})
+
+            elif event_type == "rtc.offer":
+                # Client sent WebRTC offer for streaming mode
+                if rtc_handler is not None:
+                    await rtc_handler.close()
+
+                async def _rtc_on_audio(pcm16: bytes) -> None:
+                    """RTC inbound audio -> VAD pipeline.
+
+                    CRITICAL: this callback must NEVER block. It runs for
+                    every 20ms frame. _process_voice_utterance is fired as
+                    a task to avoid blocking barge-in detection.
+                    """
+                    nonlocal vad, vad_enabled
+                    if not vad_enabled or vad is None:
+                        return
+                    was_speaking = vad.is_speaking
+                    speech_audio = vad.feed(pcm16)
+                    if not was_speaking and vad.is_speaking:
+                        print("[VAD-RTC] speech_start", flush=True)
+                    if was_speaking and not vad.is_speaking and speech_audio is not None:
+                        print(f"[VAD-RTC] speech_end ({len(speech_audio)} bytes)", flush=True)
+                    # Barge-in: user speaking while assistant responds
+                    if vad.is_speaking and session.assistant_speaking:
+                        session.interrupted = True
+                        print("[BARGE-IN-RTC] speech during response", flush=True)
+                        try:
+                            await websocket.send_json({
+                                "type": "interrupt",
+                                "session_id": session_id,
+                            })
+                        except (RuntimeError, WebSocketDisconnect):
+                            pass
+                    # Speech ended: fire-and-forget response (don't block audio processing)
+                    if speech_audio is not None and not session.assistant_speaking:
+                        vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
+                        asyncio.create_task(_process_voice_utterance(vad_audio_b64))
+
+                rtc_handler = RTCAudioHandler(
+                    on_audio=_rtc_on_audio,
+                    sample_rate=24000,
+                )
+                sdp_offer = event.get("sdp", "")
+                try:
+                    sdp_answer = await rtc_handler.handle_offer(sdp_offer)
+                    await websocket.send_json({
+                        "type": "rtc.answer",
+                        "sdp": sdp_answer,
+                    })
+                    print("[RTC] peer connection established", flush=True)
+                except Exception as exc:
+                    print(f"[RTC] offer handling failed: {exc}", flush=True)
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": f"rtc_failed: {exc}",
+                    })
+                    rtc_handler = None
+
+            elif event_type == "rtc.ice":
+                pass  # ICE candidates bundled in SDP; no trickle ICE needed
     except WebSocketDisconnect:
         pass
     finally:
@@ -1244,6 +1325,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                 state.log({"event": "session_analysis", "session_id": session_id, "overall_score": report.get("overall_score")})
         except Exception:  # noqa: BLE001
             pass  # Analysis failure should never break the session cleanup
+        if rtc_handler is not None:
+            await rtc_handler.close()
         voice_sessions.pop(session_id, None)
 
 

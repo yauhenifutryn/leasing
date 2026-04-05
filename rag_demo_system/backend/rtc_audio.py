@@ -15,8 +15,21 @@ from aiortc import AudioStreamTrack, RTCConfiguration, RTCIceServer, RTCPeerConn
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame, AudioResampler
 
+import os as _os
+
+_TURN_HOST = _os.getenv("TURN_HOST", "185.216.21.7")
+_TURN_USER = _os.getenv("TURN_USER", "voicebot")
+_TURN_PASS = _os.getenv("TURN_PASS", "voicebot2026")
+
 _RTC_CONFIG = RTCConfiguration(
-    iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+    iceServers=[
+        RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+        RTCIceServer(
+            urls=[f"turn:{_TURN_HOST}:3478", f"turn:{_TURN_HOST}:3478?transport=tcp"],
+            username=_TURN_USER,
+            credential=_TURN_PASS,
+        ),
+    ]
 )
 
 AUDIO_PTIME = 0.020  # 20ms per RTP frame
