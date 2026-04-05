@@ -822,10 +822,8 @@ async def voice_ws(websocket: WebSocket) -> None:
             rtc_handler=rtc_handler,
         )
 
-        print(f"[UTTERANCE] vad_enabled={vad_enabled} vad={'yes' if vad is not None else 'no'}", flush=True)
         if not (vad_enabled and vad is not None):
             # PTT mode: original blocking behavior
-            print("[UTTERANCE] PTT path (no listener)", flush=True)
             try:
                 await response_coro
             except (RuntimeError, WebSocketDisconnect):
@@ -834,7 +832,6 @@ async def voice_ws(websocket: WebSocket) -> None:
 
         if rtc_handler is not None:
             # RTC mode: barge-in handled by RTC audio callback, no WS listener needed
-            print("[UTTERANCE] RTC path (barge-in via RTC callback)", flush=True)
             session.assistant_speaking = True
             session.interrupted = False
             try:
@@ -848,7 +845,6 @@ async def voice_ws(websocket: WebSocket) -> None:
         # events so incoming audio is fed to VAD.  When VAD detects
         # speech start during assistant playback, set session.interrupted
         # (already checked by both llm_producer and tts_consumer).
-        print("[UTTERANCE] VAD path (barge-in listener active)", flush=True)
         # Set assistant_speaking BEFORE launching the response task.
         # _stream_voice_response sets it too (line 712), but the response
         # does RAG + prompt building first -- the listener would miss early
@@ -863,7 +859,6 @@ async def voice_ws(websocket: WebSocket) -> None:
             speech_chunks = 0
             _BARGE_IN_MIN_CHUNKS = 8  # ~250ms of speech audio
             try:
-                print("[LISTENER] started", flush=True)
                 while not response_task.done():
                     event = await websocket.receive_json()
                     etype = event.get("type")
@@ -880,11 +875,6 @@ async def voice_ws(websocket: WebSocket) -> None:
                             speech_chunks += 1
                         else:
                             speech_chunks = 0
-                        if chunk_count <= 3 or chunk_count % 50 == 0:
-                            print(
-                                f"[LISTENER] chunk={chunk_count} vad={vad.is_speaking} speech_chunks={speech_chunks} asst={session.assistant_speaking}",
-                                flush=True,
-                            )
                         if (
                             speech_chunks >= _BARGE_IN_MIN_CHUNKS
                             and session.assistant_speaking
