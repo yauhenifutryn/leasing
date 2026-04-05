@@ -436,7 +436,10 @@
         setStatus(`Обработка... (STT: ${Date.now() - t0}ms)`, "warn");
       }
       if (evt.type === "response.output_text.delta") {
-        assistantSpeaking = true;
+        if (!assistantSpeaking) {
+          assistantSpeaking = true;
+          if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: true });
+        }
         $("#currentResponse").textContent += evt.delta || "";
       }
       if (evt.type === "response.output_audio.delta" && evt.delta) {
@@ -448,6 +451,7 @@
       }
       if (evt.type === "response.done") {
         assistantSpeaking = false;
+        if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: false });
         const vt = evt.voice_timings || {};
         const totalMs = (t0 > 0) ? (vt.total_ms || (Date.now() - t0)) : 0;
         const text = $("#currentResponse").textContent.trim();
@@ -479,6 +483,7 @@
       }
       if (evt.type === "interrupt") {
         assistantSpeaking = false;
+        if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: false });
         stopPlayback();
         // Also mute RTC audio playback if active
         const rtcAudio = $("#rtcAudio");
@@ -514,15 +519,34 @@
 
         // Init audio
         audioCtx = new AudioContext();
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true } });
+        // Raw audio (no AEC). Barge-in detection uses energy in AudioWorklet.
+        // AEC doesn't work reliably across devices (over-suppresses user voice).
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
         await audioCtx.audioWorklet.addModule("recorder-worklet.js");
         recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
         source = audioCtx.createMediaStreamSource(micStream);
         recorderNode.port.onmessage = (e) => {
+          // Handle barge-in signal from AudioWorklet energy detection
+          if (e.data && e.data.type === "bargeIn") {
+            console.log(`[BARGE-IN] energy=${e.data.energy.toFixed(4)} baseline=${e.data.baseline.toFixed(4)}`);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "response.cancel" }));
+            }
+            stopPlayback();
+            // Mute RTC audio if active
+            const rtcAudio = document.getElementById("rtcAudio");
+            if (rtcAudio && rtcAudio.srcObject) {
+              rtcAudio.srcObject.getAudioTracks().forEach(t => t.enabled = false);
+              setTimeout(() => {
+                if (rtcAudio.srcObject) rtcAudio.srcObject.getAudioTracks().forEach(t => t.enabled = true);
+              }, 500);
+            }
+            assistantSpeaking = false;
+            setStatus("Слушаю...", "warn");
+            return;
+          }
           const pcm16 = e.data;
-          // Hybrid: WebSocket audio for STT, RTC for barge-in.
           // Gate WebSocket audio during TTS to prevent echo in STT.
-          // assistantSpeaking is set by response.output_text.delta, cleared by response.done/interrupt.
           if (!talking && assistantSpeaking) return;
           if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
