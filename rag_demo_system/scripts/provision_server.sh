@@ -571,7 +571,23 @@ ENVEOF
 }
 
 # ---------------------------------------------------------------------------
-# Step 9: Start stack via stack.sh
+# Step 9: Install coturn TURN server for WebRTC media relay
+# ---------------------------------------------------------------------------
+install_turn_server() {
+  if command -v turnserver &>/dev/null; then
+    log "coturn already installed, skipping"
+    return
+  fi
+  log "Installing coturn TURN server..."
+  if [ -f "$SCRIPT_DIR/setup_turn.sh" ]; then
+    bash "$SCRIPT_DIR/setup_turn.sh" || log "WARNING: coturn setup failed (non-fatal, WebRTC relay unavailable)"
+  else
+    log "WARNING: setup_turn.sh not found, skipping TURN installation"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Step 10: Start stack via stack.sh
 # ---------------------------------------------------------------------------
 start_stack() {
   # --- Clean shutdown of any previous stack ---
@@ -677,7 +693,8 @@ main() {
   download_models            # Step 6: HF model + Silero VAD download
   start_qdrant               # Step 7: Qdrant vector DB
   write_env_file             # Step 8: generate .env
-  start_stack                # Step 9: launch supervisor stack
+  install_turn_server        # Step 9: coturn for WebRTC relay
+  start_stack                # Step 10: launch supervisor stack
 
   log "=== Provisioning complete ==="
   log "Next: bash $APP_DIR/scripts/smoke_test.sh"
