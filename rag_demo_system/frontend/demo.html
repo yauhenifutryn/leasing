@@ -539,7 +539,14 @@
           if (e.data && e.data.type === "bargeIn") {
             console.log(`[BARGE-IN] energy=${e.data.energy.toFixed(4)} baseline=${e.data.baseline.toFixed(4)}`);
             if (ws && ws.readyState === WebSocket.OPEN) {
+              console.log("[BARGE-IN] sending response.cancel to server");
               ws.send(JSON.stringify({ type: "response.cancel" }));
+              // Also send a second time after a short delay in case the first is missed
+              setTimeout(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: "response.cancel" }));
+                }
+              }, 100);
             }
             stopPlayback();
             // Mute RTC audio if active

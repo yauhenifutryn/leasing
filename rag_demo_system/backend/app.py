@@ -852,6 +852,7 @@ async def voice_ws(websocket: WebSocket) -> None:
 
         async def _barge_in_listener() -> None:
             """Read WebSocket events during response for barge-in."""
+            print("[WS-LISTENER] started, waiting for events...", flush=True)
             chunk_count = 0
             speech_chunks = 0
             _BARGE_IN_MIN_CHUNKS = 8  # ~250ms of speech audio
