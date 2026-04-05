@@ -115,6 +115,7 @@ class RTCAudioHandler:
 
         @self.pc.on("track")
         def on_track(track):
+            print(f"[RTC] on_track fired: kind={track.kind}", flush=True)
             if track.kind == "audio":
                 self._audio_task = asyncio.create_task(
                     self._consume_inbound(track)
@@ -122,18 +123,31 @@ class RTCAudioHandler:
 
             @track.on("ended")
             def on_ended():
-                pass
+                print(f"[RTC] track ended: kind={track.kind}", flush=True)
+
+        @self.pc.on("iceconnectionstatechange")
+        async def on_ice_state():
+            print(f"[RTC] ICE state: {self.pc.iceConnectionState}", flush=True)
+
+        @self.pc.on("connectionstatechange")
+        async def on_conn_state():
+            print(f"[RTC] connection state: {self.pc.connectionState}", flush=True)
 
     async def _consume_inbound(self, track) -> None:
         """Read inbound audio frames, resample, and forward to the callback."""
+        print("[RTC] _consume_inbound started, waiting for frames...", flush=True)
+        frame_count = 0
         try:
             while True:
                 frame = await track.recv()
+                frame_count += 1
+                if frame_count <= 3 or frame_count % 500 == 0:
+                    print(f"[RTC] frame {frame_count}: {frame.samples}s @ {frame.sample_rate}Hz {frame.layout.name}", flush=True)
                 pcm16 = resample_frame(frame, self._sample_rate)
                 if pcm16:
                     await self._on_audio(pcm16)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[RTC] _consume_inbound error after {frame_count} frames: {exc}", flush=True)
 
     async def handle_offer(self, sdp: str) -> str:
         """Accept a WebRTC offer SDP, return the answer SDP."""
