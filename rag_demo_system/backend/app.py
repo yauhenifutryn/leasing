@@ -1267,6 +1267,9 @@ async def voice_ws(websocket: WebSocket) -> None:
             # Barge-in: user speaking while assistant responds
             if vad.is_speaking and session.assistant_speaking and not session.interrupted:
                 session.interrupted = True
+                # Clear queued TTS so playback stops immediately
+                if rtc_handler is not None:
+                    rtc_handler.tts_track.clear()
                 print("[BARGE-IN-RTC] speech during response", flush=True)
                 try:
                     await websocket.send_json({
@@ -1365,6 +1368,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                     # Barge-in: user speaking while assistant responds
                     if vad.is_speaking and session.assistant_speaking and not session.interrupted:
                         session.interrupted = True
+                        if rtc_handler is not None:
+                            rtc_handler.tts_track.clear()
                         print("[BARGE-IN-RTC] speech during response", flush=True)
                         try:
                             await websocket.send_json({

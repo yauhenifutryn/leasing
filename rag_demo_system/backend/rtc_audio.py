@@ -84,6 +84,15 @@ class TTSAudioTrack(AudioStreamTrack):
             offset += self._bytes_per_frame
         self._remainder = data[offset:]
 
+    def clear(self) -> None:
+        """Drop all queued audio (used on barge-in interrupt)."""
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self._remainder = b""
+
     def flush(self) -> None:
         """Flush any remaining partial frame (zero-padded) into the queue."""
         if self._remainder:
