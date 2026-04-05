@@ -451,9 +451,16 @@
         }
       }
       if (evt.type === "response.done") {
-        console.log("[ASSISTANT] speaking done, notifying worklet");
-        assistantSpeaking = false;
-        if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: false });
+        // Don't clear assistantSpeaking immediately. TTS audio is queued in
+        // the RTC track and still playing. Estimate playback from text length.
+        const responseText = $("#currentResponse").textContent || "";
+        const estimatedPlayMs = Math.max(2000, responseText.length * 60);
+        console.log(`[ASSISTANT] response.done, keeping flag for ${estimatedPlayMs}ms`);
+        setTimeout(() => {
+          assistantSpeaking = false;
+          if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: false });
+          console.log("[ASSISTANT] playback estimated done, cleared flag");
+        }, estimatedPlayMs);
         const vt = evt.voice_timings || {};
         const totalMs = (t0 > 0) ? (vt.total_ms || (Date.now() - t0)) : 0;
         const text = $("#currentResponse").textContent.trim();
