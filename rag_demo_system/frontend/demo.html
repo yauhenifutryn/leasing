@@ -215,9 +215,6 @@
           <button class="btn btn-download" id="btnDownloadStream" title="Скачать транскрипт">&#8681;</button>
         </div>
       </div>
-
-      <!-- RTC audio playback (streaming mode only, hidden) -->
-      <audio id="rtcAudio" autoplay style="display:none"></audio>
     </div>
 
     <script>
@@ -236,8 +233,15 @@
     let currentMode = null; // 'ptt' or 'stream'
     let continuousStreaming = false;
     let micMuted = true;
-    let rtcPc = null;
-    let rtcStream = null;
+
+    // --- Loopback PeerConnection for echo cancellation ---
+    // Routes TTS audio through a local RTCPeerConnection so Chrome's AEC
+    // gets a precise far-end reference and can cancel speaker echo from mic.
+    let loopbackSender = null;
+    let loopbackReceiver = null;
+    let loopbackStream = null;
+    let loopbackAudioEl = null;
+    let loopbackReady = false;
 
     const $ = (s) => document.querySelector(s);
 
@@ -291,16 +295,15 @@
         // Switch mode on existing connection
         if (mode === "stream") {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
+          continuousStreaming = true;
           micMuted = false;
           $("#btnMute").textContent = "Выключить микрофон";
           $("#btnMute").classList.remove("muted");
-          $("#streamStatus").textContent = "Подключение WebRTC...";
-          $("#streamStatus").className = "stream-status idle";
-          startRTC();
+          $("#streamStatus").textContent = "Слушаю...";
+          $("#streamStatus").className = "stream-status listening";
         } else {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: false }));
           continuousStreaming = false;
-          stopRTC();
         }
       }
     }
@@ -321,69 +324,58 @@
       }
     }
 
-    // ---------- WebRTC for streaming mode ----------
-    async function startRTC() {
-      if (rtcPc) return;
+    // ---------- Loopback PeerConnection setup ----------
+    async function setupLoopback() {
+      // Two local PeerConnections connected to each other.
+      // TTS audio goes into sender -> receiver plays it.
+      // Chrome AEC sees the PeerConnection output as far-end reference.
+      loopbackSender = new RTCPeerConnection();
+      loopbackReceiver = new RTCPeerConnection();
+      loopbackStream = new MediaStream();
 
-      rtcPc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-      });
-
-      rtcStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+      loopbackSender.onicecandidate = (e) => {
+        if (e.candidate) loopbackReceiver.addIceCandidate(e.candidate);
+      };
+      loopbackReceiver.onicecandidate = (e) => {
+        if (e.candidate) loopbackSender.addIceCandidate(e.candidate);
+      };
+      loopbackReceiver.ontrack = (e) => {
+        e.streams[0].getTracks().forEach(t => loopbackStream.addTrack(t));
+        // Play through a hidden <audio> element (Chrome AEC references this)
+        if (!loopbackAudioEl) {
+          loopbackAudioEl = document.createElement("audio");
+          loopbackAudioEl.autoplay = true;
+          loopbackAudioEl.style.display = "none";
+          document.body.appendChild(loopbackAudioEl);
         }
-      });
-      rtcStream.getTracks().forEach(t => rtcPc.addTrack(t, rtcStream));
-
-      rtcPc.ontrack = (e) => {
-        const audioEl = $("#rtcAudio");
-        audioEl.srcObject = e.streams[0];
-        audioEl.play().catch(() => {});
+        loopbackAudioEl.srcObject = loopbackStream;
+        loopbackAudioEl.play().catch(() => {});
       };
 
-      rtcPc.onicecandidate = (e) => {
-        if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: "rtc.ice",
-            candidate: e.candidate.candidate,
-            sdpMid: e.candidate.sdpMid,
-            sdpMLineIndex: e.candidate.sdpMLineIndex,
-          }));
-        }
-      };
+      // Create a silent audio track to establish the connection.
+      // playPcm will feed real TTS audio into this context.
+      const silentCtx = new AudioContext();
+      const osc = silentCtx.createOscillator();
+      const dest = silentCtx.createMediaStreamDestination();
+      osc.connect(dest);
+      osc.start();
+      const track = dest.stream.getAudioTracks()[0];
+      loopbackSender.addTrack(track, dest.stream);
 
-      rtcPc.onconnectionstatechange = () => {
-        if (rtcPc && rtcPc.connectionState === "connected") {
-          setStatus("WebRTC подключен", "good");
-          continuousStreaming = false;
-          $("#streamStatus").textContent = "Слушаю... (WebRTC)";
-          $("#streamStatus").className = "stream-status listening";
-        } else if (rtcPc && rtcPc.connectionState === "failed") {
-          setStatus("WebRTC ошибка", "warn");
-          stopRTC();
-          continuousStreaming = true;
-        }
-      };
+      const offer = await loopbackSender.createOffer();
+      await loopbackSender.setLocalDescription(offer);
+      await loopbackReceiver.setRemoteDescription(offer);
+      const answer = await loopbackReceiver.createAnswer();
+      await loopbackReceiver.setLocalDescription(answer);
+      await loopbackSender.setRemoteDescription(answer);
 
-      const offer = await rtcPc.createOffer();
-      await rtcPc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: "rtc.offer", sdp: offer.sdp }));
-    }
+      // Replace the silent track with TTS audio when playPcm is called.
+      // Store the sender so we can replace the track later.
+      loopbackReady = true;
 
-    function stopRTC() {
-      if (rtcPc) {
-        rtcPc.close();
-        rtcPc = null;
-      }
-      if (rtcStream) {
-        rtcStream.getTracks().forEach(t => t.stop());
-        rtcStream = null;
-      }
-      const audioEl = $("#rtcAudio");
-      if (audioEl) audioEl.srcObject = null;
+      // Stop the oscillator (we only needed it to establish the connection)
+      osc.stop();
+      silentCtx.close();
     }
 
     // ---------- Audio ----------
@@ -409,7 +401,23 @@
       for (let i = 0; i < int16.length; i++) channel[i] = int16[i] / 0x8000;
       const src = playCtx.createBufferSource();
       src.buffer = buffer;
-      src.connect(playCtx.destination);
+
+      if (loopbackReady && currentMode === "stream") {
+        // Streaming mode: route through loopback PeerConnection for AEC
+        const dest = playCtx.createMediaStreamDestination();
+        src.connect(dest);
+        // Replace the loopback sender's track with this audio
+        const senders = loopbackSender.getSenders();
+        if (senders.length > 0) {
+          senders[0].replaceTrack(dest.stream.getAudioTracks()[0]);
+        }
+        // Also play locally (the loopback output handles AEC reference)
+        src.connect(playCtx.destination);
+      } else {
+        // PTT mode: play directly (no AEC needed)
+        src.connect(playCtx.destination);
+      }
+
       src.start(nextPlayTime);
       nextPlayTime += buffer.duration;
     }
@@ -464,7 +472,7 @@
         // In streaming mode, show listening status after response
         if (currentMode === "stream" && !micMuted) {
           setTimeout(() => {
-            $("#streamStatus").textContent = rtcPc ? "Слушаю... (WebRTC)" : "Слушаю...";
+            $("#streamStatus").textContent = "Слушаю...";
             $("#streamStatus").className = "stream-status listening";
           }, 500);
         }
@@ -479,17 +487,6 @@
         stopPlayback();
         setStatus("Слушаю...", "warn");
       }
-      if (evt.type === "rtc.answer") {
-        if (rtcPc) {
-          rtcPc.setRemoteDescription(new RTCSessionDescription({
-            type: "answer",
-            sdp: evt.sdp,
-          }));
-        }
-      }
-      if (evt.type === "rtc.offer_needed") {
-        startRTC();
-      }
     }
 
     // ---------- Connection ----------
@@ -502,7 +499,7 @@
 
         // Init audio
         audioCtx = new AudioContext();
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 24000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 24000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         await audioCtx.audioWorklet.addModule("recorder-worklet.js");
         recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
         source = audioCtx.createMediaStreamSource(stream);
@@ -515,6 +512,14 @@
         };
         source.connect(recorderNode);
 
+        // Set up loopback PeerConnection for echo cancellation
+        try {
+          await setupLoopback();
+          console.log("[AEC] Loopback PeerConnection ready");
+        } catch (e) {
+          console.warn("[AEC] Loopback setup failed, AEC unavailable:", e);
+        }
+
         // Send session init
         const savedSessionId = localStorage.getItem("voice_session_id");
         ws.send(JSON.stringify({ type: "session.init", session_id: savedSessionId || null }));
@@ -522,9 +527,6 @@
         // If starting in streaming mode, enable VAD immediately
         if (startWithVAD) {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
-          // Keep continuousStreaming=true during consent flow (WebSocket audio).
-          // After consent, server sends rtc.offer_needed, client calls startRTC(),
-          // and on RTC connect continuousStreaming is set to false.
           continuousStreaming = true;
           micMuted = false;
           $("#btnMute").textContent = "Выключить микрофон";
