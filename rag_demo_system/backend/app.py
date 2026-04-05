@@ -892,6 +892,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                     elif etype == "response.cancel":
                         session.interrupted = True
                         session.assistant_speaking = False
+                        if rtc_handler is not None:
+                            rtc_handler.tts_track.clear()
                         print(
                             "[BARGE-IN] response.cancel received",
                             flush=True,
