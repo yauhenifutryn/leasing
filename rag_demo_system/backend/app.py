@@ -1236,10 +1236,18 @@ async def voice_ws(websocket: WebSocket) -> None:
             silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
             _rtc_barge_vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
 
+        _barge_cb_count = 0
+
         async def _rtc_on_audio_main(pcm16: bytes) -> None:
             """RTC audio: barge-in detection ONLY. STT uses WebSocket audio."""
+            nonlocal _barge_cb_count
+            _barge_cb_count += 1
             if _rtc_barge_vad is None or not session.assistant_speaking:
-                return  # only active during responses
+                if _barge_cb_count % 500 == 0:
+                    print(f"[RTC-BARGE] cb={_barge_cb_count} skipped (asst={session.assistant_speaking} vad={'ok' if _rtc_barge_vad else 'None'})", flush=True)
+                return
+            if _barge_cb_count % 50 == 0:
+                print(f"[RTC-BARGE] cb={_barge_cb_count} ACTIVE vad={_rtc_barge_vad.is_speaking}", flush=True)
             was_speaking = _rtc_barge_vad.is_speaking
             _rtc_barge_vad.feed(pcm16)
             if not was_speaking and _rtc_barge_vad.is_speaking and not session.interrupted:
