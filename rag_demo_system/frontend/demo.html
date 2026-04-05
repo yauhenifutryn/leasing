@@ -228,6 +228,7 @@
     let audioCtx = null;
     let recorderNode = null;
     let source = null;
+    let micStream = null; // single mic stream shared by WebSocket AudioWorklet + RTC
     let playCtx = null;
     let nextPlayTime = 0;
     let t0 = 0;
@@ -237,7 +238,6 @@
     let continuousStreaming = false;
     let micMuted = true;
     let rtcPc = null;
-    let rtcStream = null;
 
     const $ = (s) => document.querySelector(s);
 
@@ -333,14 +333,11 @@
         ]
       });
 
-      rtcStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        }
-      });
-      rtcStream.getTracks().forEach(t => rtcPc.addTrack(t, rtcStream));
+      // Reuse the single mic stream (already has AEC enabled).
+      // Do NOT create a second getUserMedia; dual mic captures break Chrome AEC.
+      if (micStream) {
+        micStream.getTracks().forEach(t => rtcPc.addTrack(t, micStream));
+      }
 
       rtcPc.ontrack = (e) => {
         const audioEl = $("#rtcAudio");
@@ -382,10 +379,7 @@
         rtcPc.close();
         rtcPc = null;
       }
-      if (rtcStream) {
-        rtcStream.getTracks().forEach(t => t.stop());
-        rtcStream = null;
-      }
+      // Don't stop micStream; it's shared with the AudioWorklet for PTT
       const audioEl = $("#rtcAudio");
       if (audioEl) audioEl.srcObject = null;
     }
@@ -506,10 +500,13 @@
 
         // Init audio
         audioCtx = new AudioContext();
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 24000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+        // Single mic capture with AEC enabled. AEC is a no-op in PTT mode
+        // (nothing playing during recording). In streaming mode, it cancels
+        // TTS echo from the RTC PeerConnection playback.
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         await audioCtx.audioWorklet.addModule("recorder-worklet.js");
         recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
-        source = audioCtx.createMediaStreamSource(stream);
+        source = audioCtx.createMediaStreamSource(micStream);
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
           // Skip WebSocket audio when RTC is handling it
