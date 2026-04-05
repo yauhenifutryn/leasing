@@ -438,6 +438,7 @@
       if (evt.type === "response.output_text.delta") {
         if (!assistantSpeaking) {
           assistantSpeaking = true;
+          console.log("[ASSISTANT] speaking started, notifying worklet");
           if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: true });
         }
         $("#currentResponse").textContent += evt.delta || "";
@@ -450,6 +451,7 @@
         }
       }
       if (evt.type === "response.done") {
+        console.log("[ASSISTANT] speaking done, notifying worklet");
         assistantSpeaking = false;
         if (recorderNode) recorderNode.port.postMessage({ type: "assistantSpeaking", value: false });
         const vt = evt.voice_timings || {};
