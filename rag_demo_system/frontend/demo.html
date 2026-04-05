@@ -242,6 +242,7 @@
     let loopbackStream = null;
     let loopbackAudioEl = null;
     let loopbackReady = false;
+    let ttsDestination = null; // persistent MediaStreamDestination for TTS audio
 
     const $ = (s) => document.querySelector(s);
 
@@ -269,9 +270,15 @@
 
     function stopPlayback() {
       if (playCtx && nextPlayTime > playCtx.currentTime) {
-        playCtx.close();
-        playCtx = null;
-        nextPlayTime = 0;
+        if (loopbackReady) {
+          // Don't close playCtx (loopback ttsDestination depends on it).
+          // Just reset timing so scheduled buffers won't play.
+          nextPlayTime = 0;
+        } else {
+          playCtx.close();
+          playCtx = null;
+          nextPlayTime = 0;
+        }
       }
     }
 
@@ -327,8 +334,18 @@
     // ---------- Loopback PeerConnection setup ----------
     async function setupLoopback() {
       // Two local PeerConnections connected to each other.
-      // TTS audio goes into sender -> receiver plays it.
+      // All TTS audio connects to a persistent MediaStreamDestination.
+      // That stream feeds the loopback sender -> receiver plays it.
       // Chrome AEC sees the PeerConnection output as far-end reference.
+
+      // Create the persistent playback context and destination FIRST.
+      // playPcm will reuse this context and connect sources to ttsDestination.
+      if (!playCtx) {
+        playCtx = new AudioContext();
+        nextPlayTime = playCtx.currentTime + 0.05;
+      }
+      ttsDestination = playCtx.createMediaStreamDestination();
+
       loopbackSender = new RTCPeerConnection();
       loopbackReceiver = new RTCPeerConnection();
       loopbackStream = new MediaStream();
@@ -341,7 +358,6 @@
       };
       loopbackReceiver.ontrack = (e) => {
         e.streams[0].getTracks().forEach(t => loopbackStream.addTrack(t));
-        // Play through a hidden <audio> element (Chrome AEC references this)
         if (!loopbackAudioEl) {
           loopbackAudioEl = document.createElement("audio");
           loopbackAudioEl.autoplay = true;
@@ -352,15 +368,8 @@
         loopbackAudioEl.play().catch(() => {});
       };
 
-      // Create a silent audio track to establish the connection.
-      // playPcm will feed real TTS audio into this context.
-      const silentCtx = new AudioContext();
-      const osc = silentCtx.createOscillator();
-      const dest = silentCtx.createMediaStreamDestination();
-      osc.connect(dest);
-      osc.start();
-      const track = dest.stream.getAudioTracks()[0];
-      loopbackSender.addTrack(track, dest.stream);
+      // Feed the persistent TTS destination stream into the loopback
+      loopbackSender.addTrack(ttsDestination.stream.getAudioTracks()[0], ttsDestination.stream);
 
       const offer = await loopbackSender.createOffer();
       await loopbackSender.setLocalDescription(offer);
@@ -369,13 +378,7 @@
       await loopbackReceiver.setLocalDescription(answer);
       await loopbackSender.setRemoteDescription(answer);
 
-      // Replace the silent track with TTS audio when playPcm is called.
-      // Store the sender so we can replace the track later.
       loopbackReady = true;
-
-      // Stop the oscillator (we only needed it to establish the connection)
-      osc.stop();
-      silentCtx.close();
     }
 
     // ---------- Audio ----------
@@ -402,18 +405,13 @@
       const src = playCtx.createBufferSource();
       src.buffer = buffer;
 
-      if (loopbackReady && currentMode === "stream") {
-        // Streaming mode: route through loopback PeerConnection for AEC.
-        // Audio plays ONLY through the loopback <audio> element (not direct).
-        // This gives Chrome AEC the exact reference signal.
-        const dest = playCtx.createMediaStreamDestination();
-        src.connect(dest);
-        const senders = loopbackSender.getSenders();
-        if (senders.length > 0) {
-          senders[0].replaceTrack(dest.stream.getAudioTracks()[0]);
-        }
+      if (loopbackReady && ttsDestination && currentMode === "stream") {
+        // Streaming mode: route through persistent ttsDestination.
+        // Audio plays through the loopback <audio> element.
+        // Chrome AEC uses the PeerConnection output as far-end reference.
+        src.connect(ttsDestination);
       } else {
-        // PTT mode: play directly (no loopback needed)
+        // PTT mode or loopback not ready: play directly
         src.connect(playCtx.destination);
       }
 
