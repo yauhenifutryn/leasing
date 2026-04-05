@@ -1278,12 +1278,15 @@ async def voice_ws(websocket: WebSocket) -> None:
                         except (RuntimeError, WebSocketDisconnect):
                             pass
                     # Speech ended: fire-and-forget response (don't block audio processing)
+                    _MIN_SPEECH_BYTES = 19200  # 0.4s at 24kHz mono s16; below this Whisper hallucinates
                     if speech_audio is not None:
-                        if session.assistant_speaking:
-                            print(f"[VAD-RTC] speech_end IGNORED (assistant still speaking)", flush=True)
+                        if len(speech_audio) < _MIN_SPEECH_BYTES:
+                            print(f"[VAD-RTC] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
+                        elif session.assistant_speaking:
+                            print(f"[VAD-RTC] speech_end IGNORED (assistant speaking)", flush=True)
                         else:
                             vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
-                            print(f"[VAD-RTC] dispatching _process_voice_utterance", flush=True)
+                            print(f"[VAD-RTC] dispatching ({len(speech_audio)} bytes)", flush=True)
                             asyncio.create_task(_process_voice_utterance(vad_audio_b64))
 
                 rtc_handler = RTCAudioHandler(
