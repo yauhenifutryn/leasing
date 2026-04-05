@@ -11,9 +11,13 @@ import fractions
 import time
 from typing import Awaitable, Callable
 
-from aiortc import AudioStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import AudioStreamTrack, RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame, AudioResampler
+
+_RTC_CONFIG = RTCConfiguration(
+    iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+)
 
 AUDIO_PTIME = 0.020  # 20ms per RTP frame
 
@@ -104,7 +108,7 @@ class RTCAudioHandler:
     ) -> None:
         self._on_audio = on_audio
         self._sample_rate = sample_rate
-        self.pc = RTCPeerConnection()
+        self.pc = RTCPeerConnection(configuration=_RTC_CONFIG)
         self.tts_track = TTSAudioTrack(sample_rate=sample_rate)
         self.pc.addTrack(self.tts_track)
         self._audio_task: asyncio.Task | None = None
