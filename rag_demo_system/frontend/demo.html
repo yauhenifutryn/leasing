@@ -360,7 +360,8 @@
       rtcPc.onconnectionstatechange = () => {
         if (rtcPc && rtcPc.connectionState === "connected") {
           setStatus("WebRTC подключен", "good");
-          continuousStreaming = false;
+          // Hybrid: keep continuousStreaming=true for WebSocket STT.
+          // RTC handles barge-in in parallel.
           $("#streamStatus").textContent = "Слушаю... (WebRTC)";
           $("#streamStatus").className = "stream-status listening";
         } else if (rtcPc && rtcPc.connectionState === "failed") {
