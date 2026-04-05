@@ -1117,7 +1117,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                         print("[VAD-RTC-INTRO] speech_start", flush=True)
                     if was_speaking and not vad.is_speaking and speech_audio is not None:
                         print(f"[VAD-RTC-INTRO] speech_end ({len(speech_audio)} bytes)", flush=True)
-                    if speech_audio is not None and len(speech_audio) >= 28800:
+                    if speech_audio is not None and len(speech_audio) >= 12000:
                         vad_b64 = _b64mod.b64encode(speech_audio).decode()
                         print(f"[VAD-RTC-INTRO] dispatching to speech queue ({len(speech_audio)} bytes)", flush=True)
                         await _transcribe_and_enqueue(vad_b64)
@@ -1283,7 +1283,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                 except (RuntimeError, WebSocketDisconnect):
                     pass
             # Speech ended: dispatch response
-            _MIN_SPEECH_BYTES = 28800
+            _MIN_SPEECH_BYTES = 12000
             if speech_audio is not None:
                 if len(speech_audio) < _MIN_SPEECH_BYTES:
                     print(f"[VAD-RTC] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
@@ -1383,7 +1383,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                         except (RuntimeError, WebSocketDisconnect):
                             pass
                     # Speech ended: fire-and-forget response (don't block audio processing)
-                    _MIN_SPEECH_BYTES = 28800  # 0.6s at 24kHz; VAD adds 0.5s silence tail, filters Opus noise bursts
+                    _MIN_SPEECH_BYTES = 12000  # 0.6s at 24kHz; VAD adds 0.5s silence tail, filters Opus noise bursts
                     if speech_audio is not None:
                         if len(speech_audio) < _MIN_SPEECH_BYTES:
                             print(f"[VAD-RTC] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
