@@ -1024,13 +1024,18 @@ async def voice_ws(websocket: WebSocket) -> None:
     async def _wait_for_speech() -> str:
         nonlocal vad_enabled, vad, session_id, rtc_handler
         while True:
-            # Check if VAD already pushed something
+            # Check if RTC VAD already pushed something
             try:
                 return _speech_queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
 
-            event = await websocket.receive_json()
+            # When RTC is active, WebSocket events are sparse (no audio).
+            # Use a timeout so we periodically check the speech queue.
+            try:
+                event = await asyncio.wait_for(websocket.receive_json(), timeout=0.2)
+            except asyncio.TimeoutError:
+                continue
             event_type = event.get("type")
             if event_type != "input_audio_buffer.append":
                 print(f"[wait_speech] event={event_type} vad={vad_enabled} chunks={len(audio_chunks)}", flush=True)

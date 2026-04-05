@@ -509,9 +509,7 @@
 
         // Init audio
         audioCtx = new AudioContext();
-        // DEBUG: AEC disabled to test if audio reaches server correctly.
-        // If VAD detects speech without AEC, then AEC is the problem.
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         await audioCtx.audioWorklet.addModule("recorder-worklet.js");
         recorderNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
         source = audioCtx.createMediaStreamSource(micStream);
