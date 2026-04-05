@@ -1227,9 +1227,14 @@ async def voice_ws(websocket: WebSocket) -> None:
     # intro version (feeds _speech_queue) to the main loop version
     # (calls _process_voice_utterance directly with barge-in detection).
     if rtc_handler is not None:
+        _main_cb_call_count = 0
+
         async def _rtc_on_audio_main(pcm16: bytes) -> None:
             """RTC audio during main conversation loop."""
-            nonlocal vad, vad_enabled
+            nonlocal vad, vad_enabled, _main_cb_call_count
+            _main_cb_call_count += 1
+            if _main_cb_call_count <= 3 or _main_cb_call_count % 500 == 0:
+                print(f"[RTC-MAIN] cb={_main_cb_call_count} vad_en={vad_enabled} vad={'ok' if vad else 'None'} len={len(pcm16)}", flush=True)
             if not vad_enabled or vad is None:
                 return
             was_speaking = vad.is_speaking
