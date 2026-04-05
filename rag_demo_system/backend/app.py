@@ -1197,6 +1197,13 @@ async def voice_ws(websocket: WebSocket) -> None:
     # From here, all messages are normal conversation.
     # ------------------------------------------------------------------
 
+    # If streaming mode was requested, signal client to establish RTC
+    if vad_enabled:
+        await websocket.send_json({
+            "type": "rtc.offer_needed",
+            "session_id": session_id,
+        })
+
     try:
         while True:
             event = await websocket.receive_json()

@@ -215,6 +215,9 @@
           <button class="btn btn-download" id="btnDownloadStream" title="Скачать транскрипт">&#8681;</button>
         </div>
       </div>
+
+      <!-- RTC audio playback (streaming mode only, hidden) -->
+      <audio id="rtcAudio" autoplay style="display:none"></audio>
     </div>
 
     <script>
@@ -233,6 +236,8 @@
     let currentMode = null; // 'ptt' or 'stream'
     let continuousStreaming = false;
     let micMuted = true;
+    let rtcPc = null;
+    let rtcStream = null;
 
     const $ = (s) => document.querySelector(s);
 
@@ -286,15 +291,16 @@
         // Switch mode on existing connection
         if (mode === "stream") {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
-          continuousStreaming = true;
           micMuted = false;
           $("#btnMute").textContent = "Выключить микрофон";
           $("#btnMute").classList.remove("muted");
-          $("#streamStatus").textContent = "Слушаю...";
-          $("#streamStatus").className = "stream-status listening";
+          $("#streamStatus").textContent = "Подключение WebRTC...";
+          $("#streamStatus").className = "stream-status idle";
+          startRTC();
         } else {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: false }));
           continuousStreaming = false;
+          stopRTC();
         }
       }
     }
@@ -313,6 +319,71 @@
         $("#streamStatus").textContent = "Слушаю...";
         $("#streamStatus").className = "stream-status listening";
       }
+    }
+
+    // ---------- WebRTC for streaming mode ----------
+    async function startRTC() {
+      if (rtcPc) return;
+
+      rtcPc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      });
+
+      rtcStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
+      rtcStream.getTracks().forEach(t => rtcPc.addTrack(t, rtcStream));
+
+      rtcPc.ontrack = (e) => {
+        const audioEl = $("#rtcAudio");
+        audioEl.srcObject = e.streams[0];
+        audioEl.play().catch(() => {});
+      };
+
+      rtcPc.onicecandidate = (e) => {
+        if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: "rtc.ice",
+            candidate: e.candidate.candidate,
+            sdpMid: e.candidate.sdpMid,
+            sdpMLineIndex: e.candidate.sdpMLineIndex,
+          }));
+        }
+      };
+
+      rtcPc.onconnectionstatechange = () => {
+        if (rtcPc && rtcPc.connectionState === "connected") {
+          setStatus("WebRTC подключен", "good");
+          continuousStreaming = false;
+          $("#streamStatus").textContent = "Слушаю... (WebRTC)";
+          $("#streamStatus").className = "stream-status listening";
+        } else if (rtcPc && rtcPc.connectionState === "failed") {
+          setStatus("WebRTC ошибка", "warn");
+          stopRTC();
+          continuousStreaming = true;
+        }
+      };
+
+      const offer = await rtcPc.createOffer();
+      await rtcPc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: "rtc.offer", sdp: offer.sdp }));
+    }
+
+    function stopRTC() {
+      if (rtcPc) {
+        rtcPc.close();
+        rtcPc = null;
+      }
+      if (rtcStream) {
+        rtcStream.getTracks().forEach(t => t.stop());
+        rtcStream = null;
+      }
+      const audioEl = $("#rtcAudio");
+      if (audioEl) audioEl.srcObject = null;
     }
 
     // ---------- Audio ----------
@@ -393,7 +464,7 @@
         // In streaming mode, show listening status after response
         if (currentMode === "stream" && !micMuted) {
           setTimeout(() => {
-            $("#streamStatus").textContent = "Слушаю...";
+            $("#streamStatus").textContent = rtcPc ? "Слушаю... (WebRTC)" : "Слушаю...";
             $("#streamStatus").className = "stream-status listening";
           }, 500);
         }
@@ -407,6 +478,17 @@
       if (evt.type === "interrupt") {
         stopPlayback();
         setStatus("Слушаю...", "warn");
+      }
+      if (evt.type === "rtc.answer") {
+        if (rtcPc) {
+          rtcPc.setRemoteDescription(new RTCSessionDescription({
+            type: "answer",
+            sdp: evt.sdp,
+          }));
+        }
+      }
+      if (evt.type === "rtc.offer_needed") {
+        startRTC();
       }
     }
 
@@ -440,6 +522,9 @@
         // If starting in streaming mode, enable VAD immediately
         if (startWithVAD) {
           ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
+          // Keep continuousStreaming=true during consent flow (WebSocket audio).
+          // After consent, server sends rtc.offer_needed, client calls startRTC(),
+          // and on RTC connect continuousStreaming is set to false.
           continuousStreaming = true;
           micMuted = false;
           $("#btnMute").textContent = "Выключить микрофон";
