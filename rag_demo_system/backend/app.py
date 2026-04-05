@@ -1079,6 +1079,37 @@ async def voice_ws(websocket: WebSocket) -> None:
                     continue
                 audio_b64 = _b64mod.b64encode(raw_audio).decode()
                 await _transcribe_and_enqueue(audio_b64)
+            elif event_type == "rtc.offer":
+                # Handle RTC offer during intro (RTC before intro pattern)
+                if rtc_handler is not None:
+                    await rtc_handler.close()
+
+                async def _rtc_on_audio_intro(pcm16: bytes) -> None:
+                    """RTC audio during intro -> VAD -> speech queue."""
+                    nonlocal vad, vad_enabled
+                    if not vad_enabled or vad is None:
+                        return
+                    speech_audio = vad.feed(pcm16)
+                    if speech_audio is not None and len(speech_audio) >= 48000:
+                        vad_b64 = _b64mod.b64encode(speech_audio).decode()
+                        await _transcribe_and_enqueue(vad_b64)
+
+                rtc_handler = RTCAudioHandler(
+                    on_audio=_rtc_on_audio_intro,
+                    sample_rate=24000,
+                )
+                sdp_offer = event.get("sdp", "")
+                try:
+                    sdp_answer = await rtc_handler.handle_offer(sdp_offer)
+                    await websocket.send_json({"type": "rtc.answer", "sdp": sdp_answer})
+                    print("[RTC] peer connection established (intro phase)", flush=True)
+                except Exception as exc:
+                    print(f"[RTC] offer handling failed: {exc}", flush=True)
+                    rtc_handler = None
+            elif event_type == "rtc.ice":
+                pass  # ICE candidates bundled in SDP
+            elif event_type == "response.cancel":
+                continue  # ignore during intro
 
             # Check queue after processing event
             try:
@@ -1187,12 +1218,8 @@ async def voice_ws(websocket: WebSocket) -> None:
     # From here, all messages are normal conversation.
     # ------------------------------------------------------------------
 
-    # If streaming mode was requested, signal client to establish RTC
-    if vad_enabled:
-        await websocket.send_json({
-            "type": "rtc.offer_needed",
-            "session_id": session_id,
-        })
+    # RTC is now established before the intro (client sends rtc.offer
+    # immediately after WebSocket opens). No rtc.offer_needed signal needed.
 
     try:
         while True:
@@ -1278,7 +1305,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                         except (RuntimeError, WebSocketDisconnect):
                             pass
                     # Speech ended: fire-and-forget response (don't block audio processing)
-                    _MIN_SPEECH_BYTES = 19200  # 0.4s at 24kHz mono s16; below this Whisper hallucinates
+                    _MIN_SPEECH_BYTES = 48000  # 1.0s at 24kHz; VAD adds 0.5s silence tail, so actual speech >= 0.5s
                     if speech_audio is not None:
                         if len(speech_audio) < _MIN_SPEECH_BYTES:
                             print(f"[VAD-RTC] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)

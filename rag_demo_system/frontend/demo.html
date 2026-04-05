@@ -530,20 +530,23 @@
         };
         source.connect(recorderNode);
 
-        // Send session init
-        const savedSessionId = localStorage.getItem("voice_session_id");
-        ws.send(JSON.stringify({ type: "session.init", session_id: savedSessionId || null }));
-
-        // If starting in streaming mode, enable VAD immediately
+        // If streaming mode: establish RTC FIRST (before intro), so AEC
+        // covers the entire session including the greeting.
         if (startWithVAD) {
-          ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
-          // Keep continuousStreaming=true during consent flow (WebSocket audio).
-          // After consent, server sends rtc.offer_needed, client calls startRTC(),
-          // and on RTC connect continuousStreaming is set to false.
-          continuousStreaming = true;
+          await startRTC();
           micMuted = false;
           $("#btnMute").textContent = "Выключить микрофон";
           $("#btnMute").classList.remove("muted");
+        }
+
+        // Send session init (after RTC if streaming, so server can use RTC immediately)
+        const savedSessionId = localStorage.getItem("voice_session_id");
+        ws.send(JSON.stringify({ type: "session.init", session_id: savedSessionId || null }));
+
+        if (startWithVAD) {
+          ws.send(JSON.stringify({ type: "session.update", vad_mode: true }));
+          // Don't set continuousStreaming; RTC handles audio.
+          // Fallback sets it if RTC fails.
         }
       };
       ws.onmessage = (msg) => handleEvent(JSON.parse(msg.data));
