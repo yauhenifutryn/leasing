@@ -233,6 +233,8 @@
     let currentMode = null; // 'ptt' or 'stream'
     let continuousStreaming = false;
     let micMuted = true;
+    let playbackEndAt = 0;
+    const ECHO_GATE_MS = 600; // suppress mic after TTS playback to avoid echo
 
     const $ = (s) => document.querySelector(s);
 
@@ -426,7 +428,13 @@
         source = audioCtx.createMediaStreamSource(stream);
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
-          if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
+          // Echo gate: don't send mic audio while TTS is playing or shortly after
+          const isPlaying = playCtx && nextPlayTime > playCtx.currentTime;
+          if (isPlaying) playbackEndAt = Date.now();
+          const echoGate = isPlaying || (Date.now() - playbackEndAt) < ECHO_GATE_MS;
+          // PTT: always send (user pressed button). Streaming: only when echo gate is open.
+          const canSend = talking || (continuousStreaming && !echoGate);
+          if (canSend && ws && ws.readyState === WebSocket.OPEN) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
             ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
           }
