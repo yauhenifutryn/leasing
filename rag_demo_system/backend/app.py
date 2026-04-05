@@ -1278,9 +1278,13 @@ async def voice_ws(websocket: WebSocket) -> None:
                         except (RuntimeError, WebSocketDisconnect):
                             pass
                     # Speech ended: fire-and-forget response (don't block audio processing)
-                    if speech_audio is not None and not session.assistant_speaking:
-                        vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
-                        asyncio.create_task(_process_voice_utterance(vad_audio_b64))
+                    if speech_audio is not None:
+                        if session.assistant_speaking:
+                            print(f"[VAD-RTC] speech_end IGNORED (assistant still speaking)", flush=True)
+                        else:
+                            vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
+                            print(f"[VAD-RTC] dispatching _process_voice_utterance", flush=True)
+                            asyncio.create_task(_process_voice_utterance(vad_audio_b64))
 
                 rtc_handler = RTCAudioHandler(
                     on_audio=_rtc_on_audio,
