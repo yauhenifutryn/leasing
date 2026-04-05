@@ -403,18 +403,17 @@
       src.buffer = buffer;
 
       if (loopbackReady && currentMode === "stream") {
-        // Streaming mode: route through loopback PeerConnection for AEC
+        // Streaming mode: route through loopback PeerConnection for AEC.
+        // Audio plays ONLY through the loopback <audio> element (not direct).
+        // This gives Chrome AEC the exact reference signal.
         const dest = playCtx.createMediaStreamDestination();
         src.connect(dest);
-        // Replace the loopback sender's track with this audio
         const senders = loopbackSender.getSenders();
         if (senders.length > 0) {
           senders[0].replaceTrack(dest.stream.getAudioTracks()[0]);
         }
-        // Also play locally (the loopback output handles AEC reference)
-        src.connect(playCtx.destination);
       } else {
-        // PTT mode: play directly (no AEC needed)
+        // PTT mode: play directly (no loopback needed)
         src.connect(playCtx.destination);
       }
 
