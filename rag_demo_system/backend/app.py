@@ -1285,6 +1285,15 @@ async def voice_ws(websocket: WebSocket) -> None:
                         elif session.assistant_speaking:
                             print(f"[VAD-RTC] speech_end IGNORED (assistant speaking)", flush=True)
                         else:
+                            # DEBUG: save RTC audio to file for comparison with PTT
+                            import wave as _wave
+                            _dbg_path = f"/tmp/rtc_speech_{int(time.time())}.wav"
+                            with _wave.open(_dbg_path, "wb") as _wf:
+                                _wf.setnchannels(1)
+                                _wf.setsampwidth(2)
+                                _wf.setframerate(24000)
+                                _wf.writeframes(speech_audio)
+                            print(f"[VAD-RTC] saved debug audio: {_dbg_path} ({len(speech_audio)} bytes)", flush=True)
                             vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
                             print(f"[VAD-RTC] dispatching ({len(speech_audio)} bytes)", flush=True)
                             asyncio.create_task(_process_voice_utterance(vad_audio_b64))
