@@ -89,9 +89,11 @@ class SileroVAD:
         if len(self._vad_buffer) < self._min_vad_bytes:
             return None
 
-        # Process accumulated VAD buffer
-        vad_bytes = self._vad_buffer
-        self._vad_buffer = b""
+        # Process accumulated VAD buffer. Take exactly _min_vad_bytes;
+        # leave any remainder for the next call. This ensures the resampled
+        # output is always exactly 512 samples (what Silero VAD expects).
+        vad_bytes = self._vad_buffer[:self._min_vad_bytes]
+        self._vad_buffer = self._vad_buffer[self._min_vad_bytes:]
 
         n_samples = len(vad_bytes) // 2
         samples = struct.unpack(f"<{n_samples}h", vad_bytes)
@@ -99,10 +101,8 @@ class SileroVAD:
 
         # Resample to 16kHz for VAD model if input is different rate
         if self._resample:
-            ratio = self._VAD_RATE / self.sample_rate
-            target_len = max(512, int(len(tensor) * ratio))
             vad_tensor = torch.nn.functional.interpolate(
-                tensor.unsqueeze(0).unsqueeze(0), size=target_len, mode="linear", align_corners=False
+                tensor.unsqueeze(0).unsqueeze(0), size=512, mode="linear", align_corners=False
             ).squeeze()
         else:
             vad_tensor = tensor

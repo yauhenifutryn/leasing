@@ -512,6 +512,11 @@
         source = audioCtx.createMediaStreamSource(stream);
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
+          // Skip WebSocket audio when RTC is handling it
+          if (rtcPc && rtcPc.connectionState === "connected") return;
+          // Pre-RTC echo gate: don't send audio while TTS is playing
+          // (prevents assistant's voice from being transcribed as user input)
+          if (!talking && playCtx && nextPlayTime > playCtx.currentTime) return;
           if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
             ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
