@@ -834,17 +834,10 @@ async def voice_ws(websocket: WebSocket) -> None:
                 pass
             return
 
-        if rtc_handler is not None:
-            # RTC mode: barge-in handled by RTC audio callback, no WS listener needed
-            session.assistant_speaking = True
-            session.interrupted = False
-            try:
-                await response_coro
-            except (RuntimeError, WebSocketDisconnect):
-                session.interrupted = True
-            return
-
-        # ---- VAD mode: concurrent barge-in listener ----
+        # ---- VAD/hybrid mode: concurrent barge-in listener ----
+        # In hybrid mode (RTC active), barge-in detection runs in BOTH:
+        # 1. RTC callback (_rtc_on_audio_main) - detects speech via AEC audio
+        # 2. WebSocket listener below - reads audio events for main VAD + STT
         # While the response streams (LLM + TTS), keep reading WebSocket
         # events so incoming audio is fed to VAD.  When VAD detects
         # speech start during assistant playback, set session.interrupted
@@ -1252,26 +1245,22 @@ async def voice_ws(websocket: WebSocket) -> None:
     # intro version (feeds _speech_queue) to the main loop version
     # (calls _process_voice_utterance directly with barge-in detection).
     if rtc_handler is not None:
-        _main_cb_call_count = 0
+        # Separate VAD instance for RTC barge-in detection.
+        # Main loop's VAD handles WebSocket audio for STT.
+        # RTC VAD only detects speech for interruption, never dispatches STT.
+        _rtc_barge_vad: SileroVAD | None = None
+        if _shared_vad is not None:
+            silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+            _rtc_barge_vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
 
         async def _rtc_on_audio_main(pcm16: bytes) -> None:
-            """RTC audio during main conversation loop."""
-            nonlocal vad, vad_enabled, _main_cb_call_count
-            _main_cb_call_count += 1
-            if _main_cb_call_count <= 3 or _main_cb_call_count % 500 == 0:
-                print(f"[RTC-MAIN] cb={_main_cb_call_count} vad_en={vad_enabled} vad={'ok' if vad else 'None'} len={len(pcm16)}", flush=True)
-            if not vad_enabled or vad is None:
-                return
-            was_speaking = vad.is_speaking
-            speech_audio = vad.feed(pcm16)
-            if not was_speaking and vad.is_speaking:
-                print("[VAD-RTC] speech_start", flush=True)
-            if was_speaking and not vad.is_speaking and speech_audio is not None:
-                print(f"[VAD-RTC] speech_end ({len(speech_audio)} bytes)", flush=True)
-            # Barge-in: user speaking while assistant responds
-            if vad.is_speaking and session.assistant_speaking and not session.interrupted:
+            """RTC audio: barge-in detection ONLY. STT uses WebSocket audio."""
+            if _rtc_barge_vad is None or not session.assistant_speaking:
+                return  # only active during responses
+            was_speaking = _rtc_barge_vad.is_speaking
+            _rtc_barge_vad.feed(pcm16)
+            if not was_speaking and _rtc_barge_vad.is_speaking and not session.interrupted:
                 session.interrupted = True
-                # Clear queued TTS so playback stops immediately
                 if rtc_handler is not None:
                     rtc_handler.tts_track.clear()
                 print("[BARGE-IN-RTC] speech during response", flush=True)
@@ -1282,17 +1271,6 @@ async def voice_ws(websocket: WebSocket) -> None:
                     })
                 except (RuntimeError, WebSocketDisconnect):
                     pass
-            # Speech ended: dispatch response
-            _MIN_SPEECH_BYTES = 12000
-            if speech_audio is not None:
-                if len(speech_audio) < _MIN_SPEECH_BYTES:
-                    print(f"[VAD-RTC] speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
-                elif session.assistant_speaking:
-                    print(f"[VAD-RTC] speech_end IGNORED (assistant speaking)", flush=True)
-                else:
-                    vad_audio_b64 = _b64mod.b64encode(speech_audio).decode()
-                    print(f"[VAD-RTC] dispatching ({len(speech_audio)} bytes)", flush=True)
-                    asyncio.create_task(_process_voice_utterance(vad_audio_b64))
 
         rtc_handler._on_audio = _rtc_on_audio_main
         print("[RTC] switched to main conversation callback", flush=True)
@@ -1329,8 +1307,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                     }
                 )
             elif event_type == "input_audio_buffer.append":
-                if rtc_handler is not None:
-                    continue  # audio comes via RTC, skip WebSocket audio
+                # Hybrid: WebSocket audio always processed for STT
+                # (RTC handles barge-in detection in parallel)
                 audio = event.get("audio") or ""
                 if audio:
                     raw = _b64mod.b64decode(audio)

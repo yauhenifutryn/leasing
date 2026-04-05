@@ -515,11 +515,11 @@
         source = audioCtx.createMediaStreamSource(micStream);
         recorderNode.port.onmessage = (e) => {
           const pcm16 = e.data;
-          // Skip WebSocket audio when RTC is handling it
-          if (rtcPc && rtcPc.connectionState === "connected") return;
-          // Pre-RTC echo gate: don't send audio while TTS is playing
-          // (prevents assistant's voice from being transcribed as user input)
-          if (!talking && playCtx && nextPlayTime > playCtx.currentTime) return;
+          // Hybrid: WebSocket audio for STT (always), RTC for barge-in (parallel).
+          // Gate WebSocket audio during TTS playback to prevent echo in STT.
+          // RTC still flows during playback for barge-in detection (AEC handles echo).
+          const isPlaying = playCtx && nextPlayTime > playCtx.currentTime;
+          if (!talking && isPlaying) return; // half-duplex gate during TTS
           if ((talking || continuousStreaming) && ws && ws.readyState === WebSocket.OPEN) {
             const b64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
             ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64 }));
