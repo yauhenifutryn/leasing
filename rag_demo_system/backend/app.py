@@ -1267,7 +1267,7 @@ async def voice_ws(websocket: WebSocket) -> None:
                     if was_speaking and not vad.is_speaking and speech_audio is not None:
                         print(f"[VAD-RTC] speech_end ({len(speech_audio)} bytes)", flush=True)
                     # Barge-in: user speaking while assistant responds
-                    if vad.is_speaking and session.assistant_speaking:
+                    if vad.is_speaking and session.assistant_speaking and not session.interrupted:
                         session.interrupted = True
                         print("[BARGE-IN-RTC] speech during response", flush=True)
                         try:
