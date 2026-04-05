@@ -622,11 +622,15 @@ async def _stream_voice_response(
                 max_tokens=voice_max_tokens,
                 timeout_sec=settings.llm.timeout_sec,
             )
-            for event in stream:
+            # Wrap synchronous HTTP reads in a thread so the event loop
+            # stays free for real-time audio processing (barge-in detection).
+            _sentinel = object()
+            while True:
                 if session.interrupted:
                     break
-                # Yield to event loop so barge-in listener can process audio
-                await asyncio.sleep(0)
+                event = await asyncio.to_thread(next, stream, _sentinel)
+                if event is _sentinel:
+                    break
                 choice = (event.get("choices") or [{}])[0]
                 token = (choice.get("delta") or {}).get("content") or ""
                 if not token:
