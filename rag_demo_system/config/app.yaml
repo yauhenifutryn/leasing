@@ -1,8 +1,8 @@
 app:
   name: "Микро Лизинг · RAG Demo"
   language: "ru"
-  system_prompt_path: "config/system_prompt_ru.txt"
-  kb_markdown_path: "../knowledge_base/kb_faq_ru.md"
+  system_prompt_path: "config/system_prompt_ru_v2.txt"
+  kb_markdown_path: "../knowledge_base/kb_faq_ru_v2.md"
   strict_refusal_text: "К сожалению, в базе знаний нет точной информации по этому вопросу. Давайте уточню или передам специалисту"
   memory_turns: 50
 
