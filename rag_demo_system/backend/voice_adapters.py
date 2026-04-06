@@ -260,6 +260,8 @@ _ABBREV_TTS: dict[str, str] = {
     "ООО": "о о о",
     "ЗАО": "зэ а о",
     "ОАО": "о а о",
+    "США": "сэ шэ а",
+    "ИООО": "и о о о",
 }
 
 # Build regex that matches any abbreviation (longest first to avoid partial matches)

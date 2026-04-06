@@ -1111,12 +1111,16 @@ async def voice_ws(websocket: WebSocket) -> None:
 
     # If no name was found, the first message is likely a question, not a name.
     # Skip the "Очень приятно" greeting and process it as a real question.
+    # If name WAS found but message also contains a question, greet AND answer.
     first_question = None
+    _also_has_question = _has_name_intro and bool(_words_in_input & _QUESTION_TOPICS)
     if client_name == "друг":
         first_question = client_name_raw  # save the original message, answer it directly
         # No greeting -- go straight to answering the question
     else:
         await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
+        if _also_has_question:
+            first_question = client_name_raw  # name + question combo, answer the question too
 
     # Save intro to session transcript so model knows the name
     session.client_name = client_name
