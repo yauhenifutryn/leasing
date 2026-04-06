@@ -537,6 +537,7 @@
         recorderNode.port.onmessage = (e) => {
           // Handle barge-in signal from AudioWorklet energy detection
           if (e.data && e.data.type === "bargeIn") {
+            if (currentMode !== "stream") return; // barge-in only in streaming mode
             console.log(`[BARGE-IN] energy=${e.data.energy.toFixed(4)} baseline=${e.data.baseline.toFixed(4)}`);
             if (ws && ws.readyState === WebSocket.OPEN) {
               console.log("[BARGE-IN] sending response.cancel to server");
