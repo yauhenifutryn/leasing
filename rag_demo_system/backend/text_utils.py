@@ -14,10 +14,8 @@ _BANNED_PHRASES = [
 ]
 # Regex patterns for phrases the LLM varies creatively
 _BANNED_PATTERNS = [
-    # Replace any mention of "база знаний/данных" with neutral phrasing
-    re.compile(r"(?:в|из)\s+(?:моей\s+|нашей\s+)?баз[еуыи]\s+(?:знаний|данных)\s*", re.I),
-    re.compile(r"(?:по\s+данным\s+из|по\s+информации\s+из)\s+баз[еуыи]\s+(?:знаний|данных)\s*", re.I),
-    re.compile(r"в\s+предоставленных\s+фрагментах\s*", re.I),
+    re.compile(r"в\s+(моей\s+|нашей\s+)?базе\s+(знаний\s+|данных\s+)?[^.]*?(нет|не\s+указан|не\s+прописан|не\s+содержится|такого\s+нет)[^.]*?[.,]?\s*", re.I),
+    re.compile(r"в\s+предоставленных\s+фрагментах[^.]*?[.,]?\s*", re.I),
 ]
 
 
@@ -38,25 +36,6 @@ def clean_answer(text: str) -> str:
         cleaned = re.sub(re.escape(phrase) + r"[,.]?\s*", "", cleaned, flags=re.I)
     for pattern in _BANNED_PATTERNS:
         cleaned = pattern.sub("", cleaned)
-    # Replace raw URLs/emails with spoken forms (LLM sometimes ignores prompt rule)
-    cleaned = re.sub(r"(?:(?:на|по адресу)\s+(?:нашем\s+)?(?:сайте?[:\s]*)?)?https?://mikro-leasing\.by/akcii\S*", "на сайте микро-лизинг точка бай в разделе акции", cleaned, flags=re.I)
-    cleaned = re.sub(r"(?:(?:на|по адресу)\s+(?:нашем\s+)?(?:сайте?[:\s]*)?)?https?://mikro-leasing\.by\S*", "на сайте микро-лизинг точка бай", cleaned, flags=re.I)
-    cleaned = re.sub(r"https?://\S+", "", cleaned)
-    cleaned = re.sub(r"\bwww\.\S+", "", cleaned)
-    cleaned = re.sub(r"[\w.-]+@[\w.-]+\.\w+", "инфо собака микро-лизинг точка бай", cleaned)
-    # Fix male gender forms the LLM uses despite female persona prompt
-    cleaned = re.sub(r"\bя рад\b", "я рада", cleaned)
-    cleaned = re.sub(r"\bЯ рад\b", "Я рада", cleaned)
-    cleaned = re.sub(r"\bРад,", "Рада,", cleaned)
-    cleaned = re.sub(r"\bРад ", "Рада ", cleaned)
-    cleaned = re.sub(r"\bбуду рад\b", "буду рада", cleaned)
-    cleaned = re.sub(r"\bя смог\b", "я смогла", cleaned)
-    cleaned = re.sub(r"\bсмог помочь", "смогла помочь", cleaned)
-    cleaned = re.sub(r"\bя мог\b", "я могла", cleaned)
-    cleaned = re.sub(r"\bчтобы я мог\b", "чтобы я могла", cleaned)
-    cleaned = re.sub(r"\bя готов\b", "я готова", cleaned)
-    cleaned = re.sub(r"\bголосовой помощник\b", "голосовая помощница", cleaned, flags=re.I)
-    cleaned = re.sub(r"\bголосовой консультант\b", "голосовая помощница", cleaned, flags=re.I)
     return cleaned.strip()
 
 
@@ -91,7 +70,7 @@ def strip_name_from_response(text: str, name: str, turn_number: int) -> str:
     """
     if not name or not text:
         return text
-    if turn_number > 0 and turn_number % 10 == 1:
+    if turn_number > 0 and turn_number % 5 == 1:
         return text  # allow name on this turn
     # Only strip vocative patterns (name used for addressing, not content)
     for form in _name_forms(name):
@@ -151,7 +130,7 @@ def sanitize_rewrite(text: str) -> str:
     if not cleaned:
         return ""
     first_line = cleaned.splitlines()[0].strip()
-    first_line = first_line.strip("\"'“”")
+    first_line = first_line.strip("\"'""")
     if not first_line:
         return ""
     if re.search(r"[.!?]", first_line):

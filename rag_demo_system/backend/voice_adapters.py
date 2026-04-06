@@ -168,7 +168,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _TRANSLITERATION_DICT: dict[str, str] | None = None
-_STRESS_DICT: list[tuple[re.Pattern, str]] | None = None
 _CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 _PHONETIC_MAP = [
@@ -237,34 +236,6 @@ def transliterate_latin(text: str) -> str:
         return _phonetic_transliterate(word)
 
     text = _RE_LATIN_WORD.sub(_replace, text)
-    return text
-
-
-# ---------------------------------------------------------------------------
-# Stress marks for Silero TTS (+ before stressed vowel)
-# ---------------------------------------------------------------------------
-
-def _load_stress_dict() -> list[tuple[re.Pattern, str]]:
-    global _STRESS_DICT
-    if _STRESS_DICT is not None:
-        return _STRESS_DICT
-    path = _CONFIG_DIR / "stress_dictionary.yaml"
-    if path.exists():
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        pairs: list[tuple[re.Pattern, str]] = []
-        for word, stressed in sorted(raw.items(), key=lambda x: -len(str(x[0]))):
-            pattern = re.compile(r"\b" + re.escape(str(word)) + r"\b", re.IGNORECASE)
-            pairs.append((pattern, str(stressed)))
-        _STRESS_DICT = pairs
-    else:
-        _STRESS_DICT = []
-    return _STRESS_DICT
-
-
-def apply_stress_marks(text: str) -> str:
-    """Insert Silero stress marks (+) for words in the stress dictionary."""
-    for pattern, replacement in _load_stress_dict():
-        text = pattern.sub(replacement, text)
     return text
 
 
@@ -366,7 +337,7 @@ def synthesize_audio(text: str, session_id: str) -> dict[str, Any]:
     base_url = os.getenv("SILERO_TTS_BASE_URL")
     if not base_url:
         raise RuntimeError("SILERO_TTS_BASE_URL is not configured")
-    tts_text = apply_stress_marks(transliterate_latin(normalize_abbreviations_for_tts(normalize_numbers_for_tts(text))))
+    tts_text = transliterate_latin(normalize_abbreviations_for_tts(normalize_numbers_for_tts(text)))
     resp = requests.post(
         base_url.rstrip("/") + "/speak",
         json={"text": tts_text, "session_id": session_id, "language": "ru"},
