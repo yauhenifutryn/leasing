@@ -14,8 +14,10 @@ _BANNED_PHRASES = [
 ]
 # Regex patterns for phrases the LLM varies creatively
 _BANNED_PATTERNS = [
-    # Drop entire sentence that mentions "база знаний" in any form
-    re.compile(r"[^.!?]*(?:в\s+(?:моей\s+|нашей\s+)?базе\s+(?:знаний|данных)|в\s+предоставленных\s+фрагментах)[^.!?]*[.!?]?\s*", re.I),
+    # Replace any mention of "база знаний/данных" with neutral phrasing
+    re.compile(r"(?:в|из)\s+(?:моей\s+|нашей\s+)?баз[еуыи]\s+(?:знаний|данных)\s*", re.I),
+    re.compile(r"(?:по\s+данным\s+из|по\s+информации\s+из)\s+баз[еуыи]\s+(?:знаний|данных)\s*", re.I),
+    re.compile(r"в\s+предоставленных\s+фрагментах\s*", re.I),
 ]
 
 
