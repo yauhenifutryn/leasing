@@ -858,7 +858,14 @@ async def voice_ws(websocket: WebSocket) -> None:
             _BARGE_IN_MIN_CHUNKS = 8  # ~250ms of speech audio
             try:
                 while not response_task.done():
-                    event = await websocket.receive_json()
+                    try:
+                        event = await asyncio.wait_for(websocket.receive_json(), timeout=0.2)
+                    except asyncio.TimeoutError:
+                        # Check if RTC barge-in already set the flag
+                        if session.interrupted:
+                            print("[WS-LISTENER] interrupted by RTC, exiting", flush=True)
+                            return
+                        continue
                     etype = event.get("type")
                     if etype == "input_audio_buffer.append":
                         chunk_count += 1
