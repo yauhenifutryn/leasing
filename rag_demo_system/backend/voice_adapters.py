@@ -143,8 +143,52 @@ try:
                 result.append(w)
         return " ".join(result)
 
+    # Years: 4-digit numbers 1900-2099 followed by год/года/году or preceded by "с/в/до"
+    _RE_YEAR_WITH_WORD = re.compile(r"\b((?:19|20)\d{2})\s*(год[ауе]?)\b")
+    _RE_YEAR_WITH_PREP = re.compile(r"(с|до|в|после|к|от)\s+((?:19|20)\d{2})\b", re.I)
+
+    def _ordinal_decline(word: str, case: str) -> str:
+        """Decline ordinal ending: девятый -> девятого (gen) / девятом (prep)."""
+        endings = {
+            "gen": {"ый": "ого", "ой": "ого", "ий": "ьего"},
+            "prep": {"ый": "ом", "ой": "ом", "ий": "ьем"},
+        }
+        for suffix, replacement in endings.get(case, {}).items():
+            if word.endswith(suffix):
+                return word[:-len(suffix)] + replacement
+        return word
+
+    def _year_with_word(match: re.Match) -> str:
+        year = int(match.group(1))
+        word = match.group(2).lower()
+        try:
+            ordinal = _num2words(year, lang="ru", to="ordinal")
+        except (ValueError, OverflowError):
+            return match.group(0)
+        if word == "года":
+            ordinal = _ordinal_decline(ordinal, "gen")
+        elif word == "году":
+            ordinal = _ordinal_decline(ordinal, "prep")
+        return f"{ordinal} {word}"
+
+    def _year_with_prep(match: re.Match) -> str:
+        prep = match.group(1)
+        year = int(match.group(2))
+        try:
+            ordinal = _num2words(year, lang="ru", to="ordinal")
+        except (ValueError, OverflowError):
+            return match.group(0)
+        if prep.lower() in ("с", "до", "после", "от"):
+            ordinal = _ordinal_decline(ordinal, "gen")
+        elif prep.lower() in ("в", "к"):
+            ordinal = _ordinal_decline(ordinal, "prep")
+        return f"{prep} {ordinal}"
+
     def normalize_numbers_for_tts(text: str) -> str:
         """Replace digits, percentages, dollar amounts, and times with Russian words."""
+        # Years first (before plain numbers eat 4-digit years)
+        text = _RE_YEAR_WITH_WORD.sub(_year_with_word, text)
+        text = _RE_YEAR_WITH_PREP.sub(_year_with_prep, text)
         # Times: ranges first, then prepositions, then standalone
         text = _RE_TIME_RANGE.sub(_time_range, text)
         text = _RE_TIME_WITH_PREP.sub(_time_with_prep, text)
