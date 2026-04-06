@@ -1118,9 +1118,11 @@ async def voice_ws(websocket: WebSocket) -> None:
         first_question = client_name_raw  # save the original message, answer it directly
         # No greeting -- go straight to answering the question
     else:
-        await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
         if _also_has_question:
+            await _send_tts_message(f"Очень приятно, {client_name}!")
             first_question = client_name_raw  # name + question combo, answer the question too
+        else:
+            await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
 
     # Save intro to session transcript so model knows the name
     session.client_name = client_name

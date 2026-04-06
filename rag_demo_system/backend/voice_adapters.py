@@ -352,6 +352,32 @@ def _load_stress_dict() -> list[tuple[re.Pattern, str]]:
     return _STRESS_DICT
 
 
+_RE_PHONE = re.compile(r"\+\d{1,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}")
+
+
+def _format_phone_for_tts(m: re.Match) -> str:
+    """Format phone number as comma-separated groups for natural TTS pacing.
+
+    +375 222 71 76 76 -> "плюс 375, 222, 71, 76, 76"
+    Commas create natural pauses in Silero TTS.
+    """
+    raw = m.group(0).strip()
+    # Split on existing spaces/dashes, preserving the original grouping
+    parts = re.split(r"[\s\-]+", raw)
+    result = []
+    for p in parts:
+        if p.startswith("+"):
+            result.append("плюс " + p[1:])
+        else:
+            result.append(p)
+    return ", ".join(result)
+
+
+def format_phones_for_tts(text: str) -> str:
+    """Replace phone numbers with TTS-friendly grouped format."""
+    return _RE_PHONE.sub(_format_phone_for_tts, text)
+
+
 def apply_stress_marks(text: str) -> str:
     """Insert Silero stress marks (+) for words in the stress dictionary."""
     for pattern, replacement in _load_stress_dict():
@@ -364,7 +390,7 @@ def synthesize_audio(text: str, session_id: str) -> dict[str, Any]:
     base_url = os.getenv("SILERO_TTS_BASE_URL")
     if not base_url:
         raise RuntimeError("SILERO_TTS_BASE_URL is not configured")
-    tts_text = apply_stress_marks(transliterate_latin(normalize_abbreviations_for_tts(normalize_numbers_for_tts(text))))
+    tts_text = apply_stress_marks(format_phones_for_tts(transliterate_latin(normalize_abbreviations_for_tts(normalize_numbers_for_tts(text)))))
     resp = requests.post(
         base_url.rstrip("/") + "/speak",
         json={"text": tts_text, "session_id": session_id, "language": "ru"},
