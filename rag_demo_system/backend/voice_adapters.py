@@ -412,6 +412,8 @@ def _format_phone_for_tts(m: re.Match) -> str:
     for p in parts:
         if p.startswith("+"):
             result.append("плюс " + p[1:])
+        elif p == "00":
+            result.append("ноль ноль")
         else:
             result.append(p)
     return ", ".join(result)
