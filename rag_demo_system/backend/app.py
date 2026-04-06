@@ -197,7 +197,7 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
             "ok": True,
             "session_id": session_id,
             "backend": backend_name,
-            "answer": routed.response,
+            "answer": clean_answer(routed.response),
             "consent": "granted",
             "chunks": [],
             "citations": [],
