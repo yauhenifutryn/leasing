@@ -579,8 +579,8 @@ install_turn_server() {
     return
   fi
   log "Installing coturn TURN server..."
-  if [ -f "$SCRIPT_DIR/setup_turn.sh" ]; then
-    bash "$SCRIPT_DIR/setup_turn.sh" || log "WARNING: coturn setup failed (non-fatal, WebRTC relay unavailable)"
+  if [ -f "$APP_DIR/scripts/setup_turn.sh" ]; then
+    bash "$APP_DIR/scripts/setup_turn.sh" || log "WARNING: coturn setup failed (non-fatal, WebRTC relay unavailable)"
   else
     log "WARNING: setup_turn.sh not found, skipping TURN installation"
   fi
