@@ -834,100 +834,13 @@ async def voice_ws(websocket: WebSocket) -> None:
                 pass
             return
 
-        # ---- VAD/hybrid mode: concurrent barge-in listener ----
-        # In hybrid mode (RTC active), barge-in detection runs in BOTH:
-        # 1. RTC callback (_rtc_on_audio_main) - detects speech via AEC audio
-        # 2. WebSocket listener below - reads audio events for main VAD + STT
-        # While the response streams (LLM + TTS), keep reading WebSocket
-        # events so incoming audio is fed to VAD.  When VAD detects
-        # speech start during assistant playback, set session.interrupted
-        # (already checked by both llm_producer and tts_consumer).
-        # Set assistant_speaking BEFORE launching the response task.
-        # _stream_voice_response sets it too (line 712), but the response
-        # does RAG + prompt building first -- the listener would miss early
-        # barge-in attempts if we waited for that.
+        # ---- Fire-and-forget response ----
+        # The response runs as a background task. The main loop continues
+        # reading WebSocket events (including response.cancel for barge-in).
+        # No separate listener needed; the main loop handles everything.
         session.assistant_speaking = True
         session.interrupted = False
-        response_task = asyncio.create_task(response_coro)
-
-        async def _barge_in_listener() -> None:
-            """Read WebSocket events during response for barge-in."""
-            print("[WS-LISTENER] started, waiting for events...", flush=True)
-            chunk_count = 0
-            speech_chunks = 0
-            _BARGE_IN_MIN_CHUNKS = 8  # ~250ms of speech audio
-            try:
-                while not response_task.done():
-                    try:
-                        event = await asyncio.wait_for(websocket.receive_json(), timeout=0.2)
-                    except asyncio.TimeoutError:
-                        # Check if RTC barge-in already set the flag
-                        if session.interrupted:
-                            print("[WS-LISTENER] interrupted by RTC, exiting", flush=True)
-                            return
-                        continue
-                    etype = event.get("type")
-                    if etype == "input_audio_buffer.append":
-                        chunk_count += 1
-                        audio = event.get("audio", "")
-                        if not audio:
-                            continue
-                        raw = _b64mod.b64decode(audio)
-                        audio_chunks.append(_b64mod.b64encode(raw).decode())
-                        was_speaking = vad.is_speaking
-                        vad.feed(raw)
-                        if vad.is_speaking:
-                            speech_chunks += 1
-                        else:
-                            speech_chunks = 0
-                        if (
-                            speech_chunks >= _BARGE_IN_MIN_CHUNKS
-                            and session.assistant_speaking
-                        ):
-                            session.interrupted = True
-                            print(
-                                f"[BARGE-IN] speech detected ({speech_chunks} chunks)",
-                                flush=True,
-                            )
-                            try:
-                                await websocket.send_json({
-                                    "type": "interrupt",
-                                    "session_id": session_id,
-                                })
-                            except (RuntimeError, WebSocketDisconnect):
-                                pass
-                            return
-                    elif etype == "response.cancel":
-                        session.interrupted = True
-                        session.assistant_speaking = False
-                        if rtc_handler is not None:
-                            rtc_handler.tts_track.clear()
-                        print(
-                            "[BARGE-IN] response.cancel received",
-                            flush=True,
-                        )
-                        try:
-                            await websocket.send_json({
-                                "type": "interrupt",
-                                "session_id": session_id,
-                            })
-                        except (RuntimeError, WebSocketDisconnect):
-                            pass
-                        return
-            except (WebSocketDisconnect, RuntimeError):
-                session.interrupted = True
-
-        listener_task = asyncio.create_task(_barge_in_listener())
-        try:
-            await response_task
-        except (RuntimeError, WebSocketDisconnect):
-            session.interrupted = True
-        if not listener_task.done():
-            listener_task.cancel()
-            try:
-                await listener_task
-            except asyncio.CancelledError:
-                pass
+        asyncio.create_task(response_coro)
 
     # ------------------------------------------------------------------
     # Audio adapter callback: receives raw PCM16 for every chunk.
@@ -1325,7 +1238,13 @@ async def voice_ws(websocket: WebSocket) -> None:
             elif event_type == "response.cancel":
                 session.assistant_speaking = False
                 session.interrupted = True
-                await websocket.send_json({"type": "response.cancelled", "session_id": session_id})
+                if rtc_handler is not None:
+                    rtc_handler.tts_track.clear()
+                print("[BARGE-IN] response.cancel received in main loop", flush=True)
+                try:
+                    await websocket.send_json({"type": "response.cancelled", "session_id": session_id})
+                except (RuntimeError, WebSocketDisconnect):
+                    pass
 
             elif event_type == "rtc.offer":
                 # Client sent WebRTC offer for streaming mode
