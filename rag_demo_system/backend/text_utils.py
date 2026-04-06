@@ -36,6 +36,25 @@ def clean_answer(text: str) -> str:
         cleaned = re.sub(re.escape(phrase) + r"[,.]?\s*", "", cleaned, flags=re.I)
     for pattern in _BANNED_PATTERNS:
         cleaned = pattern.sub("", cleaned)
+    # Replace raw URLs/emails with spoken forms (LLM sometimes ignores prompt rule)
+    cleaned = re.sub(r"(?:(?:на|по адресу)\s+(?:нашем\s+)?(?:сайте?[:\s]*)?)?https?://mikro-leasing\.by/akcii\S*", "на сайте микро-лизинг точка бай в разделе акции", cleaned, flags=re.I)
+    cleaned = re.sub(r"(?:(?:на|по адресу)\s+(?:нашем\s+)?(?:сайте?[:\s]*)?)?https?://mikro-leasing\.by\S*", "на сайте микро-лизинг точка бай", cleaned, flags=re.I)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    cleaned = re.sub(r"\bwww\.\S+", "", cleaned)
+    cleaned = re.sub(r"[\w.-]+@[\w.-]+\.\w+", "инфо собака микро-лизинг точка бай", cleaned)
+    # Fix male gender forms the LLM uses despite female persona prompt
+    cleaned = re.sub(r"\bя рад\b", "я рада", cleaned)
+    cleaned = re.sub(r"\bЯ рад\b", "Я рада", cleaned)
+    cleaned = re.sub(r"\bРад,", "Рада,", cleaned)
+    cleaned = re.sub(r"\bРад ", "Рада ", cleaned)
+    cleaned = re.sub(r"\bбуду рад\b", "буду рада", cleaned)
+    cleaned = re.sub(r"\bя смог\b", "я смогла", cleaned)
+    cleaned = re.sub(r"\bсмог помочь", "смогла помочь", cleaned)
+    cleaned = re.sub(r"\bя мог\b", "я могла", cleaned)
+    cleaned = re.sub(r"\bчтобы я мог\b", "чтобы я могла", cleaned)
+    cleaned = re.sub(r"\bя готов\b", "я готова", cleaned)
+    cleaned = re.sub(r"\bголосовой помощник\b", "голосовая помощница", cleaned, flags=re.I)
+    cleaned = re.sub(r"\bголосовой консультант\b", "голосовая помощница", cleaned, flags=re.I)
     return cleaned.strip()
 
 
@@ -62,15 +81,23 @@ def strip_name_from_response(text: str, name: str, turn_number: int) -> str:
     """Control client name frequency in responses.
 
     Name is allowed on turns 1, 6, 11, ... (every 5th). On other turns,
-    ALL occurrences of the name (in any grammatical case) are removed.
+    only VOCATIVE uses are removed (addressing the person):
+      - "Никита, ..." at the start
+      - "..., Никита," or "..., Никита!" in the middle/end
+    The name is KEPT when it's part of the semantic content
+    (e.g., "Вас зовут Никита" in response to "как меня зовут?").
     """
     if not name or not text:
         return text
-    if turn_number > 0 and turn_number % 5 == 1:
+    if turn_number > 0 and turn_number % 10 == 1:
         return text  # allow name on this turn
-    # Remove all case forms of the name
+    # Only strip vocative patterns (name used for addressing, not content)
     for form in _name_forms(name):
-        text = re.sub(r",?\s*" + re.escape(form) + r"[,!]?\s*", " ", text, flags=re.I)
+        esc = re.escape(form)
+        # "Никита, ..." at sentence start
+        text = re.sub(r"(?:^|\.\s+)" + esc + r",\s*", lambda m: m.group(0)[:m.group(0).find(form[0])] if "." in m.group(0) else "", text, flags=re.I)
+        # ", Никита," or ", Никита!" in middle/end
+        text = re.sub(r",\s*" + esc + r"\s*[,!.]", lambda m: m.group(0)[-1] if m.group(0)[-1] in ".!" else "", text, flags=re.I)
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip()
 

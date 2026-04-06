@@ -1,0 +1,44 @@
+# Stress dictionary for Silero TTS v5
+# Format: word -> stressed form (+ before stressed vowel)
+# Applied as case-insensitive whole-word replacement before TTS synthesis.
+# Silero's put_accent=True handles common words; this covers edge cases.
+
+# Company management surnames
+Дедков: Д+едков
+Дедкова: Д+едкова
+Дедкову: Д+едкову
+Дедковым: Д+едковым
+Футрин: Футр+ин
+Футрина: Футр+ина
+Футрину: Футр+ину
+Лустач: Луст+ач
+Романчик: Ром+анчик
+
+# Company name
+Микро: М+икро
+Лизинг: Л+изинг
+
+# Financial terms with ambiguous stress
+договор: догов+ор
+договора: договор+а
+договоры: догов+оры
+договоров: догов+оров
+средства: ср+едства
+обеспечение: обесп+ечение
+квартал: кварт+ал
+
+# Belarusian cities and places
+Гомель: Г+омель
+Гомеле: Г+омеле
+Могилев: Могил+ёв
+Могилеве: Могил+ёве
+Витебск: В+итебск
+Витебске: В+итебске
+Гродно: Гр+одно
+Машерова: Маш+ерова
+
+# Common mispronounced terms
+КАСКО: к+аско
+лизингополучатель: лизингополуч+атель
+лизингодатель: лизингод+атель
+поручитель: поруч+итель
