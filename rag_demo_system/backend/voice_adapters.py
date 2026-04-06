@@ -390,7 +390,7 @@ def synthesize_audio(text: str, session_id: str) -> dict[str, Any]:
     base_url = os.getenv("SILERO_TTS_BASE_URL")
     if not base_url:
         raise RuntimeError("SILERO_TTS_BASE_URL is not configured")
-    tts_text = apply_stress_marks(format_phones_for_tts(transliterate_latin(normalize_abbreviations_for_tts(normalize_numbers_for_tts(text)))))
+    tts_text = apply_stress_marks(transliterate_latin(normalize_abbreviations_for_tts(normalize_numbers_for_tts(format_phones_for_tts(text)))))
     resp = requests.post(
         base_url.rstrip("/") + "/speak",
         json={"text": tts_text, "session_id": session_id, "language": "ru"},
