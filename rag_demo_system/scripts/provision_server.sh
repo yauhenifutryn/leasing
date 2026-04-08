@@ -567,7 +567,44 @@ HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 CUDA_HOME=/usr/local/cuda
 PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# ── Tool Use: Calculator API ──
+# IMPORTANT: Get bearer token from client's developer (Maxim).
+# Server IP must be whitelisted by client before these will work.
+CALCULATOR_API_BASE_URL=https://personal.mikro-leasing.by/calculator/api
+CALCULATOR_API_TOKEN=
+
+# ── Tool Use: SMS (sms-assistent.by) ──
+# IMPORTANT: Server IP must be whitelisted by client before these will work.
+SMS_API_LOGIN=
+SMS_API_PASSWORD=
+SMS_SENDER_NAME=MikroLizing
+
+# ── Tool Use: CRM Webhook (phase 2, not needed yet) ──
+CRM_WEBHOOK_URL=
+CRM_WEBHOOK_TOKEN=
 ENVEOF
+
+  log ""
+  log "╔══════════════════════════════════════════════════════════════╗"
+  log "║  TOOL USE SETUP REQUIRED                                    ║"
+  log "║                                                              ║"
+  log "║  1. Add this server's IP to client's whitelist:              ║"
+  log "║     Run: curl -s ifconfig.me                                 ║"
+  log "║     Send the IP to client (Ilya) for whitelisting            ║"
+  log "║                                                              ║"
+  log "║  2. Fill in .env credentials:                                ║"
+  log "║     CALCULATOR_API_TOKEN=...                                 ║"
+  log "║     SMS_API_LOGIN=...                                        ║"
+  log "║     SMS_API_PASSWORD=...                                     ║"
+  log "║                                                              ║"
+  log "║  3. Test API access:                                         ║"
+  log "║     source .env                                              ║"
+  log "║     curl -H 'Authorization: Bearer \$CALCULATOR_API_TOKEN'   ║"
+  log "║       '\$CALCULATOR_API_BASE_URL/1.0/subjects/'              ║"
+  log "║     Expected: HTTP 200 with JSON (not 403)                   ║"
+  log "╚══════════════════════════════════════════════════════════════╝"
+  log ""
 }
 
 # ---------------------------------------------------------------------------
