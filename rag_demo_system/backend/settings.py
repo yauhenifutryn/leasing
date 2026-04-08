@@ -83,6 +83,17 @@ class QueryRewriteConfig:
 
 
 @dataclass
+class ToolsConfig:
+    calculator_api_base_url: str
+    calculator_api_token: str
+    sms_api_login: str
+    sms_api_password: str
+    sms_sender_name: str
+    crm_webhook_url: str
+    crm_webhook_token: str
+
+
+@dataclass
 class VoiceConfig:
     enabled: bool
     provider: str
@@ -103,6 +114,7 @@ class Settings:
     reranker: RerankerConfig
     query_rewrite: QueryRewriteConfig
     voice: VoiceConfig
+    tools: ToolsConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -150,6 +162,7 @@ def load_settings(path: Path | None = None) -> Settings:
     reranker = payload.get("reranker", {})
     query_rewrite = payload.get("query_rewrite", {})
     voice = payload.get("voice", {})
+    tools_cfg = payload.get("tools", {})
 
     return Settings(
         app=AppConfig(
@@ -220,5 +233,14 @@ def load_settings(path: Path | None = None) -> Settings:
             stt_ws_url=voice.get("stt_ws_url", ""),
             tts_stream_url=voice.get("tts_stream_url", ""),
             sample_rate_hz=int(voice.get("sample_rate_hz", 16000)),
+        ),
+        tools=ToolsConfig(
+            calculator_api_base_url=os.getenv("CALCULATOR_API_BASE_URL", tools_cfg.get("calculator_api_base_url", "")),
+            calculator_api_token=os.getenv("CALCULATOR_API_TOKEN", tools_cfg.get("calculator_api_token", "")),
+            sms_api_login=os.getenv("SMS_API_LOGIN", tools_cfg.get("sms_api_login", "")),
+            sms_api_password=os.getenv("SMS_API_PASSWORD", tools_cfg.get("sms_api_password", "")),
+            sms_sender_name=os.getenv("SMS_SENDER_NAME", tools_cfg.get("sms_sender_name", "MikroLizing")),
+            crm_webhook_url=os.getenv("CRM_WEBHOOK_URL", tools_cfg.get("crm_webhook_url", "")),
+            crm_webhook_token=os.getenv("CRM_WEBHOOK_TOKEN", tools_cfg.get("crm_webhook_token", "")),
         ),
     )

@@ -64,3 +64,12 @@ voice:
   stt_ws_url: "wss://api.elevenlabs.io/v1/stt/stream"  # TODO: confirm exact endpoint
   tts_stream_url: "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
   sample_rate_hz: 16000
+
+tools:
+  calculator_api_base_url: ""
+  calculator_api_token: ""
+  sms_api_login: ""
+  sms_api_password: ""
+  sms_sender_name: "MikroLizing"
+  crm_webhook_url: ""
+  crm_webhook_token: ""

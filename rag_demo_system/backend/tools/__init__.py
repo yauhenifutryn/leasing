@@ -26,4 +26,9 @@ _TOOLS: dict[str, ToolDefinition] = {}
 
 def init_tools(settings: Any) -> None:
     """Initialize tools with settings. Called once at app startup."""
-    pass  # Tool imports added in later tasks
+    from .calculator import CalculatorTool
+
+    _TOOLS["calculator"] = CalculatorTool(
+        base_url=settings.tools.calculator_api_base_url,
+        token=settings.tools.calculator_api_token,
+    )
