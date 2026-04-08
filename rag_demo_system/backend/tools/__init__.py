@@ -27,8 +27,14 @@ _TOOLS: dict[str, ToolDefinition] = {}
 def init_tools(settings: Any) -> None:
     """Initialize tools with settings. Called once at app startup."""
     from .calculator import CalculatorTool
+    from .sms_sender import SmsSenderTool
 
     _TOOLS["calculator"] = CalculatorTool(
         base_url=settings.tools.calculator_api_base_url,
         token=settings.tools.calculator_api_token,
+    )
+    _TOOLS["send_sms"] = SmsSenderTool(
+        login=settings.tools.sms_api_login,
+        password=settings.tools.sms_api_password,
+        sender=settings.tools.sms_sender_name,
     )
