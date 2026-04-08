@@ -87,29 +87,39 @@ def iter_openai_compatible_stream(
 def iter_openai_compatible_stream_events(
     base_url: str,
     model: str,
-    system_prompt: str,
-    user_prompt: str,
-    temperature: float,
-    max_tokens: int,
-    timeout_sec: int,
+    system_prompt: str | None = None,
+    user_prompt: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 120,
+    timeout_sec: int = 60,
+    tools: list[dict[str, Any]] | None = None,
 ) -> Any:
     if not base_url:
         raise ValueError("RAG_LLM_BASE_URL is not set")
     if not model:
         raise ValueError("RAG_LLM_MODEL is not set")
     url = base_url.rstrip("/") + "/chat/completions"
-    payload = {
+
+    if messages is not None:
+        msg_list = messages
+    else:
+        msg_list = [
+            {"role": "system", "content": system_prompt or ""},
+            {"role": "user", "content": user_prompt or ""},
+        ]
+
+    payload: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        # Disable Qwen3 thinking mode
+        "messages": msg_list,
         "chat_template_kwargs": {"enable_thinking": False},
     }
+    if tools:
+        payload["tools"] = tools
+
     resp = requests.post(url, json=payload, timeout=timeout_sec, stream=True)
     resp.raise_for_status()
     for line in resp.iter_lines(decode_unicode=True):
