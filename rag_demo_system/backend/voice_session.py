@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -17,6 +17,7 @@ class VoiceSession:
     last_user_message: str = ""
     client_name: str = ""
     turn_count: int = 0
+    tool_calls_this_turn: list = field(default_factory=list)
 
     @property
     def stack_id(self) -> str:

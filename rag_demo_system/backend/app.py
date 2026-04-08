@@ -27,6 +27,9 @@ from .consent import (
 from .engine import RAGEngine
 from .rag_backends import build_backend_status
 from .settings import load_settings
+from .tools import get_tool_schemas, get_tool, init_tools
+from .tools.filler import get_filler
+from .llm_stream import parse_tool_calls_from_events
 from .state import StateStore
 from .router import route_non_rag
 from .voice_adapters import build_llm_status, build_voice_statuses, synthesize_audio, transcribe_audio
@@ -36,6 +39,7 @@ from .audio_input import WebSocketAudioAdapter
 from .rtc_audio import RTCAudioHandler
 
 settings = load_settings()
+init_tools(settings)
 state = StateStore(Path(__file__).resolve().parents[1] / ".state")
 engine = RAGEngine(settings, Path(__file__).resolve().parents[1] / ".state")
 voice_sessions: dict[str, VoiceSession] = {}
@@ -607,6 +611,14 @@ async def _stream_voice_response(
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
 
+    # --- Build messages list for tool-aware LLM call ---
+    llm_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    tool_schemas = get_tool_schemas()
+    voice_max_tokens = 120  # 1-2 sentences
+
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
     sentence_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
     t_llm_first_token: float | None = None
@@ -615,44 +627,122 @@ async def _stream_voice_response(
 
     async def llm_producer() -> None:
         nonlocal t_llm_first_token
-        detector = SentenceDetector()
-        try:
-            voice_max_tokens = 120  # 1-2 sentences
-            stream = iter_openai_compatible_stream_events(
-                base_url=effective_base_url, model=effective_model,
-                system_prompt=system_prompt, user_prompt=user_prompt,
-                temperature=settings.llm.temperature,
-                max_tokens=voice_max_tokens,
-                timeout_sec=settings.llm.timeout_sec,
-            )
-            # Wrap synchronous HTTP reads in a thread so the event loop
-            # stays free for real-time audio processing (barge-in detection).
-            _sentinel = object()
-            while True:
-                if session.interrupted:
-                    break
-                event = await asyncio.to_thread(next, stream, _sentinel)
-                if event is _sentinel:
-                    break
-                choice = (event.get("choices") or [{}])[0]
-                token = (choice.get("delta") or {}).get("content") or ""
-                if not token:
-                    continue
-                if t_llm_first_token is None:
-                    t_llm_first_token = time.time()
-                for sentence in detector.feed(token):
-                    cleaned = clean_answer(sentence)
-                    if cleaned:
-                        await sentence_queue.put(cleaned)
-        except Exception as exc:  # noqa: BLE001
-            state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
-        finally:
+        max_tool_iterations = 3
+
+        for iteration in range(max_tool_iterations + 1):
+            detector = SentenceDetector()
+            collected_events: list[dict] = []
+            has_content = False
+
+            try:
+                stream = iter_openai_compatible_stream_events(
+                    base_url=effective_base_url,
+                    model=effective_model,
+                    messages=llm_messages,
+                    temperature=settings.llm.temperature,
+                    max_tokens=voice_max_tokens if iteration == 0 else 220,
+                    timeout_sec=settings.llm.timeout_sec,
+                    tools=tool_schemas if iteration < max_tool_iterations else None,
+                )
+                _sentinel = object()
+                while True:
+                    if session.interrupted:
+                        break
+                    event = await asyncio.to_thread(next, stream, _sentinel)
+                    if event is _sentinel:
+                        break
+                    collected_events.append(event)
+                    choice = (event.get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+
+                    # Regular content token
+                    token = delta.get("content") or ""
+                    if token:
+                        has_content = True
+                        if t_llm_first_token is None:
+                            t_llm_first_token = time.time()
+                        for sent in detector.feed(token):
+                            cleaned = clean_answer(sent)
+                            if cleaned:
+                                await sentence_queue.put(cleaned)
+
+            except Exception as exc:  # noqa: BLE001
+                state.log({"event": "llm_error", "error": str(exc), "session_id": session_id})
+                break
+
+            # Flush remaining content
             remaining = detector.flush()
             if remaining and not session.interrupted:
                 cleaned = clean_answer(remaining)
                 if cleaned:
                     await sentence_queue.put(cleaned)
-            await sentence_queue.put(None)
+
+            # If we got regular content, we are done (no tool call)
+            if has_content or session.interrupted:
+                break
+
+            # Check for tool calls in the collected events
+            tool_calls = parse_tool_calls_from_events(collected_events)
+            if not tool_calls:
+                break
+
+            # Process each tool call
+            for tc in tool_calls:
+                func_name = tc["function"]["name"]
+                try:
+                    func_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    func_args = {}
+
+                # Send filler phrase to TTS immediately
+                filler = get_filler(func_name)
+                await sentence_queue.put(filler)
+
+                # Execute tool in a thread (synchronous httpx)
+                try:
+                    tool = get_tool(func_name)
+                    filled_params, defaulted = tool.fill_defaults(func_args)
+                    result = await asyncio.to_thread(
+                        tool.execute, filled_params, {"session_id": session_id}
+                    )
+                    result["defaulted"] = defaulted
+                    session.tool_calls_this_turn.append({
+                        "tool": func_name, "params": filled_params, "result": result,
+                    })
+                    summary = tool.format_voice_summary(result)
+                except KeyError:
+                    summary = f"Инструмент '{func_name}' не найден."
+                except Exception as exc:  # noqa: BLE001
+                    summary = f"Ошибка выполнения инструмента: {exc}"
+
+                # Append tool call + result to messages for next LLM iteration
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": tc.get("id", f"call_{func_name}"),
+                        "type": "function",
+                        "function": {
+                            "name": func_name,
+                            "arguments": json.dumps(func_args, ensure_ascii=False),
+                        },
+                    }],
+                })
+                llm_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", f"call_{func_name}"),
+                    "content": summary,
+                })
+
+                state.log({
+                    "event": "tool_call",
+                    "session_id": session_id,
+                    "tool": func_name,
+                    "params": filled_params,
+                    "ok": result.get("ok", False) if isinstance(result, dict) else False,
+                })
+
+        await sentence_queue.put(None)
 
     async def tts_consumer() -> None:
         nonlocal t_tts_first_chunk, t_playback_started
