@@ -39,16 +39,16 @@ def main():
     print(f"System prompt: {len(system_prompt)} chars")
 
     # Build messages (same structure as app.py _stream_voice_response)
-    # RAG context in separate system message, user message is clean
-    rag_context = (
-        "Это голосовой разговор. Ответ: 1-2 коротких предложения.\n\n"
-        "Справочная информация (для общих вопросов; для расчётов используй инструменты):\n\n"
+    # RAG context appended to system prompt, user message stays clean
+    rag_section = (
+        "\n\n# Справочная информация\n"
+        "Это голосовой разговор. Ответ: 1-2 коротких предложения.\n"
+        "Для общих вопросов используй эти данные. Для расчётов используй инструменты.\n\n"
         "[Нет фрагментов для этого запроса]\n"
     )
 
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": rag_context},
+        {"role": "system", "content": system_prompt + rag_section},
         {"role": "user", "content": f"Текущий вопрос клиента: {message}"},
     ]
 

@@ -610,15 +610,15 @@ async def _stream_voice_response(
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
 
     # --- Build messages list for tool-aware LLM call ---
-    # Structure: system prompt -> RAG context (as system) -> user message (clean)
-    rag_context_msg = (
-        f"{length_hint}\n\n"
-        f"Справочная информация (для общих вопросов; для расчётов используй инструменты):\n\n"
+    # RAG context appended to system prompt (not in user message)
+    # so the user message stays clean and does not suppress tool calling.
+    rag_section = (
+        f"\n\n# Справочная информация\n{length_hint}\n"
+        f"Для общих вопросов используй эти данные. Для расчётов используй инструменты.\n\n"
         f"{weak_hint}{context_block}"
     )
     llm_messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": rag_context_msg},
+        {"role": "system", "content": system_prompt + rag_section},
         {"role": "user", "content": user_prompt},
     ]
     voice_max_tokens = 120  # 1-2 sentences
