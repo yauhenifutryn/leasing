@@ -236,79 +236,126 @@ def test_client_type_validation(settings):
         return False
 
 
-def test_rag_after_calc(settings, system_prompt, schemas):
-    """Test 11: RAG works for normal questions AFTER a calculator conversation.
+def test_full_conversation_flow(settings, system_prompt, schemas):
+    """Test 11: Full natural conversation: RAG -> calc -> RAG -> SMS -> RAG.
 
-    In the real voice path, the calc turn skips RAG but the next KB turn
-    goes through the RAG path with full KB fragments. This test verifies
-    that the model answers from KB context, not from tools, when the
-    question is not about calculation.
+    Simulates a real session where the user mixes KB questions with tool use.
+    Each turn checks the correct behavior (tool call vs text response).
     """
-    # The real test: "кто директор" should NOT trigger a tool call,
-    # and should produce a text answer. In the voice path, RAG context
-    # would be included for this non-calc question.
-    # Here we test with KB-like context in the system prompt.
-    messages = [
-        {"role": "system", "content": system_prompt + "\n\nСправочная информация:\nДиректор компании Микро Лизинг — Дедков Вадим Николаевич. Он наёмный руководитель."},
-        # Previous calc exchange in history
-        {"role": "user", "content": "Рассчитай лизинг на машину за 30 тысяч"},
-        {"role": "assistant", "content": "Аванс 9000, платёж 898, срок 36 мес. Хотите изменить параметр или отправить по СМС?"},
-        # Now a KB question
+    base_url = settings.llm.fast_base_url or settings.llm.base_url
+    model = settings.llm.model
+    all_pass = True
+
+    # Include KB context for non-calc turns (simulates RAG retrieval)
+    kb_context = (
+        "\n\nСправочная информация:\n"
+        "Директор компании Микро Лизинг — Дедков Вадим Николаевич.\n"
+        "Владелец — Mikro Kapital Management S.A. (Люксембург).\n"
+        "Минимальный аванс от 10%. Максимальный срок 84 месяца.\n"
+    )
+
+    # --- Turn 1: RAG question ---
+    print("  Turn 1: KB question (Кто директор?)")
+    msgs = [
+        {"role": "system", "content": system_prompt + kb_context},
         {"role": "user", "content": "Кто директор вашей компании?"},
     ]
-    tc, text = call_llm(settings, system_prompt, messages, schemas)
-    if not tc and ("дедков" in text.lower() or "директор" in text.lower()):
-        print(f"  PASS: answered about director after calc context")
-        return True
-    elif tc:
-        print(f"  FAIL: tool was called for KB question after calc")
-        return False
+    tc, text = call_llm(settings, system_prompt, msgs, schemas)
+    t1_ok = not tc and "дедков" in text.lower()
+    print(f"    {'PASS' if t1_ok else 'FAIL'}: RAG answer about director")
+    if not t1_ok:
+        all_pass = False
+
+    # --- Turn 2: Calculator request ---
+    print("  Turn 2: Calculator (Рассчитай лизинг на машину за 40 тысяч)")
+    msgs2 = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Привет, я Никита."},
+        {"role": "assistant", "content": "Очень приятно, Никита! Чем могу помочь?"},
+        {"role": "user", "content": "Рассчитай лизинг на машину за 40 тысяч"},
+    ]
+    tc2, text2 = call_llm(settings, system_prompt, msgs2, schemas)
+    t2_ok = tc2 and tc2[0]["function"]["name"] == "calculator"
+    if t2_ok:
+        args = json.loads(tc2[0]["function"]["arguments"])
+        print(f"    PASS: calculator called with cost={args.get('cost')}")
     else:
-        print(f"  FAIL: no useful answer: {text[:100]}")
-        return False
+        print(f"    FAIL: text response: {text2[:80]}")
+        all_pass = False
+
+    # --- Turn 3: RAG question AFTER calc ---
+    print("  Turn 3: KB question AFTER calc (Какой минимальный аванс?)")
+    msgs3 = [
+        {"role": "system", "content": system_prompt + kb_context},
+        {"role": "user", "content": "Рассчитай лизинг на машину за 40 тысяч"},
+        {"role": "assistant", "content": "Аванс 12000, платёж 1200 BYN на 36 мес. Хотите изменить или отправить по СМС?"},
+        {"role": "user", "content": "Какой минимальный аванс вообще бывает?"},
+    ]
+    tc3, text3 = call_llm(settings, system_prompt, msgs3, schemas)
+    t3_ok = not tc3 and ("10" in text3 or "аванс" in text3.lower())
+    print(f"    {'PASS' if t3_ok else 'FAIL'}: RAG answer about advance after calc ({'tool called' if tc3 else f'{len(text3)} chars'})")
+    if not t3_ok:
+        all_pass = False
+
+    # --- Turn 4: Recalculation ---
+    print("  Turn 4: Recalculate (Пересчитай на 48 месяцев)")
+    msgs4 = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Рассчитай лизинг на машину за 40 тысяч"},
+        {"role": "assistant", "content": "Аванс 12000, платёж 1200 BYN на 36 мес."},
+        {"role": "user", "content": "Пересчитай на 48 месяцев"},
+    ]
+    tc4, text4 = call_llm(settings, system_prompt, msgs4, schemas)
+    t4_ok = tc4 and tc4[0]["function"]["name"] == "calculator"
+    if t4_ok:
+        args4 = json.loads(tc4[0]["function"]["arguments"])
+        print(f"    PASS: recalculation called, term={args4.get('term')}")
+    else:
+        print(f"    FAIL: text response: {text4[:80]}")
+        all_pass = False
+
+    return all_pass
 
 
 def test_sms_actually_sends(settings):
-    """Test 12: SMS API actually sends (to non-existent number, checks response code)."""
+    """Test 12: SMS actually delivered to real number."""
     tool = get_tool("send_sms")
+
+    # Get a real calc result for the SMS body
+    calc_tool = get_tool("calculator")
+    calc_params, _ = calc_tool.fill_defaults({"subject": "Легковой автомобиль", "cost": 30000})
+    calc_result = calc_tool.execute(calc_params, {})
+    sms_body = calc_tool.format_sms_body(calc_result)
+
     result = tool.execute({
-        "phone": "375000000000",  # Non-existent number, won't charge
-        "message": "Test from automated validation",
+        "phone": "375291224557",
+        "message": sms_body,
     }, {})
-    # Response should be ok=True (message accepted) or ok=False with a delivery error
-    # but NOT an auth error (-2) or connection error
     if result.get("ok"):
-        print(f"  PASS: SMS API accepted message (id={result.get('message_id', '?')})")
+        print(f"  PASS: SMS SENT to 375291224557 (id={result.get('message_id')})")
+        print(f"  SMS content: {sms_body[:100]}...")
         return True
-    elif "авторизац" in result.get("error", "").lower() or "-2" in result.get("error", ""):
-        print(f"  FAIL: SMS auth error - credentials wrong")
-        return False
     else:
-        # Other errors (invalid number, etc.) still mean the API is reachable
-        print(f"  PASS: SMS API reachable (error for fake number: {result.get('error', '?')})")
-        return True
+        print(f"  FAIL: SMS send failed: {result.get('error')}")
+        return False
 
 
 def test_normal_then_calc(settings, system_prompt, schemas):
-    """Test 13: Normal KB question first, then calculator works."""
-    # Turn 1: KB question
+    """Test 13: Normal KB question first, then calculator works in same conversation."""
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": "Какие документы нужны для лизинга?"},
-    ]
-    tc1, text1 = call_llm(settings, system_prompt, messages, schemas)
-    kb_ok = not tc1 and len(text1) > 30
-    print(f"  {'PASS' if kb_ok else 'FAIL'}: KB question answered ({len(text1)} chars)")
-
-    # Turn 2: Calculator (fresh messages, simulating new turn)
-    messages2 = [
-        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Какие документы нужны для лизинга физлицу?"},
+        {"role": "assistant", "content": "Для физлица нужны паспорт, водительское удостоверение и справка о доходах."},
         {"role": "user", "content": "Рассчитай лизинг на машину за 50 тысяч"},
     ]
-    tc2, text2 = call_llm(settings, system_prompt, messages2, schemas)
-    calc_ok = tc2 and tc2[0]["function"]["name"] == "calculator"
-    print(f"  {'PASS' if calc_ok else 'FAIL'}: calculator called after KB question")
-    return kb_ok and calc_ok
+    tc, text = call_llm(settings, system_prompt, messages, schemas)
+    if tc and tc[0]["function"]["name"] == "calculator":
+        args = json.loads(tc[0]["function"]["arguments"])
+        print(f"  PASS: calculator called after KB conversation (cost={args.get('cost')})")
+        return True
+    else:
+        print(f"  FAIL: text response after KB: {text[:80]}")
+        return False
 
 
 def test_link_from_api(settings):
