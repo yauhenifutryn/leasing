@@ -758,19 +758,53 @@ start_stack() {
   fi
   log "All ports free"
 
-  # Check for leaked GPU memory before starting
+  # Clean GPU memory: kill any remaining GPU processes and reclaim VRAM
   if command -v nvidia-smi &>/dev/null; then
-    local used_mib total_mib gpu_procs
+    local used_mib total_mib gpu_procs gpu_pids
     used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
     total_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-    gpu_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]' || echo "0")
-    if [ "${used_mib:-0}" -gt 5000 ] && [ "${gpu_procs:-0}" -eq 0 ]; then
-      log "ERROR: Leaked GPU memory detected (${used_mib}MiB used, 0 processes)."
-      log "Cannot start vLLM. Restart the instance from your provider's dashboard,"
-      log "then re-run: bash rag_demo_system/scripts/provision_server.sh"
-      exit 1
+    gpu_pids=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' | grep '[0-9]' || true)
+    gpu_procs=$(echo "$gpu_pids" | grep -c '[0-9]' 2>/dev/null || echo "0")
+
+    if [ "${used_mib:-0}" -gt 1000 ]; then
+      log "GPU memory in use: ${used_mib}MiB with ${gpu_procs} process(es). Cleaning up..."
+
+      # Kill any remaining GPU processes
+      if [ -n "$gpu_pids" ]; then
+        for pid in $gpu_pids; do
+          log "  Killing GPU process PID $pid (SIGTERM)"
+          kill "$pid" 2>/dev/null || true
+        done
+        sleep 10
+
+        # Check again, SIGKILL if needed
+        gpu_pids=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' | grep '[0-9]' || true)
+        if [ -n "$gpu_pids" ]; then
+          for pid in $gpu_pids; do
+            log "  Force killing GPU process PID $pid (SIGKILL)"
+            kill -9 "$pid" 2>/dev/null || true
+          done
+          sleep 5
+        fi
+      fi
+
+      # Try GPU reset if memory is still held
+      used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+      if [ "${used_mib:-0}" -gt 1000 ]; then
+        log "  Attempting nvidia-smi --gpu-reset..."
+        nvidia-smi --gpu-reset 2>/dev/null && sleep 3 || log "  GPU reset not supported on this hardware"
+      fi
+
+      # Final check
+      used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+      gpu_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]' || echo "0")
+      if [ "${used_mib:-0}" -gt 5000 ] && [ "${gpu_procs:-0}" -eq 0 ]; then
+        log "ERROR: Leaked GPU memory (${used_mib}MiB) could not be recovered."
+        log "Restart the instance from your provider's dashboard, then re-run provision."
+        exit 1
+      fi
     fi
-    log "GPU memory OK: ${used_mib}MiB / ${total_mib}MiB used, ${gpu_procs} process(es)"
+    log "GPU memory OK: ${used_mib:-0}MiB / ${total_mib}MiB used, ${gpu_procs} process(es)"
   fi
 
   # Remove stale pidfile and socket
