@@ -607,21 +607,53 @@ async def _stream_voice_response(
     # --- Two-path message building ---
     # Qwen3.5 suppresses tool calling when ANY reference/KB text is present.
     # Path 1 (tool-eligible): clean system prompt + clean user message, no RAG.
-    # --- Message building ---
-    # Two concerns that conflict:
-    # 1. RAG context in user message suppresses tool calling in Qwen3.5
-    # 2. RAG context is needed for KB questions (director, offices, etc.)
-    #
-    # Solution: RAG always included. Tools always passed. For the FIRST
-    # tool call in a session, the model may fail to call the tool (needs
-    # explicit "рассчитай"). But once tools are used, subsequent turns
-    # have both RAG and tool access. The model decides: call tool or
-    # answer from RAG. Recalculations work because the model remembers
-    # the calculator context.
+    # --- Intent classification: tool vs RAG ---
+    # Qwen3.5 cannot handle RAG context and tool calling in the same prompt.
+    # Solution: fast LLM call to classify intent, then route to the right path.
+    # This adds ~200ms latency but guarantees correct behavior.
+    from .llm import call_openai_compatible
 
-    # SMS context for send_sms
     sms_triggers = ["отправ", "смс", "sms", "пришли"]
     has_sms_intent = any(t in message.lower() for t in sms_triggers)
+    tools_used_in_session = bool(session.tool_calls_this_turn)
+
+    # Fast intent classification (only when tools are available)
+    needs_tool = False
+    if tool_schemas:
+        # If tools were already used, use LLM to classify whether this
+        # new message needs a tool or is a general KB question.
+        # If tools were never used, also classify to catch first calc request.
+        try:
+            classify_resp = await asyncio.to_thread(
+                call_openai_compatible,
+                base_url=effective_base_url,
+                model=effective_model,
+                system_prompt=(
+                    "Классифицируй сообщение клиента. Ответь ОДНИМ словом:\n"
+                    "TOOL - если клиент просит расчёт, пересчёт, калькуляцию, отправку СМС, "
+                    "или подтверждает отправку/расчёт (да, давай, отправь, пересчитай, хорошо после предложения расчёта)\n"
+                    "RAG - если клиент задаёт вопрос о компании, условиях, документах, адресах, "
+                    "или любой другой информационный вопрос\n"
+                    "Ответь ТОЛЬКО одно слово: TOOL или RAG"
+                ),
+                user_prompt=f"Контекст диалога: {memory_block[-200:] if memory_block else 'начало разговора'}\nСообщение: {message}",
+                temperature=0.0,
+                max_tokens=5,
+                timeout_sec=5,
+            )
+            intent = classify_resp.text.strip().upper()
+            needs_tool = "TOOL" in intent
+        except Exception:
+            # Classification failed, fall back to keyword heuristic
+            needs_tool = has_sms_intent or any(
+                t in message.lower() for t in
+                ["рассчит", "расчет", "расчёт", "посчит", "пересчит", "калькул"]
+            )
+        # Also treat SMS intent as tool
+        if has_sms_intent:
+            needs_tool = True
+
+    # SMS context for send_sms
     sms_context = ""
     if has_sms_intent and session.tool_calls_this_turn:
         last_calc = next(
@@ -631,19 +663,26 @@ async def _stream_voice_response(
             calc_tool = get_tool("calculator")
             sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
 
-    user_prompt = (
-        f"{sms_context}"
-        f"{memory_block}"
-        f"Текущий вопрос клиента: {message}\n\n"
-        f"{length_hint}\n\n"
-        "Фрагменты из базы знаний (источник фактов для общих вопросов; "
-        "для расчёта платежей используй инструмент calculator):\n\n"
-        f"{weak_hint}{context_block}"
-    )
-    llm_messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
+    if needs_tool:
+        # TOOL path: clean message, no RAG (tool calling works reliably)
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"{sms_context}{message}"},
+        ]
+    else:
+        # RAG path: full context for KB questions
+        user_prompt = (
+            f"{memory_block}"
+            f"Текущий вопрос клиента: {message}\n\n"
+            f"{length_hint}\n\n"
+            "Фрагменты из базы знаний (ЕДИНСТВЕННЫЙ источник фактов. "
+            "Адреса, числа, ставки бери ТОЛЬКО отсюда):\n\n"
+            f"{weak_hint}{context_block}"
+        )
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
     voice_max_tokens = 200
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
