@@ -601,26 +601,44 @@ async def _stream_voice_response(
     # Get tool schemas early
     tool_schemas = get_tool_schemas()
 
-    # Build the user message clean (no RAG preamble mixed in).
-    # RAG context goes in a separate system message so it does not
-    # suppress tool-calling behavior in the model.
-    user_prompt = f"{memory_block}Текущий вопрос клиента: {message}"
-
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
 
-    # --- Build messages list for tool-aware LLM call ---
-    # RAG context appended to system prompt (not in user message)
-    # so the user message stays clean and does not suppress tool calling.
-    rag_section = (
-        f"\n\n# Справочная информация\n{length_hint}\n"
-        f"Для общих вопросов используй эти данные. Для расчётов используй инструменты.\n\n"
-        f"{weak_hint}{context_block}"
-    )
-    llm_messages = [
-        {"role": "system", "content": system_prompt + rag_section},
-        {"role": "user", "content": user_prompt},
-    ]
+    # --- Two-path message building ---
+    # Qwen3.5 suppresses tool calling when ANY reference/KB text is present.
+    # Path 1 (tool-eligible): clean system prompt + clean user message, no RAG.
+    # Path 2 (standard): system prompt + RAG context in user message.
+    calc_triggers = ["рассчит", "расчет", "расчёт", "посчит", "калькул",
+                     "сколько буд", "график плат", "платёж", "платеж",
+                     "ежемесяч", "стоимость лизинг"]
+    msg_lower = message.lower()
+    has_calc_intent = any(t in msg_lower for t in calc_triggers)
+    if not has_calc_intent and chat_session and chat_session.transcript:
+        recent = " ".join(t.get("text", "").lower() for t in chat_session.transcript[-6:])
+        has_calc_intent = any(t in recent for t in calc_triggers)
+
+    if has_calc_intent and tool_schemas:
+        # Path 1: tool-eligible. No RAG, clean message.
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"{memory_block}{message}"},
+        ]
+    else:
+        # Path 2: standard RAG-grounded answering.
+        user_prompt = (
+            f"{memory_block}"
+            f"Текущий вопрос клиента: {message}\n\n"
+            f"{length_hint}\n\n"
+            "Фрагменты из базы знаний (ЕДИНСТВЕННЫЙ источник фактов. "
+            "Адреса, числа, ставки бери ТОЛЬКО отсюда, не из своих знаний. "
+            "Если ответ ЕСТЬ во фрагментах, ты ОБЯЗАНА его использовать. "
+            "НЕ говори 'нет данных' если фрагменты содержат ответ):\n\n"
+            f"{weak_hint}{context_block}"
+        )
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
     voice_max_tokens = 120  # 1-2 sentences
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---

@@ -38,18 +38,12 @@ def main():
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
     print(f"System prompt: {len(system_prompt)} chars")
 
-    # Build messages (same structure as app.py _stream_voice_response)
-    # RAG context appended to system prompt, user message stays clean
-    rag_section = (
-        "\n\n# Справочная информация\n"
-        "Это голосовой разговор. Ответ: 1-2 коротких предложения.\n"
-        "Для общих вопросов используй эти данные. Для расчётов используй инструменты.\n\n"
-        "[Нет фрагментов для этого запроса]\n"
-    )
-
+    # Build messages: same two-path structure as app.py
+    # For calc requests: clean system prompt + clean user message (no RAG)
+    # This matches Test 2 which was proven to trigger tool calls.
     messages = [
-        {"role": "system", "content": system_prompt + rag_section},
-        {"role": "user", "content": f"Текущий вопрос клиента: {message}"},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": message},
     ]
 
     base_url = settings.llm.fast_base_url or settings.llm.base_url
