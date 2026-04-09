@@ -618,16 +618,22 @@ async def _stream_voice_response(
         has_calc_intent = any(t in recent for t in calc_triggers)
 
     if has_calc_intent and tool_schemas:
-        # Path 1: tool-eligible. No RAG, minimal memory.
-        # Only include client name from memory, not full conversation history.
-        # Full history makes the model continue in "conversational" mode
-        # instead of calling tools.
-        name_hint = ""
+        # Path 1: tool-eligible. No RAG, compact memory only.
+        # Full memory_block uses "Предыдущие реплики:" format which puts
+        # the model in conversational mode. Instead, extract just the
+        # key facts (client name, parameters mentioned) as a one-liner.
+        compact_memory = ""
         if session.client_name:
-            name_hint = f"Имя клиента: {session.client_name}. "
+            compact_memory += f"Клиент: {session.client_name}. "
+        if chat_session and chat_session.transcript:
+            # Extract any numbers/params from recent user messages
+            recent_user = [t.get("text", "") for t in chat_session.transcript[-4:]
+                          if t.get("role") == "user"]
+            if recent_user:
+                compact_memory += "Из диалога: " + " | ".join(recent_user) + "\n"
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{name_hint}{message}"},
+            {"role": "user", "content": f"{compact_memory}{message}"},
         ]
     else:
         # Path 2: standard RAG-grounded answering.
