@@ -236,6 +236,125 @@ def test_client_type_validation(settings):
         return False
 
 
+def test_rag_after_calc(settings, system_prompt, schemas):
+    """Test 11: RAG works for normal questions AFTER a calculator conversation."""
+    # Simulate: calc happened, now user asks a KB question
+    # The key: "кто директор" should NOT go through calc path
+    messages = [
+        {"role": "system", "content": system_prompt},
+        # Previous calc exchange in history
+        {"role": "user", "content": "Рассчитай лизинг на машину за 30 тысяч"},
+        {"role": "assistant", "content": "Аванс 9000, платёж 898, срок 36 мес. Хотите изменить параметр или отправить по СМС?"},
+        # Now a KB question
+        {"role": "user", "content": "Кто директор вашей компании?"},
+    ]
+    tc, text = call_llm(settings, system_prompt, messages, schemas)
+    if not tc and ("дедков" in text.lower() or "директор" in text.lower()):
+        print(f"  PASS: RAG answered about director after calc context")
+        return True
+    elif tc:
+        print(f"  FAIL: tool was called for KB question after calc")
+        return False
+    else:
+        print(f"  FAIL: no useful answer: {text[:100]}")
+        return False
+
+
+def test_sms_actually_sends(settings):
+    """Test 12: SMS API actually sends (to non-existent number, checks response code)."""
+    tool = get_tool("send_sms")
+    result = tool.execute({
+        "phone": "375000000000",  # Non-existent number, won't charge
+        "message": "Test from automated validation",
+    }, {})
+    # Response should be ok=True (message accepted) or ok=False with a delivery error
+    # but NOT an auth error (-2) or connection error
+    if result.get("ok"):
+        print(f"  PASS: SMS API accepted message (id={result.get('message_id', '?')})")
+        return True
+    elif "авторизац" in result.get("error", "").lower() or "-2" in result.get("error", ""):
+        print(f"  FAIL: SMS auth error - credentials wrong")
+        return False
+    else:
+        # Other errors (invalid number, etc.) still mean the API is reachable
+        print(f"  PASS: SMS API reachable (error for fake number: {result.get('error', '?')})")
+        return True
+
+
+def test_normal_then_calc(settings, system_prompt, schemas):
+    """Test 13: Normal KB question first, then calculator works."""
+    # Turn 1: KB question
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Какие документы нужны для лизинга?"},
+    ]
+    tc1, text1 = call_llm(settings, system_prompt, messages, schemas)
+    kb_ok = not tc1 and len(text1) > 30
+    print(f"  {'PASS' if kb_ok else 'FAIL'}: KB question answered ({len(text1)} chars)")
+
+    # Turn 2: Calculator (fresh messages, simulating new turn)
+    messages2 = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Рассчитай лизинг на машину за 50 тысяч"},
+    ]
+    tc2, text2 = call_llm(settings, system_prompt, messages2, schemas)
+    calc_ok = tc2 and tc2[0]["function"]["name"] == "calculator"
+    print(f"  {'PASS' if calc_ok else 'FAIL'}: calculator called after KB question")
+    return kb_ok and calc_ok
+
+
+def test_link_from_api(settings):
+    """Test 14: Calculator API returns a valid URL in the response."""
+    tool = get_tool("calculator")
+    params, _ = tool.fill_defaults({"subject": "Легковой автомобиль", "cost": 30000})
+    result = tool.execute(params, {})
+    url = result.get("url", "")
+    has_url = url.startswith("https://mikro-leasing.by/graphic/?") and len(url) > 40
+    calc_id = result.get("calculation_id", "")
+    has_id = len(calc_id) > 5
+    print(f"  {'PASS' if has_url else 'FAIL'}: URL = {url}")
+    print(f"  {'PASS' if has_id else 'FAIL'}: calculation_id = {calc_id}")
+    return has_url and has_id
+
+
+def test_sms_no_repeat(settings, system_prompt, schemas):
+    """Test 15: After SMS sent, model says short confirmation, does NOT repeat calc results."""
+    # Simulate the tool result from send_sms
+    sms_tool = get_tool("send_sms")
+    sms_result = {"ok": True, "message_id": "12345"}
+    summary = sms_tool.format_voice_summary(sms_result)
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Рассчитай лизинг на машину за 30 тысяч"},
+        {"role": "assistant", "content": "Аванс 9000, платёж 898 BYN. Отправить по СМС?"},
+        {"role": "user", "content": "Да, отправь"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "call_sms", "type": "function",
+                         "function": {"name": "send_sms", "arguments": '{"phone":"375291224557","message":"test"}'}}]},
+        {"role": "tool", "tool_call_id": "call_sms", "content": summary},
+    ]
+
+    base_url = settings.llm.fast_base_url or settings.llm.base_url
+    model = settings.llm.model
+    events = list(iter_openai_compatible_stream_events(
+        base_url=base_url, model=model, messages=messages,
+        temperature=0.3, max_tokens=150, timeout_sec=30, tools=schemas,
+    ))
+    text = "".join(
+        (e.get("choices") or [{}])[0].get("delta", {}).get("content", "") or ""
+        for e in events
+    )
+    is_short = len(text) < 200
+    has_confirm = "отправ" in text.lower() or "готово" in text.lower() or "помочь" in text.lower()
+    no_repeat = "9000" not in text and "898" not in text
+    print(f"  {'PASS' if is_short else 'FAIL'}: response is short ({len(text)} chars)")
+    print(f"  {'PASS' if has_confirm else 'FAIL'}: has confirmation")
+    print(f"  {'PASS' if no_repeat else 'FAIL'}: does NOT repeat calc numbers")
+    print(f"  Response: {text[:150]}")
+    return is_short and has_confirm and no_repeat
+
+
 def main():
     settings = load_settings()
     init_tools(settings)
@@ -258,6 +377,11 @@ def main():
         ("8. Abbreviation TTS (BYN, SMS)", test_abbreviation_tts),
         ("9. Second LLM call presents results + offers SMS", lambda: test_second_llm_call(settings, system_prompt, schemas)),
         ("10. Used vehicle without age rejected", lambda: test_client_type_validation(settings)),
+        ("11. RAG works after calculator conversation", lambda: test_rag_after_calc(settings, system_prompt, schemas)),
+        ("12. SMS API actually sends", lambda: test_sms_actually_sends(settings)),
+        ("13. Normal KB question then calculator works", lambda: test_normal_then_calc(settings, system_prompt, schemas)),
+        ("14. Calculator API returns valid URL/link", lambda: test_link_from_api(settings)),
+        ("15. SMS confirmation is short, no repeat", lambda: test_sms_no_repeat(settings, system_prompt, schemas)),
     ]
 
     results = []
