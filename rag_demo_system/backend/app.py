@@ -607,16 +607,17 @@ async def _stream_voice_response(
     # --- Two-path message building ---
     # Qwen3.5 suppresses tool calling when ANY reference/KB text is present.
     # Path 1 (tool-eligible): clean system prompt + clean user message, no RAG.
-    # Path 2 (standard): system prompt + RAG context in user message.
-    # --- Unified approach: tools always available, RAG conditionally included ---
-    # Qwen3.5 suppresses tool calls when RAG-style text is in the prompt.
-    # But RAG is needed for KB questions (director, offices, conditions).
+    # --- Message building ---
+    # Two concerns that conflict:
+    # 1. RAG context in user message suppresses tool calling in Qwen3.5
+    # 2. RAG context is needed for KB questions (director, offices, etc.)
     #
-    # Strategy: if tools were already used in this session, the model is in
-    # "tool mode" and all messages go through the clean path (no RAG).
-    # Conversation memory has the KB answers from earlier turns.
-    # If tools were NOT used yet, include RAG for KB questions.
-    tools_used_in_session = bool(session.tool_calls_this_turn)
+    # Solution: RAG always included. Tools always passed. For the FIRST
+    # tool call in a session, the model may fail to call the tool (needs
+    # explicit "рассчитай"). But once tools are used, subsequent turns
+    # have both RAG and tool access. The model decides: call tool or
+    # answer from RAG. Recalculations work because the model remembers
+    # the calculator context.
 
     # SMS context for send_sms
     sms_triggers = ["отправ", "смс", "sms", "пришли"]
@@ -630,20 +631,19 @@ async def _stream_voice_response(
             calc_tool = get_tool("calculator")
             sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
 
-    if tools_used_in_session:
-        # Tools already used: clean path. Model uses conversation memory.
-        llm_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{sms_context}{memory_block}{message}"},
-        ]
-    else:
-        # No tools used yet: include RAG for KB questions.
-        # User message is clean (no RAG text) to not suppress tool calling.
-        # RAG goes in system prompt appendix.
-        llm_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{memory_block}{message}"},
-        ]
+    user_prompt = (
+        f"{sms_context}"
+        f"{memory_block}"
+        f"Текущий вопрос клиента: {message}\n\n"
+        f"{length_hint}\n\n"
+        "Фрагменты из базы знаний (источник фактов для общих вопросов; "
+        "для расчёта платежей используй инструмент calculator):\n\n"
+        f"{weak_hint}{context_block}"
+    )
+    llm_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
     voice_max_tokens = 200
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
