@@ -671,11 +671,14 @@ async def _stream_voice_response(
             has_content = False
 
             try:
+                # Lower temperature for tool-intent turns (more deterministic)
+                # Normal temp for regular turns and for post-tool response
+                temp = 0.1 if (has_calc_intent and iteration == 0) else settings.llm.temperature
                 stream = iter_openai_compatible_stream_events(
                     base_url=effective_base_url,
                     model=effective_model,
                     messages=llm_messages,
-                    temperature=settings.llm.temperature,
+                    temperature=temp,
                     max_tokens=voice_max_tokens if iteration == 0 else 220,
                     timeout_sec=settings.llm.timeout_sec,
                     tools=tool_schemas if iteration < max_tool_iterations else None,
