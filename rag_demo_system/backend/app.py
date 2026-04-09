@@ -620,13 +620,11 @@ async def _stream_voice_response(
     has_tool_intent = (has_calc_intent or has_sms_intent) and tool_schemas
 
     if has_tool_intent:
-        # Path 1: tool-eligible. No RAG, compact memory only.
-        compact_memory = ""
-        if session.client_name:
-            compact_memory += f"Клиент: {session.client_name}. "
-
-        # For SMS intent: include last calculator result so model has
-        # the URL and data to construct the SMS message.
+        # Path 1: tool-eligible. CLEAN user message, no memory prefix.
+        # Any prefix (compact memory, dialog history) suppresses tool calling
+        # in Qwen3.5. The model gets system prompt + tools + clean message.
+        #
+        # For SMS: include the calculator result so the model knows what to send.
         if has_sms_intent and session.tool_calls_this_turn:
             last_calc = next(
                 (tc for tc in reversed(session.tool_calls_this_turn)
@@ -634,19 +632,16 @@ async def _stream_voice_response(
                 None,
             )
             if last_calc and last_calc.get("result", {}).get("ok"):
-                from .tools import get_tool
                 calc_tool = get_tool("calculator")
                 sms_body = calc_tool.format_sms_body(last_calc["result"])
-                compact_memory += f"Последний расчёт (для отправки по СМС):\n{sms_body}\n\n"
-
-        if chat_session and chat_session.transcript:
-            recent_user = [t.get("text", "") for t in chat_session.transcript[-4:]
-                          if t.get("role") == "user"]
-            if recent_user:
-                compact_memory += "Из диалога: " + " | ".join(recent_user) + "\n"
+                user_content = f"Клиент просит отправить СМС. Текст для отправки:\n{sms_body}\n\n{message}"
+            else:
+                user_content = message
+        else:
+            user_content = message
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{compact_memory}{message}"},
+            {"role": "user", "content": user_content},
         ]
     else:
         # Path 2: standard RAG-grounded answering.
