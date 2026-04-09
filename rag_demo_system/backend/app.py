@@ -745,8 +745,13 @@ async def _stream_voice_response(
                     summary = tool.format_voice_summary(result)
                 except KeyError:
                     summary = f"Инструмент '{func_name}' не найден."
+                    state.log({"event": "tool_error", "session_id": session_id, "tool": func_name, "error": "tool_not_found"})
                 except Exception as exc:  # noqa: BLE001
+                    import traceback
+                    tb = traceback.format_exc()
                     summary = f"Ошибка выполнения инструмента: {exc}"
+                    state.log({"event": "tool_error", "session_id": session_id, "tool": func_name, "error": str(exc), "traceback": tb})
+                    print(f"[TOOL ERROR] {func_name}: {exc}\n{tb}", flush=True)
 
                 # Append tool call + result to messages for next LLM iteration
                 llm_messages.append({
