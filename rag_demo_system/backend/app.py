@@ -601,34 +601,24 @@ async def _stream_voice_response(
     # Get tool schemas early
     tool_schemas = get_tool_schemas()
 
-    # Build user prompt: always include RAG context, but with tool-aware preamble.
-    # The LLM decides when to call tools vs answer from KB. No keyword detection.
-    tool_preamble = (
-        "ВАЖНО: если для ответа нужно выполнить действие (расчёт, отправка СМС), "
-        "ВЫЗОВИ соответствующий инструмент вместо текстового ответа. "
-        "Инструменты имеют приоритет над фрагментами базы знаний для расчётов.\n\n"
-    ) if tool_schemas else ""
+    # Build the user message clean (no RAG preamble mixed in).
+    # RAG context goes in a separate system message so it does not
+    # suppress tool-calling behavior in the model.
+    user_prompt = f"{memory_block}Текущий вопрос клиента: {message}"
 
-    rag_preamble = (
-        "Фрагменты из базы знаний (источник фактов для общих вопросов. "
-        "Адреса, числа, контакты бери ТОЛЬКО отсюда. "
-        "Но для расчёта платежей используй инструмент calculator, а не текст из фрагментов):\n\n"
-    )
-
-    user_prompt = (
-        f"{memory_block}"
-        f"{tool_preamble}"
-        f"Текущий вопрос клиента: {message}\n\n"
-        f"{length_hint}\n\n"
-        f"{rag_preamble}"
-        f"{weak_hint}{context_block}"
-    )
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
 
     # --- Build messages list for tool-aware LLM call ---
+    # Structure: system prompt -> RAG context (as system) -> user message (clean)
+    rag_context_msg = (
+        f"{length_hint}\n\n"
+        f"Справочная информация (для общих вопросов; для расчётов используй инструменты):\n\n"
+        f"{weak_hint}{context_block}"
+    )
     llm_messages = [
         {"role": "system", "content": system_prompt},
+        {"role": "system", "content": rag_context_msg},
         {"role": "user", "content": user_prompt},
     ]
     voice_max_tokens = 120  # 1-2 sentences

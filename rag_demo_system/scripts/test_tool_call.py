@@ -38,25 +38,18 @@ def main():
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
     print(f"System prompt: {len(system_prompt)} chars")
 
-    # Build user prompt (same as app.py _stream_voice_response)
-    tool_preamble = (
-        "ВАЖНО: если для ответа нужно выполнить действие (расчёт, отправка СМС), "
-        "ВЫЗОВИ соответствующий инструмент вместо текстового ответа. "
-        "Инструменты имеют приоритет над фрагментами базы знаний для расчётов.\n\n"
-    ) if schemas else ""
-
-    user_prompt = (
-        f"{tool_preamble}"
-        f"Текущий вопрос клиента: {message}\n\n"
+    # Build messages (same structure as app.py _stream_voice_response)
+    # RAG context in separate system message, user message is clean
+    rag_context = (
         "Это голосовой разговор. Ответ: 1-2 коротких предложения.\n\n"
-        "Фрагменты из базы знаний (источник фактов для общих вопросов. "
-        "Но для расчёта платежей используй инструмент calculator, а не текст из фрагментов):\n\n"
+        "Справочная информация (для общих вопросов; для расчётов используй инструменты):\n\n"
         "[Нет фрагментов для этого запроса]\n"
     )
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "system", "content": rag_context},
+        {"role": "user", "content": f"Текущий вопрос клиента: {message}"},
     ]
 
     base_url = settings.llm.fast_base_url or settings.llm.base_url
