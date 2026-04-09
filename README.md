@@ -11,8 +11,7 @@ This repository contains several long-lived branches. Each represents a distinct
 | Branch | Status | Commits ahead of main | Description |
 |--------|--------|----------------------|-------------|
 | `main` | Baseline | -- | Original call analysis pipeline: transcription, NLU, knowledge base generation |
-| `feature/voice-pipeline` | Production | 223 | Full voice assistant: STT, TTS, VAD, RAG, barge-in, session management |
-| `feature/tool-use` | Active development | 235 | Tool use layer on top of voice-pipeline: calculator API, SMS, streaming tool loop |
+| `feature/voice-pipeline` | Production | 250+ | Full voice assistant with tool use: STT, TTS, VAD, RAG, calculator, SMS, LLM intent routing |
 | `claude/qwen-voice-next` | Experimental | 204 | Qwen3-Omni benchmarking, multi-model voice testing |
 | `codex/split-voice-providers` | Spike | 3 | Quick experiment: split-brain voice provider options |
 | `codex/yandex-realtime-voice-integration` | Spike | 5 | Yandex SpeechKit realtime voice demo |
@@ -112,16 +111,18 @@ rag_demo_system/
 
 ### feature/tool-use: Tool Use Layer
 
-Extends the voice assistant with mid-conversation tool calling. The LLM can invoke external APIs during a conversation using native OpenAI function calling (`tools=[]`).
+**Now merged into feature/voice-pipeline.** Tool use is part of the production voice assistant.
+
+The voice assistant uses mid-conversation tool calling via native OpenAI function calling (`tools=[]`). A fast LLM intent classifier routes each message to either the TOOL path (clean prompt for reliable tool calling) or the RAG path (full KB context for information questions).
 
 **How it works:**
 
-1. LLM detects user intent requires a tool (e.g., "calculate payments for a BMW X5")
-2. Orchestrator sends a filler phrase to TTS ("One moment, calculating...")
-3. Tool executes (HTTP call to external API)
-4. Result injected back into LLM context
-5. LLM continues streaming the spoken response with the results
-6. After calculator results, the bot always offers to send the schedule via SMS
+1. Fast LLM call (~200ms) classifies message as TOOL or RAG intent
+2. TOOL path: clean system prompt + user message, tools always available
+3. RAG path: system prompt + memory + KB fragments for information questions
+4. When tool is called: filler phrase plays, tool executes, result injected, LLM presents results
+5. Recalculations include previous params so model can adjust specific values
+6. After results, bot offers SMS with payment schedule link
 
 **Tools:**
 
@@ -162,10 +163,10 @@ mkdir -p audio/        # drop .wav/.mp3 files here
 make transcribe && make analyze-calls && make kb
 ```
 
-**For the voice assistant (feature/tool-use, latest):**
+**For the voice assistant (feature/voice-pipeline):**
 
 ```bash
-git clone --branch feature/tool-use git@github.com:yauhenifutryn/leasing.git
+git clone --branch feature/voice-pipeline git@github.com:yauhenifutryn/leasing.git
 cd leasing/rag_demo_system
 cp .env.example .env   # fill in all credentials
 HF_TOKEN=hf_... bash scripts/provision_server.sh
