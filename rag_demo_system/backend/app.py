@@ -598,6 +598,9 @@ async def _stream_voice_response(
         "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
+    # Get tool schemas early so we can use them in prompt decisions
+    tool_schemas = get_tool_schemas()
+
     # Detect if this is a calculation request. If so, skip RAG context
     # because RAG fragments about "data needed for calculation" override
     # the tool-calling behavior and make the model ask questions instead.
@@ -646,7 +649,6 @@ async def _stream_voice_response(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    tool_schemas = get_tool_schemas()
     voice_max_tokens = 120  # 1-2 sentences
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
