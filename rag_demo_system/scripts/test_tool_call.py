@@ -34,11 +34,14 @@ def main():
         print(f"  - {s['function']['name']}")
     print()
 
-    # Load system prompt + tool instructions
+    # Load system prompt + inject tool instructions at placeholder
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
     tool_instructions_path = settings.app.system_prompt_path.parent / "tool_instructions.txt"
     if tool_instructions_path.exists() and schemas:
-        system_prompt += "\n\n" + tool_instructions_path.read_text(encoding="utf-8")
+        tool_instructions = tool_instructions_path.read_text(encoding="utf-8")
+        system_prompt = system_prompt.replace("{TOOL_INSTRUCTIONS}", tool_instructions)
+    else:
+        system_prompt = system_prompt.replace("{TOOL_INSTRUCTIONS}", "")
     print(f"System prompt: {len(system_prompt)} chars (with tool instructions)")
 
     # Build messages: same two-path structure as app.py
