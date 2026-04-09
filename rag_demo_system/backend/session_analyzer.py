@@ -25,14 +25,22 @@ _ANALYSIS_PROMPT = """Ты аналитик качества голосовог�
 7. kb_gaps: какие вопросы клиента остались без ответа из-за отсутствия данных в базе знаний? Перечисли темы.
 8. response_variety: были ли ответы структурно разнообразными или однотипными?
 9. client_satisfaction_signals: были ли сигналы раздражения или удовлетворенности клиента?
+10. tool_use_quality: если бот использовал инструменты (калькулятор, СМС), оцени:
+    - Был ли инструмент вызван уместно (клиент действительно просил расчёт или отправку)?
+    - Правильно ли бот заполнил параметры (предмет, стоимость, валюта)?
+    - Озвучил ли бот какие параметры были по умолчанию?
+    - Предложил ли бот отправить график по СМС после расчёта?
+    - Если инструмент не был вызван, но клиент спрашивал про расчёт, это ошибка: бот должен был вызвать калькулятор.
+    Если инструменты не использовались и не требовались, ставь 10.
 
 Верни строго JSON:
 {
-  "scores": {"banned_phrases": N, "specialist_overuse": N, "humor_and_tone": N, "answer_completeness": N, "response_variety": N},
+  "scores": {"banned_phrases": N, "specialist_overuse": N, "humor_and_tone": N, "answer_completeness": N, "response_variety": N, "tool_use_quality": N},
   "issues": [{"type": "тип", "severity": "critical|important|minor", "detail": "описание", "suggested_fix": "предложение"}],
   "kb_gaps": ["тема1", "тема2"],
   "banned_phrases_found": ["фраза1"],
   "specialist_count": {"offered": N, "appropriate": N},
+  "tool_calls": {"calculator_called": true/false, "sms_called": true/false, "missed_opportunity": "описание или null", "defaults_announced": true/false, "sms_offered_after_calc": true/false},
   "name_count": N,
   "overall_score": N,
   "summary": "одно предложение"
