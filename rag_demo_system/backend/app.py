@@ -732,6 +732,7 @@ async def _stream_voice_response(
                 await sentence_queue.put(filler)
 
                 # Execute tool in a thread (synchronous httpx)
+                tool_ok = False
                 try:
                     tool = get_tool(func_name)
                     filled_params, defaulted = tool.fill_defaults(func_args)
@@ -739,6 +740,7 @@ async def _stream_voice_response(
                         tool.execute, filled_params, {"session_id": session_id}
                     )
                     result["defaulted"] = defaulted
+                    tool_ok = result.get("ok", False)
                     session.tool_calls_this_turn.append({
                         "tool": func_name, "params": filled_params, "result": result,
                     })
@@ -778,7 +780,7 @@ async def _stream_voice_response(
                         "type": "tool_call.done",
                         "session_id": session_id,
                         "tool": func_name,
-                        "ok": result.get("ok", False) if isinstance(result, dict) else False,
+                        "ok": tool_ok,
                     })
                 except (RuntimeError, WebSocketDisconnect):
                     pass
