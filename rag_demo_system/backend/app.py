@@ -683,6 +683,11 @@ async def _stream_voice_response(
                 # Lower temperature for tool-intent turns (more deterministic)
                 # Normal temp for regular turns and for post-tool response
                 temp = 0.1 if (has_calc_intent and iteration == 0) else settings.llm.temperature
+                tools_to_send = tool_schemas if iteration < max_tool_iterations else None
+                if has_calc_intent and iteration == 0:
+                    print(f"[TOOL DEBUG] LLM call: temp={temp}, max_tokens={voice_max_tokens}, "
+                          f"tools={len(tools_to_send) if tools_to_send else 0}, "
+                          f"user_content_first100={llm_messages[-1]['content'][:100]}", flush=True)
                 stream = iter_openai_compatible_stream_events(
                     base_url=effective_base_url,
                     model=effective_model,
@@ -690,7 +695,7 @@ async def _stream_voice_response(
                     temperature=temp,
                     max_tokens=voice_max_tokens if iteration == 0 else 220,
                     timeout_sec=settings.llm.timeout_sec,
-                    tools=tool_schemas if iteration < max_tool_iterations else None,
+                    tools=tools_to_send,
                 )
                 _sentinel = object()
                 while True:
