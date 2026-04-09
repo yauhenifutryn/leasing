@@ -609,15 +609,17 @@ async def _stream_voice_response(
     # Path 1 (tool-eligible): clean system prompt + clean user message, no RAG.
     # Path 2 (standard): system prompt + RAG context in user message.
     calc_triggers = ["рассчит", "расчет", "расчёт", "посчит", "калькул",
-                     "сколько буд", "график плат", "платёж", "платеж",
-                     "ежемесяч", "стоимость лизинг"]
+                     "сколько буд", "график плат"]
+    sms_triggers = ["отправ", "смс", "sms", "пришли"]
     msg_lower = message.lower()
+    # Check ONLY current message for calc/sms intent.
+    # Do NOT check conversation memory: it causes ALL subsequent messages
+    # to go through the no-RAG path (e.g. "кто директор" after a calculation).
     has_calc_intent = any(t in msg_lower for t in calc_triggers)
-    if not has_calc_intent and chat_session and chat_session.transcript:
-        recent = " ".join(t.get("text", "").lower() for t in chat_session.transcript[-6:])
-        has_calc_intent = any(t in recent for t in calc_triggers)
+    has_sms_intent = any(t in msg_lower for t in sms_triggers)
+    has_tool_intent = (has_calc_intent or has_sms_intent) and tool_schemas
 
-    if has_calc_intent and tool_schemas:
+    if has_tool_intent:
         # Path 1: tool-eligible. No RAG, compact memory only.
         # Full memory_block uses "Предыдущие реплики:" format which puts
         # the model in conversational mode. Instead, extract just the
@@ -653,7 +655,7 @@ async def _stream_voice_response(
         ]
     # More tokens for tool-call turns: tool call XML + arguments needs room.
     # Regular voice turns: 120 tokens (1-2 sentences).
-    voice_max_tokens = 200 if (has_calc_intent and tool_schemas) else 120
+    voice_max_tokens = 200 if has_tool_intent else 120
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
     sentence_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
@@ -665,7 +667,7 @@ async def _stream_voice_response(
         nonlocal t_llm_first_token
         max_tool_iterations = 3
         # Debug: log tool calling context
-        if has_calc_intent and tool_schemas:
+        if has_tool_intent:
             print(f"[TOOL DEBUG] calc_intent=True, tools={len(tool_schemas)}, "
                   f"msg_count={len(llm_messages)}, user_msg_len={len(llm_messages[-1]['content'])}", flush=True)
 
@@ -677,7 +679,7 @@ async def _stream_voice_response(
             try:
                 # Lower temperature for tool-intent turns (more deterministic)
                 # Normal temp for regular turns and for post-tool response
-                temp = 0.1 if (has_calc_intent and iteration == 0) else settings.llm.temperature
+                temp = 0.1 if (has_tool_intent and iteration == 0) else settings.llm.temperature
                 tools_to_send = tool_schemas if iteration < max_tool_iterations else None
                 if has_calc_intent and iteration == 0:
                     print(f"[TOOL DEBUG] LLM call: temp={temp}, max_tokens={voice_max_tokens}, "
@@ -705,7 +707,7 @@ async def _stream_voice_response(
                     finish_reason = choice.get("finish_reason")
 
                     # Debug: log first few events and tool call deltas
-                    if has_calc_intent and len(collected_events) <= 3:
+                    if has_tool_intent and len(collected_events) <= 3:
                         tc_delta = delta.get("tool_calls")
                         content_val = delta.get("content")
                         print(f"[TOOL DEBUG] event#{len(collected_events)}: content={repr(content_val)}, "

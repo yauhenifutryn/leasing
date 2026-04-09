@@ -399,7 +399,10 @@ def _load_stress_dict() -> list[tuple[re.Pattern, str]]:
     return _STRESS_DICT
 
 
+# Phone with + prefix and optional grouping: +375 222 71 76 76
 _RE_PHONE = re.compile(r"\+\d{1,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}")
+# Bare 12-digit Belarus phone number without +: 375291224557
+_RE_BARE_PHONE = re.compile(r"\b(375\d{9})\b")
 
 
 def _format_phone_for_tts(m: re.Match) -> str:
@@ -422,9 +425,18 @@ def _format_phone_for_tts(m: re.Match) -> str:
     return ", ".join(result)
 
 
+def _format_bare_phone_for_tts(m: re.Match) -> str:
+    """Format bare 12-digit phone: 375291224557 -> 'плюс 375, 29, 122, 45, 57'."""
+    digits = m.group(1)
+    # Group as: country(3) + operator(2) + 3 + 2 + 2
+    return f"плюс {digits[:3]}, {digits[3:5]}, {digits[5:8]}, {digits[8:10]}, {digits[10:12]}"
+
+
 def format_phones_for_tts(text: str) -> str:
     """Replace phone numbers with TTS-friendly grouped format."""
-    return _RE_PHONE.sub(_format_phone_for_tts, text)
+    text = _RE_PHONE.sub(_format_phone_for_tts, text)
+    text = _RE_BARE_PHONE.sub(_format_bare_phone_for_tts, text)
+    return text
 
 
 def apply_stress_marks(text: str) -> str:
