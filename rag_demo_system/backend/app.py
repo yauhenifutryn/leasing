@@ -598,49 +598,31 @@ async def _stream_voice_response(
         "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
-    # Get tool schemas early so we can use them in prompt decisions
+    # Get tool schemas early
     tool_schemas = get_tool_schemas()
 
-    # Detect if this is a calculation request. If so, skip RAG context
-    # because RAG fragments about "data needed for calculation" override
-    # the tool-calling behavior and make the model ask questions instead.
-    calc_triggers = ["рассчит", "расчет", "расчёт", "посчит", "калькул", "сколько буд", "график плат"]
-    is_calc_request = tool_schemas and any(t in message.lower() for t in calc_triggers)
+    # Build user prompt: always include RAG context, but with tool-aware preamble.
+    # The LLM decides when to call tools vs answer from KB. No keyword detection.
+    tool_preamble = (
+        "ВАЖНО: если для ответа нужно выполнить действие (расчёт, отправка СМС), "
+        "ВЫЗОВИ соответствующий инструмент вместо текстового ответа. "
+        "Инструменты имеют приоритет над фрагментами базы знаний для расчётов.\n\n"
+    ) if tool_schemas else ""
 
-    # Also check conversation memory for ongoing calculation context
-    if not is_calc_request and tool_schemas and chat_session and chat_session.transcript:
-        recent_texts = [t.get("text", "").lower() for t in chat_session.transcript[-6:]]
-        recent_combined = " ".join(recent_texts)
-        if any(t in recent_combined for t in calc_triggers):
-            # User is continuing a calculation conversation (e.g., "новый, 30%")
-            is_calc_request = True
+    rag_preamble = (
+        "Фрагменты из базы знаний (источник фактов для общих вопросов. "
+        "Адреса, числа, контакты бери ТОЛЬКО отсюда. "
+        "Но для расчёта платежей используй инструмент calculator, а не текст из фрагментов):\n\n"
+    )
 
-    if is_calc_request:
-        # For calculation requests: no RAG context, just tool instruction
-        user_prompt = (
-            f"{memory_block}"
-            f"Текущий вопрос клиента: {message}\n\n"
-            "У тебя есть инструмент calculator. Клиент хочет расчёт лизинга. "
-            "Если он назвал предмет и стоимость, ВЫЗОВИ calculator НЕМЕДЛЕННО. "
-            "Не задавай дополнительных вопросов. Остальные параметры имеют значения по умолчанию.\n"
-        )
-    else:
-        # For all other questions: standard RAG context
-        tool_hint = (
-            "НАПОМИНАНИЕ: у тебя есть инструменты (calculator, send_sms). "
-            "Если клиент назвал предмет лизинга и стоимость, ВЫЗОВИ calculator.\n\n"
-        ) if tool_schemas else ""
-        user_prompt = (
-            f"{memory_block}"
-            f"{tool_hint}"
-            f"Текущий вопрос клиента: {message}\n\n"
-            f"{length_hint}\n\n"
-            "Фрагменты из базы знаний (ЕДИНСТВЕННЫЙ источник фактов. "
-            "Адреса, числа, ставки бери ТОЛЬКО отсюда, не из своих знаний. "
-            "Если ответ ЕСТЬ во фрагментах, ты ОБЯЗАНА его использовать. "
-            "НЕ говори 'нет данных' если фрагменты содержат ответ):\n\n"
-            f"{weak_hint}{context_block}"
-        )
+    user_prompt = (
+        f"{memory_block}"
+        f"{tool_preamble}"
+        f"Текущий вопрос клиента: {message}\n\n"
+        f"{length_hint}\n\n"
+        f"{rag_preamble}"
+        f"{weak_hint}{context_block}"
+    )
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
 
