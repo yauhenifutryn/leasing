@@ -34,9 +34,12 @@ def main():
         print(f"  - {s['function']['name']}")
     print()
 
-    # Load system prompt
+    # Load system prompt + tool instructions
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    print(f"System prompt: {len(system_prompt)} chars")
+    tool_instructions_path = settings.app.system_prompt_path.parent / "tool_instructions.txt"
+    if tool_instructions_path.exists() and schemas:
+        system_prompt += "\n\n" + tool_instructions_path.read_text(encoding="utf-8")
+    print(f"System prompt: {len(system_prompt)} chars (with tool instructions)")
 
     # Build messages: same two-path structure as app.py
     # For calc requests: clean system prompt + clean user message (no RAG)

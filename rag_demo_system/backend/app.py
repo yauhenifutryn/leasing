@@ -582,6 +582,11 @@ async def _stream_voice_response(
 
     # --- Build prompt ---
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    # Inject tool instructions if tools are active
+    tool_instructions_path = settings.app.system_prompt_path.parent / "tool_instructions.txt"
+    if tool_instructions_path.exists() and tool_schemas:
+        tool_instructions = tool_instructions_path.read_text(encoding="utf-8")
+        system_prompt = system_prompt + "\n\n" + tool_instructions
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
