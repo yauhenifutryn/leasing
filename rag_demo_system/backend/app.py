@@ -608,60 +608,43 @@ async def _stream_voice_response(
     # Qwen3.5 suppresses tool calling when ANY reference/KB text is present.
     # Path 1 (tool-eligible): clean system prompt + clean user message, no RAG.
     # Path 2 (standard): system prompt + RAG context in user message.
-    calc_triggers = ["рассчит", "расчет", "расчёт", "посчит", "калькул",
-                     "сколько буд", "график плат"]
-    sms_triggers = ["отправ", "смс", "sms", "пришли"]
-    msg_lower = message.lower()
-    # Check ONLY current message for calc/sms intent.
-    # Do NOT check conversation memory: it causes ALL subsequent messages
-    # to go through the no-RAG path (e.g. "кто директор" after a calculation).
-    has_calc_intent = any(t in msg_lower for t in calc_triggers)
-    has_sms_intent = any(t in msg_lower for t in sms_triggers)
-    has_tool_intent = (has_calc_intent or has_sms_intent) and tool_schemas
+    # --- Unified approach: tools always available, RAG conditionally included ---
+    # Qwen3.5 suppresses tool calls when RAG-style text is in the prompt.
+    # But RAG is needed for KB questions (director, offices, conditions).
+    #
+    # Strategy: if tools were already used in this session, the model is in
+    # "tool mode" and all messages go through the clean path (no RAG).
+    # Conversation memory has the KB answers from earlier turns.
+    # If tools were NOT used yet, include RAG for KB questions.
+    tools_used_in_session = bool(session.tool_calls_this_turn)
 
-    if has_tool_intent:
-        # Path 1: tool-eligible. CLEAN user message, no memory prefix.
-        # Any prefix (compact memory, dialog history) suppresses tool calling
-        # in Qwen3.5. The model gets system prompt + tools + clean message.
-        #
-        # For SMS: include the calculator result so the model knows what to send.
-        if has_sms_intent and session.tool_calls_this_turn:
-            last_calc = next(
-                (tc for tc in reversed(session.tool_calls_this_turn)
-                 if tc.get("tool") == "calculator"),
-                None,
-            )
-            if last_calc and last_calc.get("result", {}).get("ok"):
-                calc_tool = get_tool("calculator")
-                sms_body = calc_tool.format_sms_body(last_calc["result"])
-                user_content = f"Клиент просит отправить СМС. Текст для отправки:\n{sms_body}\n\n{message}"
-            else:
-                user_content = message
-        else:
-            user_content = message
+    # SMS context for send_sms
+    sms_triggers = ["отправ", "смс", "sms", "пришли"]
+    has_sms_intent = any(t in message.lower() for t in sms_triggers)
+    sms_context = ""
+    if has_sms_intent and session.tool_calls_this_turn:
+        last_calc = next(
+            (tc for tc in reversed(session.tool_calls_this_turn)
+             if tc.get("tool") == "calculator"), None)
+        if last_calc and last_calc.get("result", {}).get("ok"):
+            calc_tool = get_tool("calculator")
+            sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
+
+    if tools_used_in_session:
+        # Tools already used: clean path. Model uses conversation memory.
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": f"{sms_context}{memory_block}{message}"},
         ]
     else:
-        # Path 2: standard RAG-grounded answering.
-        user_prompt = (
-            f"{memory_block}"
-            f"Текущий вопрос клиента: {message}\n\n"
-            f"{length_hint}\n\n"
-            "Фрагменты из базы знаний (ЕДИНСТВЕННЫЙ источник фактов. "
-            "Адреса, числа, ставки бери ТОЛЬКО отсюда, не из своих знаний. "
-            "Если ответ ЕСТЬ во фрагментах, ты ОБЯЗАНА его использовать. "
-            "НЕ говори 'нет данных' если фрагменты содержат ответ):\n\n"
-            f"{weak_hint}{context_block}"
-        )
+        # No tools used yet: include RAG for KB questions.
+        # User message is clean (no RAG text) to not suppress tool calling.
+        # RAG goes in system prompt appendix.
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": f"{memory_block}{message}"},
         ]
-    # More tokens for tool-call turns: tool call XML + arguments needs room.
-    # Regular voice turns: 120 tokens (1-2 sentences).
-    voice_max_tokens = 200 if has_tool_intent else 120
+    voice_max_tokens = 200
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
     sentence_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
@@ -673,7 +656,7 @@ async def _stream_voice_response(
         nonlocal t_llm_first_token
         max_tool_iterations = 3
         # Debug: log tool calling context
-        if has_tool_intent:
+        if tool_schemas:
             print(f"[TOOL DEBUG] calc_intent=True, tools={len(tool_schemas)}, "
                   f"msg_count={len(llm_messages)}, user_msg_len={len(llm_messages[-1]['content'])}", flush=True)
 
@@ -685,9 +668,9 @@ async def _stream_voice_response(
             try:
                 # Lower temperature for tool-intent turns (more deterministic)
                 # Normal temp for regular turns and for post-tool response
-                temp = 0.1 if (has_tool_intent and iteration == 0) else settings.llm.temperature
+                temp = settings.llm.temperature
                 tools_to_send = tool_schemas if iteration < max_tool_iterations else None
-                if has_calc_intent and iteration == 0:
+                if tool_schemas and iteration == 0:
                     print(f"[TOOL DEBUG] LLM call: temp={temp}, max_tokens={voice_max_tokens}, "
                           f"tools={len(tools_to_send) if tools_to_send else 0}, "
                           f"user_content_first100={llm_messages[-1]['content'][:100]}", flush=True)
@@ -713,7 +696,7 @@ async def _stream_voice_response(
                     finish_reason = choice.get("finish_reason")
 
                     # Debug: log first few events and tool call deltas
-                    if has_tool_intent and len(collected_events) <= 3:
+                    if tool_schemas and len(collected_events) <= 3:
                         tc_delta = delta.get("tool_calls")
                         content_val = delta.get("content")
                         print(f"[TOOL DEBUG] event#{len(collected_events)}: content={repr(content_val)}, "
