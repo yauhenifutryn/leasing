@@ -514,6 +514,12 @@ start_qdrant() {
 #   Winning stack: Whisper STT + Silero TTS + Qwen3.5-35B-A3B-FP8
 # ---------------------------------------------------------------------------
 write_env_file() {
+  # Always regenerate .env to ensure paths and flags are current.
+  # Tool credentials (CALCULATOR_API_TOKEN, SMS_*) will be blank and
+  # must be filled in manually after provisioning.
+  if [ -f "$APP_DIR/.env" ]; then
+    log "Overwriting existing .env (paths/flags may have changed)"
+  fi
   log "Writing .env file to $APP_DIR/.env"
 
   # Auto-detect GPU memory and set optimal vLLM utilization
@@ -637,6 +643,20 @@ SMS_SENDER_NAME='MikroLizing'
 CRM_WEBHOOK_URL=
 CRM_WEBHOOK_TOKEN=
 ENVEOF
+
+  # Validate: ensure MODELS_DIR has enough disk space
+  local models_avail_gb
+  models_avail_gb=$(df --output=avail "$MODELS_DIR" 2>/dev/null | tail -1 | tr -d ' ')
+  models_avail_gb=$(( ${models_avail_gb:-0} / 1048576 ))
+  if [ "$models_avail_gb" -lt 60 ]; then
+    log ""
+    log "WARNING: MODELS_DIR=$MODELS_DIR has only ${models_avail_gb}GB free."
+    log "Model weights need ~60GB. vLLM may fail to load."
+    log "Move models to a larger disk: MODELS_DIR=/ephemeral/models"
+    log ""
+  else
+    log "MODELS_DIR=$MODELS_DIR has ${models_avail_gb}GB free (OK)"
+  fi
 
   log ""
   log "╔══════════════════════════════════════════════════════════════╗"
