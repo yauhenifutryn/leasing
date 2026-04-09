@@ -26,15 +26,67 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 REPO_URL="${REPO_URL:-https://github.com/yauhenifutryn/leasing.git}"
 REPO_BRANCH="${REPO_BRANCH:-feature/voice-pipeline}"
-# Auto-detect workspace: /workspace (Vast.ai/RunPod) or $HOME (bare-metal VMs)
+# Auto-detect workspace: find the partition with the most free space.
+# Cloud providers mount large storage at various paths:
+#   Vast.ai/RunPod: /workspace
+#   Sesterce:       /ephemeral
+#   Lambda/Hetzner: usually large root, or /mnt/data
+#   Client servers: varies
+#
+# Strategy: if not explicitly set, pick the mount with the most free disk.
+# Models are ~60GB, venvs ~15GB, repo ~2GB. Minimum 100GB recommended.
 if [ -n "${WORKSPACE:-}" ]; then
   : # explicit override, use as-is
-elif [ -d "/workspace" ]; then
-  WORKSPACE="/workspace"
 else
-  WORKSPACE="$HOME"
+  # Find the mount point with the most available space (exclude tmpfs, snap, boot)
+  WORKSPACE=$(df --output=avail,target -x tmpfs -x devtmpfs 2>/dev/null \
+    | tail -n +2 \
+    | grep -v -E '(/boot|/snap|/run)' \
+    | sort -rn \
+    | head -1 \
+    | awk '{print $2}')
+  # Fallback chain if df parsing fails
+  if [ -z "$WORKSPACE" ] || [ "$WORKSPACE" = "/" ]; then
+    if [ -d "/ephemeral" ] && [ "$(df --output=avail /ephemeral 2>/dev/null | tail -1)" -gt 100000000 ] 2>/dev/null; then
+      WORKSPACE="/ephemeral"
+    elif [ -d "/workspace" ]; then
+      WORKSPACE="/workspace"
+    else
+      WORKSPACE="$HOME"
+    fi
+  fi
 fi
 mkdir -p "$WORKSPACE"
+
+# Disk space check: warn if less than 100GB free on the selected workspace
+AVAIL_KB=$(df --output=avail "$WORKSPACE" 2>/dev/null | tail -1 | tr -d ' ')
+AVAIL_GB=$(( ${AVAIL_KB:-0} / 1048576 ))
+if [ "$AVAIL_GB" -lt 100 ] 2>/dev/null; then
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════════════╗"
+  echo "║  WARNING: LOW DISK SPACE                                        ║"
+  echo "║                                                                  ║"
+  echo "║  Workspace: $WORKSPACE"
+  echo "║  Available: ${AVAIL_GB}GB (need at least 100GB for models+venvs) ║"
+  echo "║                                                                  ║"
+  echo "║  The model download (~60GB) will likely fail.                    ║"
+  echo "║  Options:                                                        ║"
+  echo "║    1. Mount a larger disk and re-run with WORKSPACE=/mount/path  ║"
+  echo "║    2. Free up space: du -sh /* | sort -rh | head -20             ║"
+  echo "║    3. Check if there is extra storage: lsblk && df -h            ║"
+  echo "╚══════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "Detected disk layout:"
+  df -h --output=size,avail,pcent,target -x tmpfs -x devtmpfs 2>/dev/null || df -h
+  echo ""
+  read -p "Continue anyway? [y/N] " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted. Set WORKSPACE=/path/to/large/disk and re-run."
+    exit 1
+  fi
+fi
+
 APP_DIR="$WORKSPACE/leasing/rag_demo_system"
 MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 
@@ -558,7 +610,7 @@ STACK_MODE=docker
 RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
-STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR}"
+STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR} --enable-auto-tool-choice --tool-call-parser hermes"
 STACK_WHISPER_CMD="LD_LIBRARY_PATH=${WHISPER_CUDA_LIB_PATH} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
 
@@ -571,14 +623,15 @@ PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
 # ── Tool Use: Calculator API ──
 # IMPORTANT: Get bearer token from client's developer (Maxim).
 # Server IP must be whitelisted by client before these will work.
-CALCULATOR_API_BASE_URL=https://personal.mikro-leasing.by/calculator/api
-CALCULATOR_API_TOKEN=
+# NOTE: Quote values with special characters (brackets, etc.) in single quotes.
+CALCULATOR_API_BASE_URL='https://personal.mikro-leasing.by/calculator/api'
+CALCULATOR_API_TOKEN=''
 
 # ── Tool Use: SMS (sms-assistent.by) ──
 # IMPORTANT: Server IP must be whitelisted by client before these will work.
-SMS_API_LOGIN=
-SMS_API_PASSWORD=
-SMS_SENDER_NAME=MikroLizing
+SMS_API_LOGIN=''
+SMS_API_PASSWORD=''
+SMS_SENDER_NAME='MikroLizing'
 
 # ── Tool Use: CRM Webhook (phase 2, not needed yet) ──
 CRM_WEBHOOK_URL=
