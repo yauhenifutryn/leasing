@@ -119,6 +119,7 @@ def iter_openai_compatible_stream_events(
     }
     if tools:
         payload["tools"] = tools
+        payload["tool_choice"] = "auto"
 
     resp = requests.post(url, json=payload, timeout=timeout_sec, stream=True)
     resp.raise_for_status()
