@@ -432,7 +432,7 @@ def main():
         ("8. Abbreviation TTS (BYN, SMS)", test_abbreviation_tts),
         ("9. Second LLM call presents results + offers SMS", lambda: test_second_llm_call(settings, system_prompt, schemas)),
         ("10. Used vehicle without age rejected", lambda: test_client_type_validation(settings)),
-        ("11. RAG works after calculator conversation", lambda: test_rag_after_calc(settings, system_prompt, schemas)),
+        ("11. Full conversation: RAG -> calc -> RAG -> recalc", lambda: test_full_conversation_flow(settings, system_prompt, schemas)),
         ("12. SMS API actually sends", lambda: test_sms_actually_sends(settings)),
         ("13. Normal KB question then calculator works", lambda: test_normal_then_calc(settings, system_prompt, schemas)),
         ("14. Calculator API returns valid URL/link", lambda: test_link_from_api(settings)),
