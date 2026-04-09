@@ -582,14 +582,6 @@ async def _stream_voice_response(
 
     # --- Build prompt ---
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
-    # Inject tool instructions at {TOOL_INSTRUCTIONS} placeholder, BEFORE RAG section.
-    # Position matters: Qwen3.5 ignores tool instructions that appear after RAG context.
-    tool_instructions_path = settings.app.system_prompt_path.parent / "tool_instructions.txt"
-    if tool_instructions_path.exists() and tool_schemas:
-        tool_instructions = tool_instructions_path.read_text(encoding="utf-8")
-        system_prompt = system_prompt.replace("{TOOL_INSTRUCTIONS}", tool_instructions)
-    else:
-        system_prompt = system_prompt.replace("{TOOL_INSTRUCTIONS}", "")
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
