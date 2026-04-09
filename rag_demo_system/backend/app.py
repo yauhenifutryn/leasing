@@ -598,13 +598,12 @@ async def _stream_voice_response(
         "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
-    # Detect calculation intent to add tool-call reminder
-    calc_triggers = ["рассчит", "расчет", "расчёт", "посчит", "калькул", "сколько буд", "платёж", "платеж", "график плат"]
-    is_calc_query = any(t in message.lower() for t in calc_triggers)
+    # Always remind about tools when they are available
     tool_hint = (
-        "НАПОМИНАНИЕ: если клиент просит расчёт, ВЫЗОВИ инструмент calculator. "
-        "НЕ отвечай текстом из фрагментов. Вызови calculator с subject и cost.\n\n"
-    ) if is_calc_query and tool_schemas else ""
+        "НАПОМИНАНИЕ: у тебя есть инструменты (calculator, send_sms). "
+        "Если клиент назвал предмет лизинга и стоимость, ВЫЗОВИ calculator СРАЗУ. "
+        "Не спрашивай дополнительные вопросы. Не отвечай текстом из фрагментов о расчёте.\n\n"
+    ) if tool_schemas else ""
 
     user_prompt = (
         f"{memory_block}"
