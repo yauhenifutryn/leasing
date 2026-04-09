@@ -226,6 +226,111 @@ check_url "Silero TTS"  "http://localhost:50006/health" 10
 pass "All voice sidecars healthy"
 
 # ---------------------------------------------------------------------------
+# PHASE 6: Tool Use (Calculator API, SMS API, vLLM tool calling)
+# ---------------------------------------------------------------------------
+info ""
+info "--- Phase 6: Tool Use ---"
+
+# Source .env for tool credentials
+ENV_FILE="$(dirname "$0")/../.env"
+if [ -f "$ENV_FILE" ]; then
+  set +u
+  . "$ENV_FILE" 2>/dev/null || true
+  set -u
+fi
+
+TOOL_OK=true
+
+# 6a. Calculator API connectivity
+if [ -n "${CALCULATOR_API_TOKEN:-}" ] && [ -n "${CALCULATOR_API_BASE_URL:-}" ]; then
+  info "Calculator API (timeout: 10s)..."
+  CALC_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $CALCULATOR_API_TOKEN" "$CALCULATOR_API_BASE_URL/1.0/subjects/" 2>/dev/null || echo "")
+  if echo "$CALC_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>0" 2>/dev/null; then
+    pass "Calculator API (subjects endpoint)"
+  else
+    warn "Calculator API -- failed or empty response (IP whitelisted?)"
+    TOOL_OK=false
+  fi
+else
+  warn "Calculator API -- CALCULATOR_API_TOKEN or CALCULATOR_API_BASE_URL not set in .env"
+  TOOL_OK=false
+fi
+
+# 6b. SMS API connectivity (check auth without sending)
+if [ -n "${SMS_API_LOGIN:-}" ] && [ -n "${SMS_API_PASSWORD:-}" ]; then
+  info "SMS API auth check (timeout: 10s)..."
+  # Send to obviously invalid number; expect auth error (-2) = bad creds, positive or -1/-10/-13 = connected
+  SMS_RESP=$(curl -s --max-time 10 "https://userarea.sms-assistent.by/api/v1/send_sms/plain?user=${SMS_API_LOGIN}&password=${SMS_API_PASSWORD}&recipient=000&message=smoke_test&sender=${SMS_SENDER_NAME:-MikroLizing}" 2>/dev/null || echo "")
+  if [ -n "$SMS_RESP" ] && [ "$SMS_RESP" != "-2" ]; then
+    pass "SMS API (auth OK, response: $SMS_RESP)"
+  elif [ "$SMS_RESP" = "-2" ]; then
+    warn "SMS API -- auth failed (code -2). Check SMS_API_LOGIN/SMS_API_PASSWORD."
+    TOOL_OK=false
+  else
+    warn "SMS API -- no response (network issue?)"
+    TOOL_OK=false
+  fi
+else
+  warn "SMS API -- SMS_API_LOGIN or SMS_API_PASSWORD not set in .env"
+  TOOL_OK=false
+fi
+
+# 6c. vLLM tool calling (structured tool_calls, not text)
+info "vLLM tool calling (timeout: 30s)..."
+TOOL_RESP=$(curl -s --max-time 30 -X POST "$VLLM_BASE/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$VLLM_MODEL\",\"messages\":[{\"role\":\"system\",\"content\":\"Используй инструменты.\"},{\"role\":\"user\",\"content\":\"Рассчитай лизинг на машину за 30000\"}],\"max_tokens\":200,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"description\":\"Рассчитать платежи\",\"parameters\":{\"type\":\"object\",\"properties\":{\"subject\":{\"type\":\"string\"},\"cost\":{\"type\":\"number\"}},\"required\":[\"subject\",\"cost\"]}}}],\"chat_template_kwargs\":{\"enable_thinking\":false}}" 2>/dev/null || echo "")
+
+if [ -n "$TOOL_RESP" ]; then
+  TOOL_RESULT=$(echo "$TOOL_RESP" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    c = d['choices'][0]['message']
+    tc = c.get('tool_calls') or []
+    content = c.get('content') or ''
+    if tc and len(tc) > 0 and tc[0].get('function',{}).get('name'):
+        print(f'STRUCTURED:{tc[0][\"function\"][\"name\"]}')
+    elif '<tool_call>' in content or '<function=' in content:
+        print('TEXT_XML')
+    else:
+        print('NONE')
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null || echo "ERROR")
+
+  case "$TOOL_RESULT" in
+    STRUCTURED:*)
+      pass "vLLM tool calling (structured tool_calls: ${TOOL_RESULT#STRUCTURED:})"
+      ;;
+    TEXT_XML)
+      warn "vLLM tool calling -- model outputs XML in content instead of structured tool_calls."
+      warn "  Check --tool-call-parser flag. For Qwen3.5 use: --tool-call-parser qwen3_xml"
+      warn "  Current .env STACK_QWEN_CMD:"
+      grep 'tool-call-parser' "$ENV_FILE" 2>/dev/null || echo "    (not found)"
+      TOOL_OK=false
+      ;;
+    NONE)
+      warn "vLLM tool calling -- model did not call any tool. Tool schemas may not be reaching the model."
+      TOOL_OK=false
+      ;;
+    *)
+      warn "vLLM tool calling -- unexpected result: $TOOL_RESULT"
+      TOOL_OK=false
+      ;;
+  esac
+else
+  warn "vLLM tool calling -- no response (timeout or crash)"
+  TOOL_OK=false
+fi
+
+if [ "$TOOL_OK" = true ]; then
+  pass "All tool use checks passed"
+else
+  warn "Some tool use checks failed. Tool features may not work in the UI."
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 info ""
@@ -235,6 +340,11 @@ info "  Infrastructure: Qdrant + vLLM + GPU"
 info "  Backend: health + index + chat"
 info "  KB: $KB_COUNT chunks"
 info "  Voice: Whisper STT + Silero TTS"
+if [ "$TOOL_OK" = true ]; then
+  info "  Tools: Calculator API + SMS API + vLLM tool calling"
+else
+  info "  Tools: PARTIAL (see warnings above)"
+fi
 info "============================================="
 
 # ---------------------------------------------------------------------------
