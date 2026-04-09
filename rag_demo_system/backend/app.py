@@ -621,14 +621,25 @@ async def _stream_voice_response(
 
     if has_tool_intent:
         # Path 1: tool-eligible. No RAG, compact memory only.
-        # Full memory_block uses "Предыдущие реплики:" format which puts
-        # the model in conversational mode. Instead, extract just the
-        # key facts (client name, parameters mentioned) as a one-liner.
         compact_memory = ""
         if session.client_name:
             compact_memory += f"Клиент: {session.client_name}. "
+
+        # For SMS intent: include last calculator result so model has
+        # the URL and data to construct the SMS message.
+        if has_sms_intent and session.tool_calls_this_turn:
+            last_calc = next(
+                (tc for tc in reversed(session.tool_calls_this_turn)
+                 if tc.get("tool") == "calculator"),
+                None,
+            )
+            if last_calc and last_calc.get("result", {}).get("ok"):
+                from .tools import get_tool
+                calc_tool = get_tool("calculator")
+                sms_body = calc_tool.format_sms_body(last_calc["result"])
+                compact_memory += f"Последний расчёт (для отправки по СМС):\n{sms_body}\n\n"
+
         if chat_session and chat_session.transcript:
-            # Extract any numbers/params from recent user messages
             recent_user = [t.get("text", "") for t in chat_session.transcript[-4:]
                           if t.get("role") == "user"]
             if recent_user:
