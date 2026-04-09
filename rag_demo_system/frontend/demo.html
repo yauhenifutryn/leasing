@@ -435,6 +435,23 @@
         }
         setStatus(`Обработка... (STT: ${Date.now() - t0}ms)`, "warn");
       }
+      if (evt.type === "tool_call.start") {
+        const toolNames = { calculator: "Калькулятор", send_sms: "Отправка СМС" };
+        const toolLabel = toolNames[evt.tool] || evt.tool;
+        setStatus(toolLabel + "...", "warn");
+        const el = document.createElement("span");
+        el.style.cssText = "color:#666;font-style:italic";
+        el.textContent = toolLabel + ": обработка...";
+        $("#currentResponse").textContent = "";
+        $("#currentResponse").appendChild(el);
+      }
+      if (evt.type === "tool_call.done") {
+        const toolNames = { calculator: "Калькулятор", send_sms: "СМС отправлено" };
+        const toolLabel = toolNames[evt.tool] || evt.tool;
+        const statusText = evt.ok ? (toolLabel + " (готово)") : (toolLabel + " (ошибка)");
+        setStatus(statusText, evt.ok ? "good" : "warn");
+        $("#currentResponse").textContent = "";
+      }
       if (evt.type === "response.output_text.delta") {
         if (!assistantSpeaking) {
           assistantSpeaking = true;

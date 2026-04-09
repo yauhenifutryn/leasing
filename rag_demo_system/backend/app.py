@@ -598,8 +598,17 @@ async def _stream_voice_response(
         "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
+    # Detect calculation intent to add tool-call reminder
+    calc_triggers = ["рассчит", "расчет", "расчёт", "посчит", "калькул", "сколько буд", "платёж", "платеж", "график плат"]
+    is_calc_query = any(t in message.lower() for t in calc_triggers)
+    tool_hint = (
+        "НАПОМИНАНИЕ: если клиент просит расчёт, ВЫЗОВИ инструмент calculator. "
+        "НЕ отвечай текстом из фрагментов. Вызови calculator с subject и cost.\n\n"
+    ) if is_calc_query and tool_schemas else ""
+
     user_prompt = (
         f"{memory_block}"
+        f"{tool_hint}"
         f"Текущий вопрос клиента: {message}\n\n"
         f"{length_hint}\n\n"
         "Фрагменты из базы знаний (ЕДИНСТВЕННЫЙ источник фактов. "
@@ -694,6 +703,17 @@ async def _stream_voice_response(
                 except json.JSONDecodeError:
                     func_args = {}
 
+                # Notify frontend about tool call
+                try:
+                    await websocket.send_json({
+                        "type": "tool_call.start",
+                        "session_id": session_id,
+                        "tool": func_name,
+                        "params": func_args,
+                    })
+                except (RuntimeError, WebSocketDisconnect):
+                    pass
+
                 # Send filler phrase to TTS immediately
                 filler = get_filler(func_name)
                 await sentence_queue.put(filler)
@@ -733,6 +753,17 @@ async def _stream_voice_response(
                     "tool_call_id": tc.get("id", f"call_{func_name}"),
                     "content": summary,
                 })
+
+                # Notify frontend tool call finished
+                try:
+                    await websocket.send_json({
+                        "type": "tool_call.done",
+                        "session_id": session_id,
+                        "tool": func_name,
+                        "ok": result.get("ok", False) if isinstance(result, dict) else False,
+                    })
+                except (RuntimeError, WebSocketDisconnect):
+                    pass
 
                 state.log({
                     "event": "tool_call",
