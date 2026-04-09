@@ -665,9 +665,22 @@ async def _stream_voice_response(
 
     if needs_tool:
         # TOOL path: clean message, no RAG (tool calling works reliably)
+        # Include previous calc params so model can recalculate with changes
+        prev_calc_context = ""
+        if session.tool_calls_this_turn:
+            last_calc = next(
+                (tc for tc in reversed(session.tool_calls_this_turn)
+                 if tc.get("tool") == "calculator"), None)
+            if last_calc:
+                import json as _json
+                prev_params = last_calc.get("params", {})
+                prev_calc_context = (
+                    f"Предыдущий расчёт: {_json.dumps(prev_params, ensure_ascii=False)}. "
+                    f"Клиент хочет изменить параметры. Вызови calculator с обновлёнными значениями.\n\n"
+                )
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{sms_context}{message}"},
+            {"role": "user", "content": f"{sms_context}{prev_calc_context}{message}"},
         ]
     else:
         # RAG path: full context for KB questions
