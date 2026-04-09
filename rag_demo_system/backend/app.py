@@ -618,10 +618,16 @@ async def _stream_voice_response(
         has_calc_intent = any(t in recent for t in calc_triggers)
 
     if has_calc_intent and tool_schemas:
-        # Path 1: tool-eligible. No RAG, clean message.
+        # Path 1: tool-eligible. No RAG, minimal memory.
+        # Only include client name from memory, not full conversation history.
+        # Full history makes the model continue in "conversational" mode
+        # instead of calling tools.
+        name_hint = ""
+        if session.client_name:
+            name_hint = f"Имя клиента: {session.client_name}. "
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{memory_block}{message}"},
+            {"role": "user", "content": f"{name_hint}{message}"},
         ]
     else:
         # Path 2: standard RAG-grounded answering.
@@ -639,7 +645,9 @@ async def _stream_voice_response(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-    voice_max_tokens = 120  # 1-2 sentences
+    # More tokens for tool-call turns: tool call XML + arguments needs room.
+    # Regular voice turns: 120 tokens (1-2 sentences).
+    voice_max_tokens = 200 if (has_calc_intent and tool_schemas) else 120
 
     # --- Sentence queue: LLM produces sentences, TTS consumes them ---
     sentence_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
