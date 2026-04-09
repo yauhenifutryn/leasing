@@ -237,11 +237,19 @@ def test_client_type_validation(settings):
 
 
 def test_rag_after_calc(settings, system_prompt, schemas):
-    """Test 11: RAG works for normal questions AFTER a calculator conversation."""
-    # Simulate: calc happened, now user asks a KB question
-    # The key: "кто директор" should NOT go through calc path
+    """Test 11: RAG works for normal questions AFTER a calculator conversation.
+
+    In the real voice path, the calc turn skips RAG but the next KB turn
+    goes through the RAG path with full KB fragments. This test verifies
+    that the model answers from KB context, not from tools, when the
+    question is not about calculation.
+    """
+    # The real test: "кто директор" should NOT trigger a tool call,
+    # and should produce a text answer. In the voice path, RAG context
+    # would be included for this non-calc question.
+    # Here we test with KB-like context in the system prompt.
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": system_prompt + "\n\nСправочная информация:\nДиректор компании Микро Лизинг — Дедков Вадим Николаевич. Он наёмный руководитель."},
         # Previous calc exchange in history
         {"role": "user", "content": "Рассчитай лизинг на машину за 30 тысяч"},
         {"role": "assistant", "content": "Аванс 9000, платёж 898, срок 36 мес. Хотите изменить параметр или отправить по СМС?"},
@@ -250,7 +258,7 @@ def test_rag_after_calc(settings, system_prompt, schemas):
     ]
     tc, text = call_llm(settings, system_prompt, messages, schemas)
     if not tc and ("дедков" in text.lower() or "директор" in text.lower()):
-        print(f"  PASS: RAG answered about director after calc context")
+        print(f"  PASS: answered about director after calc context")
         return True
     elif tc:
         print(f"  FAIL: tool was called for KB question after calc")
