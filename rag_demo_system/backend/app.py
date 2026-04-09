@@ -664,6 +664,10 @@ async def _stream_voice_response(
     async def llm_producer() -> None:
         nonlocal t_llm_first_token
         max_tool_iterations = 3
+        # Debug: log tool calling context
+        if has_calc_intent and tool_schemas:
+            print(f"[TOOL DEBUG] calc_intent=True, tools={len(tool_schemas)}, "
+                  f"msg_count={len(llm_messages)}, user_msg_len={len(llm_messages[-1]['content'])}", flush=True)
 
         for iteration in range(max_tool_iterations + 1):
             detector = SentenceDetector()
@@ -693,6 +697,14 @@ async def _stream_voice_response(
                     collected_events.append(event)
                     choice = (event.get("choices") or [{}])[0]
                     delta = choice.get("delta") or {}
+                    finish_reason = choice.get("finish_reason")
+
+                    # Debug: log first few events and tool call deltas
+                    if has_calc_intent and len(collected_events) <= 3:
+                        tc_delta = delta.get("tool_calls")
+                        content_val = delta.get("content")
+                        print(f"[TOOL DEBUG] event#{len(collected_events)}: content={repr(content_val)}, "
+                              f"tool_calls={'YES' if tc_delta else 'no'}, finish={finish_reason}", flush=True)
 
                     # Regular content token
                     token = delta.get("content") or ""
