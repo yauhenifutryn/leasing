@@ -105,6 +105,17 @@ class VoiceConfig:
 
 
 @dataclass
+class SIPConfig:
+    enabled: bool
+    audiosocket_host: str
+    audiosocket_port: int
+    ami_host: str
+    ami_port: int
+    ami_username: str
+    ami_secret: str
+
+
+@dataclass
 class Settings:
     app: AppConfig
     embedding: EmbeddingConfig
@@ -115,6 +126,7 @@ class Settings:
     query_rewrite: QueryRewriteConfig
     voice: VoiceConfig
     tools: ToolsConfig
+    sip: SIPConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -163,6 +175,7 @@ def load_settings(path: Path | None = None) -> Settings:
     query_rewrite = payload.get("query_rewrite", {})
     voice = payload.get("voice", {})
     tools_cfg = payload.get("tools", {})
+    sip_cfg = payload.get("sip", {})
 
     return Settings(
         app=AppConfig(
@@ -242,5 +255,14 @@ def load_settings(path: Path | None = None) -> Settings:
             sms_sender_name=os.getenv("SMS_SENDER_NAME", tools_cfg.get("sms_sender_name", "MikroLizing")),
             crm_webhook_url=os.getenv("CRM_WEBHOOK_URL", tools_cfg.get("crm_webhook_url", "")),
             crm_webhook_token=os.getenv("CRM_WEBHOOK_TOKEN", tools_cfg.get("crm_webhook_token", "")),
+        ),
+        sip=SIPConfig(
+            enabled=os.getenv("SIP_ENABLED", str(sip_cfg.get("enabled", False))).lower() in ("true", "1", "yes"),
+            audiosocket_host=os.getenv("AUDIOSOCKET_HOST", sip_cfg.get("audiosocket_host", "127.0.0.1")),
+            audiosocket_port=int(os.getenv("AUDIOSOCKET_PORT", sip_cfg.get("audiosocket_port", 9092))),
+            ami_host=os.getenv("AMI_HOST", sip_cfg.get("ami_host", "127.0.0.1")),
+            ami_port=int(os.getenv("AMI_PORT", sip_cfg.get("ami_port", 5038))),
+            ami_username=os.getenv("AMI_USERNAME", sip_cfg.get("ami_username", "voicebot")),
+            ami_secret=os.getenv("AMI_SECRET", sip_cfg.get("ami_secret", "")),
         ),
     )

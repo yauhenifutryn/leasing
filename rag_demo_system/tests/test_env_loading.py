@@ -99,3 +99,27 @@ def test_load_settings_reads_fast_llm_env(monkeypatch):
             settings_module.os.environ.pop("RAG_LLM_FAST_MODEL", None)
         else:
             settings_module.os.environ["RAG_LLM_FAST_MODEL"] = original_fast_model
+
+
+class TestSIPSettings:
+    def test_sip_config_defaults(self):
+        from backend.settings import load_settings
+        s = load_settings()
+        assert hasattr(s, "sip")
+        assert s.sip.enabled is False
+        assert s.sip.audiosocket_host == "127.0.0.1"
+        assert s.sip.audiosocket_port == 9092
+        assert s.sip.ami_host == "127.0.0.1"
+        assert s.sip.ami_port == 5038
+        assert s.sip.ami_username == "voicebot"
+        assert s.sip.ami_secret == ""
+
+    def test_sip_config_from_env(self, monkeypatch):
+        monkeypatch.setenv("SIP_ENABLED", "true")
+        monkeypatch.setenv("AUDIOSOCKET_PORT", "9999")
+        monkeypatch.setenv("AMI_SECRET", "secret123")
+        from backend.settings import load_settings
+        s = load_settings()
+        assert s.sip.enabled is True
+        assert s.sip.audiosocket_port == 9999
+        assert s.sip.ami_secret == "secret123"
