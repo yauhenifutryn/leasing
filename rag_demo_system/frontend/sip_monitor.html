@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIP Monitor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
+  h1 { font-size: 18px; margin-bottom: 12px; color: #8be9fd; }
+  .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  .status.connected { background: #50fa7b; }
+  .status.disconnected { background: #ff5555; }
+  .controls { margin-bottom: 16px; }
+  .controls button { background: #44475a; color: #f8f8f2; border: 1px solid #6272a4; padding: 6px 14px; cursor: pointer; margin-right: 8px; font-family: monospace; }
+  .controls button:hover { background: #6272a4; }
+  .calls { margin-bottom: 16px; }
+  .call-badge { display: inline-block; background: #282a36; border: 1px solid #6272a4; padding: 4px 10px; margin-right: 8px; margin-bottom: 4px; border-radius: 4px; font-size: 13px; }
+  .call-badge .phone { color: #50fa7b; }
+  .call-badge .duration { color: #bd93f9; margin-left: 8px; }
+  .log { background: #282a36; border: 1px solid #44475a; padding: 12px; max-height: 75vh; overflow-y: auto; font-size: 13px; line-height: 1.6; }
+  .log-entry { padding: 2px 0; }
+  .log-entry .ts { color: #6272a4; margin-right: 8px; }
+  .log-entry .cid { color: #bd93f9; margin-right: 6px; }
+  .log-entry.caller .msg { color: #f1fa8c; }
+  .log-entry.bot .msg { color: #8be9fd; }
+  .log-entry.tool .msg { color: #ffb86c; }
+  .log-entry.barge-in .msg { color: #ff5555; font-weight: bold; }
+  .log-entry.system .msg { color: #6272a4; font-style: italic; }
+  .log-entry.dtmf .msg { color: #bd93f9; }
+</style>
+</head>
+<body>
+<h1><span class="status disconnected" id="statusDot"></span>SIP Monitor</h1>
+<div class="controls">
+  <button id="btnCopy">Copy All</button>
+  <button id="btnClear">Clear</button>
+</div>
+<div class="calls" id="activeCalls"></div>
+<div class="log" id="log"></div>
+<script>
+(function() {
+  var WS_BASE = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  var logEl = document.getElementById('log');
+  var statusDot = document.getElementById('statusDot');
+  var callsEl = document.getElementById('activeCalls');
+  var ws = null;
+  var autoScroll = true;
+  var activeCalls = {};
+
+  function connect() {
+    ws = new WebSocket(WS_BASE + location.host + '/ws/sip-monitor');
+    ws.onopen = function() {
+      statusDot.className = 'status connected';
+      addLog('system', '', 'Monitor connected');
+    };
+    ws.onclose = function() {
+      statusDot.className = 'status disconnected';
+      addLog('system', '', 'Monitor disconnected, reconnecting...');
+      setTimeout(connect, 2000);
+    };
+    ws.onerror = function() { ws.close(); };
+    ws.onmessage = function(e) {
+      var msg = JSON.parse(e.data);
+      handleEvent(msg);
+    };
+  }
+
+  function handleEvent(msg) {
+    var cid = (msg.call_id || '').substring(0, 8);
+    var t = msg.type || '';
+
+    if (t === 'sip.call.start') {
+      activeCalls[cid] = { phone: msg.phone, start: Date.now() };
+      updateCallBadges();
+      addLog('system', cid, 'Call started: ' + msg.phone);
+    } else if (t === 'sip.call.end') {
+      var dur = activeCalls[cid] ? formatDuration(Date.now() - activeCalls[cid].start) : '?';
+      delete activeCalls[cid];
+      updateCallBadges();
+      addLog('system', cid, 'Call ended (' + dur + ')');
+    } else if (t === 'sip.vad.speech') {
+      if (msg.event === 'start') addLog('system', cid, 'VAD: speech start');
+    } else if (t === 'sip.stt.result') {
+      addLog('caller', cid, msg.text);
+    } else if (t === 'sip.llm.sentence') {
+      addLog('bot', cid, msg.text);
+    } else if (t === 'sip.tool.start') {
+      addLog('tool', cid, 'Tool: ' + msg.tool + '(' + JSON.stringify(msg.params || {}) + ')');
+    } else if (t === 'sip.tool.result') {
+      addLog('tool', cid, 'Tool done: ' + msg.tool + ' (' + (msg.ok ? 'OK' : 'FAIL') + ')');
+    } else if (t === 'sip.tts.start') {
+      addLog('bot', cid, '[TTS] ' + msg.text);
+    } else if (t === 'sip.barge_in') {
+      addLog('barge-in', cid, '** BARGE-IN **');
+    } else if (t === 'sip.dtmf') {
+      addLog('dtmf', cid, 'DTMF: ' + msg.digit);
+    }
+  }
+
+  function addLog(cls, cid, text) {
+    var el = document.createElement('div');
+    el.className = 'log-entry ' + cls;
+
+    var tsSpan = document.createElement('span');
+    tsSpan.className = 'ts';
+    var now = new Date();
+    tsSpan.textContent = now.toLocaleTimeString('en-GB', { hour12: false });
+    el.appendChild(tsSpan);
+
+    if (cid) {
+      var cidSpan = document.createElement('span');
+      cidSpan.className = 'cid';
+      cidSpan.textContent = '[' + cid + ']';
+      el.appendChild(cidSpan);
+    }
+
+    var msgSpan = document.createElement('span');
+    msgSpan.className = 'msg';
+    msgSpan.textContent = text;
+    el.appendChild(msgSpan);
+
+    logEl.appendChild(el);
+    if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function updateCallBadges() {
+    while (callsEl.firstChild) callsEl.removeChild(callsEl.firstChild);
+    for (var cid in activeCalls) {
+      if (!activeCalls.hasOwnProperty(cid)) continue;
+      var info = activeCalls[cid];
+      var badge = document.createElement('span');
+      badge.className = 'call-badge';
+
+      var idText = document.createTextNode('#' + cid + ' ');
+      badge.appendChild(idText);
+
+      var phoneSpan = document.createElement('span');
+      phoneSpan.className = 'phone';
+      phoneSpan.textContent = info.phone;
+      badge.appendChild(phoneSpan);
+
+      var durSpan = document.createElement('span');
+      durSpan.className = 'duration';
+      durSpan.id = 'dur-' + cid;
+      badge.appendChild(durSpan);
+
+      callsEl.appendChild(badge);
+    }
+  }
+
+  function formatDuration(ms) {
+    var s = Math.floor(ms / 1000);
+    var m = Math.floor(s / 60);
+    var sec = s % 60;
+    return m + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+
+  // Update durations every second
+  setInterval(function() {
+    for (var cid in activeCalls) {
+      if (!activeCalls.hasOwnProperty(cid)) continue;
+      var el = document.getElementById('dur-' + cid);
+      if (el) el.textContent = ' ' + formatDuration(Date.now() - activeCalls[cid].start);
+    }
+  }, 1000);
+
+  // Auto-scroll control
+  logEl.addEventListener('scroll', function() {
+    autoScroll = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+  });
+
+  document.getElementById('btnCopy').addEventListener('click', function() {
+    var lines = [];
+    var entries = logEl.querySelectorAll('.log-entry');
+    for (var i = 0; i < entries.length; i++) {
+      lines.push(entries[i].textContent);
+    }
+    navigator.clipboard.writeText(lines.join('\n'));
+  });
+
+  document.getElementById('btnClear').addEventListener('click', function() {
+    while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
+  });
+
+  connect();
+})();
+</script>
+</body>
+</html>
