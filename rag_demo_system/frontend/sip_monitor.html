@@ -6,28 +6,28 @@
 <title>SIP Monitor</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
-  h1 { font-size: 18px; margin-bottom: 12px; color: #8be9fd; }
+  body { font-family: monospace; background: #ffffff; color: #1a1a1a; padding: 16px; }
+  h1 { font-size: 18px; margin-bottom: 12px; color: #2c3e50; }
   .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
-  .status.connected { background: #50fa7b; }
-  .status.disconnected { background: #ff5555; }
+  .status.connected { background: #27ae60; }
+  .status.disconnected { background: #e74c3c; }
   .controls { margin-bottom: 16px; }
-  .controls button { background: #44475a; color: #f8f8f2; border: 1px solid #6272a4; padding: 6px 14px; cursor: pointer; margin-right: 8px; font-family: monospace; }
-  .controls button:hover { background: #6272a4; }
+  .controls button { background: #f0f0f0; color: #333; border: 1px solid #ccc; padding: 6px 14px; cursor: pointer; margin-right: 8px; font-family: monospace; border-radius: 3px; }
+  .controls button:hover { background: #e0e0e0; }
   .calls { margin-bottom: 16px; }
-  .call-badge { display: inline-block; background: #282a36; border: 1px solid #6272a4; padding: 4px 10px; margin-right: 8px; margin-bottom: 4px; border-radius: 4px; font-size: 13px; }
-  .call-badge .phone { color: #50fa7b; }
-  .call-badge .duration { color: #bd93f9; margin-left: 8px; }
-  .log { background: #282a36; border: 1px solid #44475a; padding: 12px; max-height: 75vh; overflow-y: auto; font-size: 13px; line-height: 1.6; }
-  .log-entry { padding: 2px 0; }
-  .log-entry .ts { color: #6272a4; margin-right: 8px; }
-  .log-entry .cid { color: #bd93f9; margin-right: 6px; }
-  .log-entry.caller .msg { color: #f1fa8c; }
-  .log-entry.bot .msg { color: #8be9fd; }
-  .log-entry.tool .msg { color: #ffb86c; }
-  .log-entry.barge-in .msg { color: #ff5555; font-weight: bold; }
-  .log-entry.system .msg { color: #6272a4; font-style: italic; }
-  .log-entry.dtmf .msg { color: #bd93f9; }
+  .call-badge { display: inline-block; background: #f8f9fa; border: 1px solid #dee2e6; padding: 4px 10px; margin-right: 8px; margin-bottom: 4px; border-radius: 4px; font-size: 13px; }
+  .call-badge .phone { color: #27ae60; font-weight: bold; }
+  .call-badge .duration { color: #8e44ad; margin-left: 8px; }
+  .log { background: #fafafa; border: 1px solid #e0e0e0; padding: 12px; max-height: 75vh; overflow-y: auto; font-size: 13px; line-height: 1.6; }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #f0f0f0; }
+  .log-entry .ts { color: #999; margin-right: 8px; }
+  .log-entry .cid { color: #8e44ad; margin-right: 6px; }
+  .log-entry.caller .msg { color: #c0392b; font-weight: bold; }
+  .log-entry.bot .msg { color: #2980b9; }
+  .log-entry.tool .msg { color: #d35400; }
+  .log-entry.barge-in .msg { color: #e74c3c; font-weight: bold; }
+  .log-entry.system .msg { color: #999; font-style: italic; }
+  .log-entry.dtmf .msg { color: #8e44ad; }
 </style>
 </head>
 <body>
