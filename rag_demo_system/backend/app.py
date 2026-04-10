@@ -27,7 +27,7 @@ from .consent import (
 from .engine import RAGEngine
 from .rag_backends import build_backend_status
 from .settings import load_settings
-from .tools import get_tool_schemas, get_tool, init_tools
+from .tools import get_tool_schemas, get_tool, init_tools, get_all_tools
 from .tools.filler import get_filler
 from .llm_stream import parse_tool_calls_from_events
 from .state import StateStore
@@ -599,7 +599,12 @@ async def _stream_voice_response(
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
     # Get tool schemas early
-    tool_schemas = get_tool_schemas()
+    tool_schemas = []
+    for _tool in get_all_tools().values():
+        try:
+            tool_schemas.append(_tool.schema(session_phone=session.client_phone))
+        except TypeError:
+            tool_schemas.append(_tool.schema())
 
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
@@ -814,7 +819,7 @@ async def _stream_voice_response(
                     tool = get_tool(func_name)
                     filled_params, defaulted = tool.fill_defaults(func_args)
                     result = await asyncio.to_thread(
-                        tool.execute, filled_params, {"session_id": session_id}
+                        tool.execute, filled_params, {"session_id": session_id, "client_phone": session.client_phone}
                     )
                     result["defaulted"] = defaulted
                     tool_ok = result.get("ok", False)

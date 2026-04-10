@@ -27,14 +27,15 @@ class SmsSenderTool(ToolDefinition):
         self._password = password
         self._sender = sender
 
-    def schema(self) -> dict[str, Any]:
+    def schema(self, session_phone: str | None = None) -> dict[str, Any]:
+        phone_hint = session_phone or "375291224557"
         return {
             "type": "function",
             "function": {
                 "name": "send_sms",
                 "description": (
                     "Отправить СМС клиенту. ВЫЗЫВАЙ когда клиент согласился получить СМС. "
-                    "Используй номер 375291224557 и текст из результата расчёта."
+                    f"Используй номер {phone_hint} и текст из результата расчёта."
                 ),
                 "parameters": {
                     "type": "object",

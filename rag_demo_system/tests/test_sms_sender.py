@@ -50,3 +50,18 @@ def test_empty_message():
     tool = SmsSenderTool(login="test", password="test", sender="MikroLizing")
     result = tool.execute({"phone": "375291224557", "message": ""}, {})
     assert result["ok"] is False
+
+
+class TestSmsSenderSessionPhone:
+    def test_schema_uses_session_phone_when_provided(self):
+        tool = SmsSenderTool(login="test", password="test", sender="Test")
+        schema = tool.schema(session_phone="375291234567")
+        desc = schema["function"]["description"]
+        assert "375291234567" in desc
+        assert "375291224557" not in desc
+
+    def test_schema_uses_hardcoded_phone_when_no_session(self):
+        tool = SmsSenderTool(login="test", password="test", sender="Test")
+        schema = tool.schema()
+        desc = schema["function"]["description"]
+        assert "375291224557" in desc
