@@ -19,6 +19,11 @@ class VoiceSession:
     turn_count: int = 0
     tool_calls_this_turn: list = field(default_factory=list)
 
+    # SIP telephony fields (defaults preserve existing WebSocket/RTC behavior)
+    transport: str = "websocket"          # "websocket" | "rtc" | "sip"
+    client_phone: str | None = None       # from SIP caller ID, None for browser
+    call_id: str | None = None            # AudioSocket UUID or RTC session ID
+
     @property
     def stack_id(self) -> str:
         brain = self.brain_model.split("/")[-1]

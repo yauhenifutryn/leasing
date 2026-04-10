@@ -123,3 +123,24 @@ def test_stack_id_updates_on_field_change() -> None:
     session.backend = "dify_rag"
 
     assert session.stack_id.startswith("dify_rag__")
+
+
+class TestVoiceSessionSIPFields:
+    def test_default_transport_is_websocket(self):
+        from backend.voice_session import VoiceSession
+        s = VoiceSession(session_id="test-1")
+        assert s.transport == "websocket"
+        assert s.client_phone is None
+        assert s.call_id is None
+
+    def test_sip_transport_fields(self):
+        from backend.voice_session import VoiceSession
+        s = VoiceSession(
+            session_id="test-2",
+            transport="sip",
+            client_phone="375291234567",
+            call_id="abc-123",
+        )
+        assert s.transport == "sip"
+        assert s.client_phone == "375291234567"
+        assert s.call_id == "abc-123"
