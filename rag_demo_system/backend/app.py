@@ -1118,6 +1118,8 @@ async def _sip_send_tts(
         import traceback
         print(f"[SIP:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
 
+    session.assistant_speaking = False
+
     await broadcast_sip_event({
         "type": "sip.tts.start",
         "call_id": session_id,
@@ -1227,14 +1229,17 @@ async def sip_call_handler(
         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
         vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
 
-        # 5. Send intro TTS
+        # 5. Send intro TTS as background task (do not block the read loop)
         intro_text = (
             "Здравствуйте! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
             "Как я могу к вам обращаться?"
         )
-        await _sip_send_tts(adapter, session, session_id, intro_text)
+        session.assistant_speaking = True
+        asyncio.create_task(_sip_send_tts(adapter, session, session_id, intro_text))
 
         # 6. Audio loop: read frames, feed VAD, dispatch on speech end
+        # This runs concurrently with TTS playback (full-duplex AudioSocket).
+        _frame_count = 0
         while True:
             frame = await adapter.read_next()
             if frame is None or frame["type"] == "hangup":
@@ -1261,6 +1266,12 @@ async def sip_call_handler(
 
             if frame["type"] != "audio":
                 continue
+
+            _frame_count += 1
+            if _frame_count == 1:
+                print(f"[SIP:{session_id[:8]}] First audio frame received from caller", flush=True)
+            if _frame_count % 500 == 0:
+                print(f"[SIP:{session_id[:8]}] Audio frames: {_frame_count}, VAD speaking: {vad.is_speaking}, asst: {session.assistant_speaking}", flush=True)
 
             pcm_16k = frame["pcm16"]
 
@@ -1294,9 +1305,13 @@ async def sip_call_handler(
                     "call_id": session_id,
                     "event": "end",
                 })
-                await _sip_process_utterance(
+                # Fire-and-forget: process utterance in background so read loop
+                # continues (enables barge-in detection during response)
+                session.assistant_speaking = True
+                session.interrupted = False
+                asyncio.create_task(_sip_process_utterance(
                     adapter, session, session_id, speech_audio,
-                )
+                ))
 
     except Exception as exc:  # noqa: BLE001
         import traceback
