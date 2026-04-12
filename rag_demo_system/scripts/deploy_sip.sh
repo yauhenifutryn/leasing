@@ -276,12 +276,12 @@ Server: $PUBLIC_IP
 Dev account:
   Username: dev
   Password: $DEV_PASS
-  SIP URI:  sip:$DEV_SIP_URI
+  SIP URI:  sip:dev:${DEV_PASS}@${PUBLIC_IP}
 
 Client account:
   Username: client
   Password: $CLIENT_PASS
-  SIP URI:  sip:$CLIENT_SIP_URI
+  SIP URI:  sip:client:${CLIENT_PASS}@${PUBLIC_IP}
 
 AMI Secret: $AMI_PASS
 
