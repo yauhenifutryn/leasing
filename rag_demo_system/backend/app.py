@@ -1225,9 +1225,12 @@ async def sip_call_handler(
         voice_sessions[session_id] = session
         adapter.caller_phone = caller_phone
 
-        # 4. Create VAD for this call (16kHz, since we resample inbound to 16kHz)
+        # 4. Create VAD for this call
+        # Use 16kHz VAD (Silero VAD supports 8k and 16k; 16k is more accurate)
+        # Collect raw 8kHz audio separately for STT (avoids double resampling)
         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
         vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
+        _raw_8k_buffer = bytearray()  # collects raw 8kHz for STT
 
         # 5. Send intro TTS as background task (do not block the read loop)
         intro_text = (
@@ -1277,19 +1280,43 @@ async def sip_call_handler(
                 print(f"[SIP:{session_id[:8]}] Audio frames: {_frame_count}, VAD speaking: {vad.is_speaking}, asst: {session.assistant_speaking}", flush=True)
 
             pcm_16k = frame["pcm16"]
+            pcm_raw_8k = frame.get("pcm_raw_8k", b"")
 
-            # Skip VAD during TTS playback to avoid self-triggering on echo.
-            # AudioSocket is full-duplex: caller audio includes TTS echo
-            # since there is no AEC at the AudioSocket level.
-            # Barge-in will be re-enabled once proper AEC is added.
+            # During TTS playback: skip VAD to avoid echo self-trigger.
+            # Barge-in via energy detection: if caller speaks loudly enough
+            # over the TTS, detect it and interrupt.
             if session.assistant_speaking:
+                # Energy-based barge-in: check if caller audio is loud
+                # (real speech is louder than TTS echo from phone speaker)
+                if pcm_raw_8k:
+                    import struct as _st
+                    import math as _math
+                    _n = len(pcm_raw_8k) // 2
+                    if _n > 0:
+                        _samples = _st.unpack(f"<{_n}h", pcm_raw_8k)
+                        _rms = _math.sqrt(sum(s * s for s in _samples) / _n)
+                        # High threshold: only real speech, not echo
+                        if _rms > 3000 and not session.interrupted:
+                            session.interrupted = True
+                            session.assistant_speaking = False
+                            print(f"[SIP:{session_id[:8]}] BARGE-IN (energy={_rms:.0f})", flush=True)
+                            await broadcast_sip_event({
+                                "type": "sip.barge_in",
+                                "call_id": session_id,
+                            })
                 continue
 
             # VAD processing (only when bot is NOT speaking)
             was_speaking = vad.is_speaking
             speech_audio = vad.feed(pcm_16k)
 
+            # Also accumulate raw 8kHz for STT (better quality than resampled)
+            if vad.is_speaking:
+                _raw_8k_buffer.extend(pcm_raw_8k)
+
             if not was_speaking and vad.is_speaking:
+                _raw_8k_buffer.clear()
+                _raw_8k_buffer.extend(pcm_raw_8k)
                 print(f"[SIP:{session_id[:8]}] VAD: speech_start", flush=True)
                 await broadcast_sip_event({
                     "type": "sip.vad.speech",
@@ -1299,18 +1326,20 @@ async def sip_call_handler(
 
             # Speech ended: VAD returned accumulated audio
             if speech_audio is not None:
-                print(f"[SIP:{session_id[:8]}] VAD: speech_end ({len(speech_audio)} bytes)", flush=True)
+                # Use raw 8kHz audio for STT instead of resampled 16kHz
+                raw_for_stt = bytes(_raw_8k_buffer) if _raw_8k_buffer else speech_audio
+                _raw_8k_buffer.clear()
+                print(f"[SIP:{session_id[:8]}] VAD: speech_end ({len(raw_for_stt)} bytes raw 8kHz)", flush=True)
                 await broadcast_sip_event({
                     "type": "sip.vad.speech",
                     "call_id": session_id,
                     "event": "end",
                 })
-                # Fire-and-forget: process utterance in background so read loop
-                # continues (enables barge-in detection during response)
+                # Fire-and-forget: process utterance in background
                 session.assistant_speaking = True
                 session.interrupted = False
                 asyncio.create_task(_sip_process_utterance(
-                    adapter, session, session_id, speech_audio,
+                    adapter, session, session_id, raw_for_stt,
                 ))
 
     except Exception as exc:  # noqa: BLE001
