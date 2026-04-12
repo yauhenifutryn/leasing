@@ -133,12 +133,19 @@ class SIPAudioAdapter:
 
         if frame_type == FRAME_UUID:
             # Asterisk 18 sends 16 raw bytes (binary UUID), not 36-char ASCII.
-            # Handle both formats.
+            # Our dialplan appends "|<callerid>" to the UUID for phone extraction.
             if len(payload) == 16:
                 import uuid as _uuid_mod
                 self.session_id = str(_uuid_mod.UUID(bytes=payload))
             else:
-                self.session_id = payload.decode("ascii", errors="replace").strip()
+                raw = payload.decode("ascii", errors="replace").strip()
+                # Parse "uuid|callerid" format from dialplan
+                if "|" in raw:
+                    parts = raw.split("|", 1)
+                    self.session_id = parts[0]
+                    self.caller_phone = parts[1] if parts[1] else None
+                else:
+                    self.session_id = raw
             return {"type": "uuid", "uuid": self.session_id}
 
         if frame_type == FRAME_AUDIO:

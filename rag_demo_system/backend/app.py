@@ -1193,31 +1193,23 @@ async def sip_call_handler(
     Lifecycle: read UUID -> query AMI for caller -> create session ->
     run intro -> audio loop with VAD -> pipeline -> TTS back.
     """
-    from .sip_audio import SIPAudioAdapter, query_caller_id_ami
+    from .sip_audio import SIPAudioAdapter
 
     adapter = SIPAudioAdapter(reader, writer)
     session_id = ""
     session: VoiceSession | None = None
 
     try:
-        # 1. Read UUID frame
+        # 1. Read UUID frame (contains caller phone if set by dialplan)
         first = await adapter.read_next()
         if first is None or first.get("type") != "uuid":
             print("[SIP] No UUID frame received, closing", flush=True)
             await adapter.close()
             return
         session_id = first["uuid"]
-        print(f"[SIP:{session_id[:8]}] Connected", flush=True)
-
-        # 2. Query AMI for caller phone
-        caller_phone = await query_caller_id_ami(
-            channel_id=session_id,
-            ami_host=settings.sip.ami_host,
-            ami_port=settings.sip.ami_port,
-            ami_username=settings.sip.ami_username,
-            ami_secret=settings.sip.ami_secret,
-        )
-        print(f"[SIP:{session_id[:8]}] Caller: {caller_phone or 'unknown'}", flush=True)
+        # Caller phone extracted from UUID|callerid format by adapter
+        caller_phone = adapter.caller_phone
+        print(f"[SIP:{session_id[:8]}] Connected, caller: {caller_phone or 'unknown'}", flush=True)
 
         await broadcast_sip_event({
             "type": "sip.call.start",
