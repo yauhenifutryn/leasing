@@ -978,6 +978,9 @@ async def _stream_voice_response(
     producer_task = asyncio.create_task(llm_producer())
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
+    # SIP: wait for Asterisk to finish playing buffered audio + echo to die
+    if session.transport == "sip" and not session.interrupted:
+        await asyncio.sleep(1.5)
     session.assistant_speaking = False
     if rtc_handler is not None:
         rtc_handler.tts_track.flush()
@@ -1118,6 +1121,11 @@ async def _sip_send_tts(
         import traceback
         print(f"[SIP:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
 
+    # Wait for Asterisk to finish playing buffered audio + echo to die.
+    # Our frames are in Asterisk's TCP buffer; it plays them at 20ms/frame.
+    # Without this delay, echo from the last frames triggers VAD immediately.
+    if not session.interrupted:
+        await asyncio.sleep(1.5)
     session.assistant_speaking = False
 
     await broadcast_sip_event({
@@ -1339,9 +1347,9 @@ async def sip_call_handler(
 
             # Speech ended: VAD returned accumulated audio (16kHz)
             if speech_audio is not None:
-                # Guard: discard very short audio (< 0.3s at 16kHz = 9600 bytes)
+                # Guard: discard very short audio (< 0.5s at 16kHz = 16000 bytes)
                 # Prevents Whisper hallucinations on echo residue or noise bursts
-                if len(speech_audio) < 9600:
+                if len(speech_audio) < 16000:
                     print(f"[SIP:{session_id[:8]}] VAD: speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
                     continue
 
