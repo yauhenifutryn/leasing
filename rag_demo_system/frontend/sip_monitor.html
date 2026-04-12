@@ -176,12 +176,28 @@
     for (var i = 0; i < entries.length; i++) {
       lines.push(entries[i].textContent);
     }
-    navigator.clipboard.writeText(lines.join('\n'));
+    var text = lines.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function() { fallbackCopy(text); });
+    } else {
+      fallbackCopy(text);
+    }
   });
 
   document.getElementById('btnClear').addEventListener('click', function() {
     while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
   });
+
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
 
   connect();
 })();

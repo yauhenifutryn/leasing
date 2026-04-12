@@ -174,10 +174,10 @@ class SIPAudioAdapter:
         self.tts_start_time = asyncio.get_event_loop().time()
         pcm_8k = resample_24k_to_8k(pcm16_24k)
         frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
-        # Send all frames at once. Asterisk 20 reads from TCP buffer at its
-        # own 20ms tick rate. No artificial pacing needed: the natural delay
-        # from sentence-level TTS generation (~200-500ms per sentence) provides
-        # pacing between sentences, same as the browser pipeline.
+        # Send frames with light pacing: drain every 100 frames (2s of audio).
+        # This prevents TCP buffer overflow while keeping latency minimal.
+        # Each sentence is typically 1-3 seconds, so at most one pause per sentence.
+        frame_count = 0
         for i in range(0, len(pcm_8k), frame_size):
             if self._closed or self.playback_stopped:
                 break
@@ -186,6 +186,11 @@ class SIPAudioAdapter:
                 break
             header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
             self.writer.write(header + chunk)
+            frame_count += 1
+            # Light pacing: drain every 2s of audio, brief yield to event loop
+            if frame_count % 100 == 0:
+                await self.writer.drain()
+                await asyncio.sleep(0.01)  # minimal yield, not real-time pacing
         if not self._closed:
             await self.writer.drain()
 
