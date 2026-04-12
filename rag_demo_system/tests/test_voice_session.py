@@ -133,14 +133,14 @@ class TestVoiceSessionSIPFields:
         assert s.client_phone is None
         assert s.call_id is None
 
-    def test_sip_transport_fields(self):
+    def test_jambonz_transport_fields(self):
         from backend.voice_session import VoiceSession
         s = VoiceSession(
             session_id="test-2",
-            transport="sip",
-            client_phone="375291234567",
-            call_id="abc-123",
+            transport="jambonz",
+            client_phone="+375291234567",
+            call_id="call-sid-abc-123",
         )
-        assert s.transport == "sip"
-        assert s.client_phone == "375291234567"
-        assert s.call_id == "abc-123"
+        assert s.transport == "jambonz"
+        assert s.client_phone == "+375291234567"
+        assert s.call_id == "call-sid-abc-123"
