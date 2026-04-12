@@ -1,0 +1,220 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:5.7
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-JambonzRoot2026!}
+      MYSQL_DATABASE: jambones
+      MYSQL_USER: jambones
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+    volumes:
+      - jambonz-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  drachtio:
+    image: drachtio/drachtio-server:latest
+    command: >
+      drachtio --contact "sip:*;transport=udp"
+      --contact "sip:*;transport=tcp"
+      --loglevel info
+      --sofia-loglevel 3
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+    restart: unless-stopped
+
+  freeswitch:
+    image: drachtio/drachtio-freeswitch-mrf:latest
+    volumes:
+      - /tmp/freeswitch-recordings:/tmp/recordings
+    restart: unless-stopped
+
+  rtpengine:
+    image: jambonz/rtpengine:latest
+    ports:
+      - "40000-40100:40000-40100/udp"
+    environment:
+      - CLOUD=none
+      - "OPTIONS=--interface=private/0.0.0.0 --interface=public/0.0.0.0!${PUBLIC_IP:-0.0.0.0} --port-min=40000 --port-max=40100 --log-level=4"
+    restart: unless-stopped
+
+  api-server:
+    image: jambonz/jambonz-api-server:latest
+    environment:
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+      HTTP_PORT: 3000
+      HOMER_BASE_URL: ""
+      HOMER_USERNAME: ""
+      HOMER_PASSWORD: ""
+      JAMBONES_TIME_SERIES_HOST: ""
+    ports:
+      - "3000:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  webapp:
+    image: jambonz/webapp:latest
+    environment:
+      API_BASE_URL: http://api-server:3000/v1
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api-server
+    restart: unless-stopped
+
+  feature-server:
+    image: jambonz/feature-server:latest
+    environment:
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+      DRACHTIO_HOST: drachtio
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_FREESWITCH: freeswitch:8021:ClueCon
+      ENABLE_METRICS: 0
+      HTTP_PORT: 3000
+      JAMBONES_OTEL_ENABLED: 0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      drachtio:
+        condition: service_started
+      freeswitch:
+        condition: service_started
+    restart: unless-stopped
+
+  sbc-inbound:
+    image: jambonz/sbc-inbound:latest
+    environment:
+      DRACHTIO_HOST: drachtio
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+      K8S_FEATURE_SERVER_SERVICE_NAME: feature-server
+      K8S_FEATURE_SERVER_SERVICE_PORT: 3000
+      JAMBONES_RTPENGINE_HOST: rtpengine
+      JAMBONES_RTPENGINE_PORT: 22222
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      drachtio:
+        condition: service_started
+    restart: unless-stopped
+
+  sbc-outbound:
+    image: jambonz/sbc-outbound:latest
+    environment:
+      DRACHTIO_HOST: drachtio
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+      JAMBONES_RTPENGINE_HOST: rtpengine
+      JAMBONES_RTPENGINE_PORT: 22222
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      drachtio:
+        condition: service_started
+    restart: unless-stopped
+
+  sbc-call-router:
+    image: jambonz/sbc-call-router:latest
+    environment:
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+      HTTP_PORT: 3000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sbc-registrar:
+    image: jambonz/sbc-registrar:latest
+    environment:
+      DRACHTIO_HOST: drachtio
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      drachtio:
+        condition: service_started
+    restart: unless-stopped
+
+  sbc-sip-sidecar:
+    image: jambonz/sbc-sip-sidecar:latest
+    environment:
+      DRACHTIO_HOST: drachtio
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_REDIS_HOST: redis
+      JAMBONES_LOGLEVEL: info
+    depends_on:
+      redis:
+        condition: service_healthy
+      drachtio:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  jambonz-mysql:
