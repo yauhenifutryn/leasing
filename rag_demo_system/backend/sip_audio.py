@@ -162,23 +162,29 @@ class SIPAudioAdapter:
 
         AudioSocket uses slin (8kHz signed linear 16-bit).
         20ms at 8kHz = 160 samples = 320 bytes per frame.
-        Asterisk reads from the TCP buffer at its own 20ms tick.
-        We write all frames at once; Asterisk handles playback timing.
+        Write in batches of 25 frames (500ms), pace with 480ms sleep.
+        This gives Asterisk time to consume frames without buffer overflow,
+        while keeping playback smooth and near real-time.
         """
         if self._closed:
             return
         pcm_8k = resample_24k_to_8k(pcm16_24k)
-        # Build all frames and write at once
         frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
-        buf = bytearray()
+        batch_size = 25   # 25 frames = 500ms of audio per batch
+        frame_count = 0
         for i in range(0, len(pcm_8k), frame_size):
+            if self._closed:
+                break
             chunk = pcm_8k[i : i + frame_size]
             if not chunk:
                 break
-            buf.extend(struct.pack("!BH", FRAME_AUDIO, len(chunk)))
-            buf.extend(chunk)
-        if buf and not self._closed:
-            self.writer.write(buf)
+            header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
+            self.writer.write(header + chunk)
+            frame_count += 1
+            if frame_count % batch_size == 0:
+                await self.writer.drain()
+                await asyncio.sleep(0.48)  # 480ms for 25 frames (500ms audio)
+        if not self._closed:
             await self.writer.drain()
 
 

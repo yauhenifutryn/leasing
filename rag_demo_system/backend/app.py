@@ -1144,11 +1144,14 @@ async def _sip_process_utterance(
         transcript = transcribe_audio(audio_b64, session_id=session_id)
     except Exception as exc:  # noqa: BLE001
         print(f"[SIP:{session_id[:8]}] STT error: {exc}", flush=True)
+        session.assistant_speaking = False
         return
 
     t_stt_done = time.time()
     text = (transcript.get("text") or "").strip()
     if not text:
+        print(f"[SIP:{session_id[:8]}] STT error: Whisper returned empty transcription", flush=True)
+        session.assistant_speaking = False
         return
 
     print(f"[SIP:{session_id[:8]}] STT: {text}", flush=True)
