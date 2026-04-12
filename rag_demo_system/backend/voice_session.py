@@ -22,7 +22,7 @@ class VoiceSession:
     # SIP telephony fields (defaults preserve existing WebSocket/RTC behavior)
     transport: str = "websocket"          # "websocket" | "rtc" | "jambonz"
     client_phone: str | None = None       # from SIP caller ID, None for browser
-    call_id: str | None = None            # AudioSocket UUID or RTC session ID
+    call_id: str | None = None            # Jambonz call ID or RTC session ID
 
     @property
     def stack_id(self) -> str:
