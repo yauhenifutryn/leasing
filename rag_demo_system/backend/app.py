@@ -1101,14 +1101,22 @@ async def _sip_send_tts(
 ) -> None:
     """Synthesize text and send audio back through AudioSocket."""
     try:
+        print(f"[SIP:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
         audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
         audio_b64 = audio_resp.get("audio_b64") or ""
+        sample_rate = audio_resp.get("sample_rate_hz", 24000)
+        print(f"[SIP:{session_id[:8]}] TTS got {len(audio_b64)} chars b64, sample_rate={sample_rate}", flush=True)
         if audio_b64:
             import base64 as _b64
             pcm_raw = _b64.b64decode(audio_b64)
+            print(f"[SIP:{session_id[:8]}] TTS decoded {len(pcm_raw)} bytes PCM, writing to AudioSocket...", flush=True)
             await adapter.write_audio(pcm_raw)
+            print(f"[SIP:{session_id[:8]}] TTS audio sent OK", flush=True)
+        else:
+            print(f"[SIP:{session_id[:8]}] TTS returned empty audio", flush=True)
     except Exception as exc:  # noqa: BLE001
-        print(f"[SIP:{session_id[:8]}] TTS error: {exc}", flush=True)
+        import traceback
+        print(f"[SIP:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
 
     await broadcast_sip_event({
         "type": "sip.tts.start",
