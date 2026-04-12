@@ -27,15 +27,15 @@ fi
 info "Public IP: $PUBLIC_IP"
 
 # ── 2. Stop Asterisk if running (port 5060 conflict) ──
-if command -v asterisk &>/dev/null || ss -ulnp 2>/dev/null | grep -q ':5060 '; then
+if pgrep -x asterisk &>/dev/null; then
     info "Stopping Asterisk (port 5060 needed by Jambonz)..."
     sudo systemctl stop asterisk 2>/dev/null || true
     sudo systemctl disable asterisk 2>/dev/null || true
-    # Kill any remaining asterisk process
-    sudo pkill -f asterisk 2>/dev/null || true
+    sudo pkill -x asterisk 2>/dev/null || true
     sleep 1
-    if ss -ulnp 2>/dev/null | grep -q ':5060 '; then
-        fail "Port 5060 still in use after stopping Asterisk. Check: sudo ss -ulnp | grep 5060"
+    if pgrep -x asterisk &>/dev/null; then
+        sudo pkill -9 -x asterisk 2>/dev/null || true
+        sleep 1
     fi
     info "Asterisk stopped"
 fi
