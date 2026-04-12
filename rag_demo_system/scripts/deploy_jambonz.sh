@@ -135,11 +135,11 @@ print('')
 " 2>/dev/null || echo "")
 
 if [ -z "$APP_SID" ]; then
-    APP_SID=$(acurl -X POST "$API/Accounts/$ACCOUNT_SID/Applications" \
+    APP_SID=$(acurl -X POST "$API/Applications" \
         -d "{
             \"name\": \"voice-bot\",
             \"account_sid\": \"$ACCOUNT_SID\",
-            \"call_hook\": {\"url\": \"ws://host.docker.internal:8000/ws/jambonz\", \"method\": \"WS\"},
+            \"call_hook\": {\"url\": \"ws://host.docker.internal:8000/ws/jambonz\", \"method\": \"POST\"},
             \"call_status_hook\": {\"url\": \"http://host.docker.internal:8000/api/jambonz/call-status\", \"method\": \"POST\"}
         }" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
 fi
