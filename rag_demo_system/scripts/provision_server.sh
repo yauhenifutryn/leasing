@@ -698,14 +698,13 @@ install_turn_server() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 9b: Asterisk PBX for SIP telephony
+# Step 9b: SIP telephony (Jambonz)
 # ---------------------------------------------------------------------------
-install_asterisk() {
-  # SIP/Asterisk setup is fully handled by deploy_sip.sh which should
-  # run AFTER provision_server.sh. deploy_sip.sh installs Asterisk 20.x
-  # (not 18.x which has AudioSocket bugs), configures endpoints, generates
-  # passwords, disables conflicting modules, and sets up QR codes.
-  log "Asterisk setup deferred to deploy_sip.sh (run after provision + smoke)"
+setup_sip_notice() {
+  # SIP telephony is handled by deploy_jambonz.sh, which should be run
+  # separately after provision_server.sh completes. It deploys Jambonz
+  # via Docker and does not require any steps from this script.
+  log "SIP telephony setup deferred to deploy_jambonz.sh (run after provision + smoke)"
 }
 
 # ---------------------------------------------------------------------------
@@ -850,11 +849,15 @@ main() {
   start_qdrant               # Step 7: Qdrant vector DB
   write_env_file             # Step 8: generate .env
   install_turn_server        # Step 9: coturn for WebRTC relay
-  install_asterisk           # Step 9b: Asterisk PBX for SIP telephony
+  setup_sip_notice           # Step 9b: SIP telephony notice (Jambonz deployed separately)
   start_stack                # Step 10: launch supervisor stack
 
   log "=== Provisioning complete ==="
   log "Next: bash $APP_DIR/scripts/smoke_test.sh"
+
+  echo ""
+  echo "[INFO] To enable SIP telephony, run: bash scripts/deploy_jambonz.sh"
+  echo ""
 }
 
 main "$@"
