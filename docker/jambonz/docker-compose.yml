@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mysql:
     image: mysql:5.7
@@ -53,8 +51,21 @@ services:
       - "OPTIONS=--interface=private/0.0.0.0 --interface=public/0.0.0.0!${PUBLIC_IP:-0.0.0.0} --port-min=40000 --port-max=40100 --log-level=4"
     restart: unless-stopped
 
+  db-create:
+    image: jambonz/db-create:latest
+    environment:
+      JAMBONES_MYSQL_HOST: mysql
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-JambonzRoot2026!}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
   api-server:
-    image: jambonz/jambonz-api-server:latest
+    image: jambonz/api-server:latest
     environment:
       JAMBONES_MYSQL_HOST: mysql
       JAMBONES_MYSQL_USER: jambones
@@ -70,8 +81,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
