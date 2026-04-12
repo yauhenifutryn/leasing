@@ -1278,7 +1278,14 @@ async def sip_call_handler(
 
             pcm_16k = frame["pcm16"]
 
-            # VAD processing
+            # Skip VAD during TTS playback to avoid self-triggering on echo.
+            # AudioSocket is full-duplex: caller audio includes TTS echo
+            # since there is no AEC at the AudioSocket level.
+            # Barge-in will be re-enabled once proper AEC is added.
+            if session.assistant_speaking:
+                continue
+
+            # VAD processing (only when bot is NOT speaking)
             was_speaking = vad.is_speaking
             speech_audio = vad.feed(pcm_16k)
 
@@ -1288,16 +1295,6 @@ async def sip_call_handler(
                     "type": "sip.vad.speech",
                     "call_id": session_id,
                     "event": "start",
-                })
-
-            # Barge-in: user started speaking while bot is responding
-            if not was_speaking and vad.is_speaking and session.assistant_speaking:
-                session.interrupted = True
-                session.assistant_speaking = False
-                print(f"[SIP:{session_id[:8]}] BARGE-IN", flush=True)
-                await broadcast_sip_event({
-                    "type": "sip.barge_in",
-                    "call_id": session_id,
                 })
 
             # Speech ended: VAD returned accumulated audio

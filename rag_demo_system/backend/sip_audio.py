@@ -158,26 +158,28 @@ class SIPAudioAdapter:
         return {"type": "unknown", "frame_type": frame_type}
 
     async def write_audio(self, pcm16_24k: bytes) -> None:
-        """Write TTS audio (24kHz PCM16) back to AudioSocket as 20ms frames.
+        """Write TTS audio (24kHz PCM16) back to AudioSocket as 8kHz 20ms frames.
 
-        AudioSocket in Asterisk 20 uses slin16 (16kHz signed linear).
-        20ms at 16kHz = 320 samples = 640 bytes per frame.
-        Asterisk reads frames from TCP at its own 20ms tick rate.
+        AudioSocket uses slin (8kHz signed linear 16-bit).
+        20ms at 8kHz = 160 samples = 320 bytes per frame.
+        Frames are paced at real-time (20ms each) so Asterisk plays at correct speed.
         """
         if self._closed:
             return
-        pcm_out = resample_24k_to_16k(pcm16_24k)
-        # Send as 20ms frames: 320 samples at 16kHz = 640 bytes
-        frame_size = 640
-        for i in range(0, len(pcm_out), frame_size):
+        pcm_8k = resample_24k_to_8k(pcm16_24k)
+        # Send as 20ms frames with real-time pacing
+        frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
+        for i in range(0, len(pcm_8k), frame_size):
             if self._closed:
                 break
-            chunk = pcm_out[i : i + frame_size]
+            chunk = pcm_8k[i : i + frame_size]
             if not chunk:
                 break
             header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
             self.writer.write(header + chunk)
-        await self.writer.drain()
+            await self.writer.drain()
+            await asyncio.sleep(0.02)  # 20ms per frame = real-time
+
 
     async def close(self) -> None:
         """Shut down the TCP connection."""
