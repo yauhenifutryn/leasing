@@ -1236,6 +1236,9 @@ async def sip_call_handler(
         _echo_samples: list[float] = []  # rolling RMS baseline during TTS
 
         # 5. Send intro TTS as background task (do not block the read loop)
+        # Small delay before intro: Asterisk needs time to set up the audio path
+        # after AudioSocket connect. Without this, first syllable gets clipped.
+        await asyncio.sleep(0.5)
         intro_text = (
             "Здравствуйте! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
             "Как я могу к вам обращаться?"

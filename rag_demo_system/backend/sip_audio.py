@@ -174,6 +174,9 @@ class SIPAudioAdapter:
         self.tts_start_time = asyncio.get_event_loop().time()
         pcm_8k = resample_24k_to_8k(pcm16_24k)
         frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
+        # Write frames in batches. First batch sent immediately (low latency
+        # to first audio). Subsequent batches paced at ~real-time so Asterisk
+        # does not drop frames from TCP buffer overflow.
         batch_size = 50   # 50 frames = 1000ms of audio per batch
         frame_count = 0
         for i in range(0, len(pcm_8k), frame_size):
@@ -187,7 +190,9 @@ class SIPAudioAdapter:
             frame_count += 1
             if frame_count % batch_size == 0:
                 await self.writer.drain()
-                await asyncio.sleep(0.96)  # 960ms for 50 frames (1000ms audio)
+                # Skip pacing for first batch (instant start)
+                if frame_count > batch_size:
+                    await asyncio.sleep(0.95)
         if not self._closed:
             await self.writer.drain()
 
