@@ -1,3 +1,26 @@
+x-common-env: &common-env
+  JAMBONES_MYSQL_HOST: mysql
+  JAMBONES_MYSQL_USER: jambones
+  JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+  JAMBONES_MYSQL_DATABASE: jambones
+  JAMBONES_REDIS_HOST: redis
+  JAMBONES_REDIS_PORT: 6379
+  JAMBONES_TIME_SERIES_HOST: influxdb
+  JAMBONES_LOGLEVEL: info
+  JWT_SECRET: ${JWT_SECRET:-jambonz-voice-pipeline-jwt-2026}
+  ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-voicepipeline2026jambonz}
+  JAMBONES_CLUSTER_ID: jb
+  NODE_ENV: production
+
+x-sbc-env: &sbc-env
+  <<: *common-env
+  DRACHTIO_HOST: drachtio
+  DRACHTIO_PORT: 9022
+  DRACHTIO_SECRET: cymru
+  JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
+  JAMBONES_RTPENGINE_HOST: rtpengine
+  JAMBONES_RTPENGINE_PORT: 22222
+
 services:
   mysql:
     image: mysql:5.7
@@ -13,6 +36,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      jambonz:
     restart: unless-stopped
 
   redis:
@@ -22,6 +47,18 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      jambonz:
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:1.8
+    environment:
+      INFLUXDB_DB: jambones_time_series
+    volumes:
+      - jambonz-influxdb:/var/lib/influxdb
+    networks:
+      jambonz:
     restart: unless-stopped
 
   drachtio:
@@ -34,12 +71,16 @@ services:
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
+    networks:
+      jambonz:
     restart: unless-stopped
 
   freeswitch:
     image: drachtio/drachtio-freeswitch-mrf:latest
     volumes:
       - /tmp/freeswitch-recordings:/tmp/recordings
+    networks:
+      jambonz:
     restart: unless-stopped
 
   rtpengine:
@@ -47,8 +88,10 @@ services:
     ports:
       - "40000-40100:40000-40100/udp"
     environment:
-      - CLOUD=none
-      - "OPTIONS=--interface=private/0.0.0.0 --interface=public/0.0.0.0!${PUBLIC_IP:-0.0.0.0} --port-min=40000 --port-max=40100 --log-level=4"
+      CLOUD: none
+      OPTIONS: "--interface=private/0.0.0.0 --interface=public/0.0.0.0!${PUBLIC_IP:-0.0.0.0} --port-min=40000 --port-max=40100 --log-level=4"
+    networks:
+      jambonz:
     restart: unless-stopped
 
   db-create:
@@ -62,23 +105,18 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    networks:
+      jambonz:
     restart: "no"
 
   api-server:
     image: jambonz/api-server:latest
     environment:
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
-      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-voicepipeline2026jambonz}
+      <<: *common-env
       HTTP_PORT: 3000
       HOMER_BASE_URL: ""
       HOMER_USERNAME: ""
       HOMER_PASSWORD: ""
-      JAMBONES_TIME_SERIES_HOST: ""
     ports:
       - "3000:3000"
     depends_on:
@@ -86,6 +124,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    networks:
+      jambonz:
     restart: unless-stopped
 
   webapp:
@@ -96,22 +136,15 @@ services:
       - "3001:3001"
     depends_on:
       - api-server
+    networks:
+      jambonz:
     restart: unless-stopped
 
   feature-server:
     image: jambonz/feature-server:latest
     environment:
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
-      DRACHTIO_HOST: drachtio
-      DRACHTIO_PORT: 9022
-      DRACHTIO_SECRET: cymru
+      <<: *sbc-env
       JAMBONES_FREESWITCH: freeswitch:8021:ClueCon
-      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-voicepipeline2026jambonz}
       ENABLE_METRICS: 0
       HTTP_PORT: 3000
       JAMBONES_OTEL_ENABLED: 0
@@ -126,24 +159,16 @@ services:
         condition: service_started
       freeswitch:
         condition: service_started
+    networks:
+      jambonz:
     restart: unless-stopped
 
   sbc-inbound:
     image: jambonz/sbc-inbound:latest
     environment:
-      DRACHTIO_HOST: drachtio
-      DRACHTIO_PORT: 9022
-      DRACHTIO_SECRET: cymru
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
+      <<: *sbc-env
       K8S_FEATURE_SERVER_SERVICE_NAME: feature-server
       K8S_FEATURE_SERVER_SERVICE_PORT: 3000
-      JAMBONES_RTPENGINE_HOST: rtpengine
-      JAMBONES_RTPENGINE_PORT: 22222
     depends_on:
       mysql:
         condition: service_healthy
@@ -151,22 +176,14 @@ services:
         condition: service_healthy
       drachtio:
         condition: service_started
+    networks:
+      jambonz:
     restart: unless-stopped
 
   sbc-outbound:
     image: jambonz/sbc-outbound:latest
     environment:
-      DRACHTIO_HOST: drachtio
-      DRACHTIO_PORT: 9022
-      DRACHTIO_SECRET: cymru
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
-      JAMBONES_RTPENGINE_HOST: rtpengine
-      JAMBONES_RTPENGINE_PORT: 22222
+      <<: *sbc-env
     depends_on:
       mysql:
         condition: service_healthy
@@ -174,37 +191,29 @@ services:
         condition: service_healthy
       drachtio:
         condition: service_started
+    networks:
+      jambonz:
     restart: unless-stopped
 
   sbc-call-router:
     image: jambonz/sbc-call-router:latest
     environment:
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
+      <<: *common-env
+      JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
       HTTP_PORT: 3000
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      jambonz:
     restart: unless-stopped
 
   sbc-registrar:
     image: jambonz/sbc-registrar:latest
     environment:
-      DRACHTIO_HOST: drachtio
-      DRACHTIO_PORT: 9022
-      DRACHTIO_SECRET: cymru
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
+      <<: *sbc-env
     depends_on:
       mysql:
         condition: service_healthy
@@ -212,22 +221,32 @@ services:
         condition: service_healthy
       drachtio:
         condition: service_started
+    networks:
+      jambonz:
     restart: unless-stopped
 
   sbc-sip-sidecar:
     image: jambonz/sbc-sip-sidecar:latest
     environment:
-      DRACHTIO_HOST: drachtio
-      DRACHTIO_PORT: 9022
-      DRACHTIO_SECRET: cymru
-      JAMBONES_REDIS_HOST: redis
-      JAMBONES_LOGLEVEL: info
+      <<: *sbc-env
     depends_on:
+      mysql:
+        condition: service_healthy
       redis:
         condition: service_healthy
       drachtio:
         condition: service_started
+    networks:
+      jambonz:
     restart: unless-stopped
+
+networks:
+  jambonz:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16
 
 volumes:
   jambonz-mysql:
+  jambonz-influxdb:
