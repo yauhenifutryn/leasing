@@ -1289,7 +1289,10 @@ async def sip_call_handler(
             # During TTS: monitor energy. On suspected speech, stop TTS
             # immediately (echo dies), wait for echo tail, then listen.
             if session.assistant_speaking:
-                if pcm_raw_8k and not session.interrupted:
+                # Skip barge-in detection for first 1.5s of TTS playback.
+                # Echo energy is highest at TTS start; baseline needs time to stabilize.
+                _tts_elapsed = asyncio.get_event_loop().time() - adapter.tts_start_time
+                if pcm_raw_8k and not session.interrupted and _tts_elapsed > 1.5:
                     import struct as _st
                     import math as _math
                     _n = len(pcm_raw_8k) // 2

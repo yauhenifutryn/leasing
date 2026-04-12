@@ -102,6 +102,7 @@ class SIPAudioAdapter:
         self.dtmf_buffer: list[str] = []
         self._closed = False
         self.playback_stopped = False  # set True to stop TTS mid-stream
+        self.tts_start_time: float = 0.0  # when current TTS started playing
 
     async def read_next(self) -> dict[str, Any] | None:
         """Read and parse the next AudioSocket frame.
@@ -170,9 +171,10 @@ class SIPAudioAdapter:
         if self._closed:
             return
         self.playback_stopped = False
+        self.tts_start_time = asyncio.get_event_loop().time()
         pcm_8k = resample_24k_to_8k(pcm16_24k)
         frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
-        batch_size = 25   # 25 frames = 500ms of audio per batch
+        batch_size = 50   # 50 frames = 1000ms of audio per batch
         frame_count = 0
         for i in range(0, len(pcm_8k), frame_size):
             if self._closed or self.playback_stopped:
@@ -185,7 +187,7 @@ class SIPAudioAdapter:
             frame_count += 1
             if frame_count % batch_size == 0:
                 await self.writer.drain()
-                await asyncio.sleep(0.48)  # 480ms for 25 frames (500ms audio)
+                await asyncio.sleep(0.96)  # 960ms for 50 frames (1000ms audio)
         if not self._closed:
             await self.writer.drain()
 
