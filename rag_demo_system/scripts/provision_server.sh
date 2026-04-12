@@ -88,6 +88,7 @@ if [ "$AVAIL_GB" -lt 100 ] 2>/dev/null; then
 fi
 
 APP_DIR="$WORKSPACE/leasing/rag_demo_system"
+REPO_ROOT="$WORKSPACE/leasing"
 MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 
 # Fail-fast: HF_TOKEN is required before any network work
@@ -718,9 +719,9 @@ install_asterisk() {
 
   # Copy config files
   local ASTERISK_ETC="/etc/asterisk"
-  cp "$APP_DIR/config/asterisk/pjsip.conf" "$ASTERISK_ETC/pjsip.conf"
-  cp "$APP_DIR/config/asterisk/extensions.conf" "$ASTERISK_ETC/extensions.conf"
-  cp "$APP_DIR/config/asterisk/manager.conf" "$ASTERISK_ETC/manager.conf"
+  cp "$REPO_ROOT/config/asterisk/pjsip.conf" "$ASTERISK_ETC/pjsip.conf"
+  cp "$REPO_ROOT/config/asterisk/extensions.conf" "$ASTERISK_ETC/extensions.conf"
+  cp "$REPO_ROOT/config/asterisk/manager.conf" "$ASTERISK_ETC/manager.conf"
 
   # Generate secure passwords
   local DEV_PASS CLIENT_PASS AMI_PASS

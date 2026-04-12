@@ -12,6 +12,7 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+REPO_ROOT="${REPO_ROOT:-$(cd "$APP_DIR/.." && pwd)}"
 cd "$APP_DIR"
 
 log() { echo "[sip-deploy] $*"; }
@@ -60,9 +61,9 @@ CLIENT_PASS=$(openssl rand -hex 12)
 AMI_PASS=$(openssl rand -hex 12)
 
 # Copy configs and inject passwords
-cp "$APP_DIR/config/asterisk/pjsip.conf" "$ASTERISK_ETC/pjsip.conf"
-cp "$APP_DIR/config/asterisk/extensions.conf" "$ASTERISK_ETC/extensions.conf"
-cp "$APP_DIR/config/asterisk/manager.conf" "$ASTERISK_ETC/manager.conf"
+cp "$REPO_ROOT/config/asterisk/pjsip.conf" "$ASTERISK_ETC/pjsip.conf"
+cp "$REPO_ROOT/config/asterisk/extensions.conf" "$ASTERISK_ETC/extensions.conf"
+cp "$REPO_ROOT/config/asterisk/manager.conf" "$ASTERISK_ETC/manager.conf"
 
 sed -i "s/CHANGE_ME_dev_password/$DEV_PASS/" "$ASTERISK_ETC/pjsip.conf"
 sed -i "s/CHANGE_ME_client_password/$CLIENT_PASS/" "$ASTERISK_ETC/pjsip.conf"
