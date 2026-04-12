@@ -34,10 +34,24 @@ def parse_frame(raw: bytes) -> tuple[int, bytes]:
     return frame_type, payload
 
 
+MAX_FRAME_PAYLOAD = 65000  # AudioSocket header uses uint16 length (max 65535)
+
+
 def build_audio_frame(pcm16_bytes: bytes) -> bytes:
-    """Build an AudioSocket audio frame from raw PCM16 bytes."""
-    header = struct.pack("!BH", FRAME_AUDIO, len(pcm16_bytes))
-    return header + pcm16_bytes
+    """Build AudioSocket audio frame(s) from raw PCM16 bytes.
+
+    Splits into multiple frames if payload exceeds 65000 bytes.
+    """
+    if len(pcm16_bytes) <= MAX_FRAME_PAYLOAD:
+        header = struct.pack("!BH", FRAME_AUDIO, len(pcm16_bytes))
+        return header + pcm16_bytes
+    # Split into chunks
+    result = b""
+    for i in range(0, len(pcm16_bytes), MAX_FRAME_PAYLOAD):
+        chunk = pcm16_bytes[i : i + MAX_FRAME_PAYLOAD]
+        header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
+        result += header + chunk
+    return result
 
 
 def resample_8k_to_16k(pcm16_8k: bytes) -> bytes:
@@ -109,7 +123,13 @@ class SIPAudioAdapter:
             payload = b""
 
         if frame_type == FRAME_UUID:
-            self.session_id = payload.decode("ascii", errors="replace")
+            # Asterisk 18 sends 16 raw bytes (binary UUID), not 36-char ASCII.
+            # Handle both formats.
+            if len(payload) == 16:
+                import uuid as _uuid_mod
+                self.session_id = str(_uuid_mod.UUID(bytes=payload))
+            else:
+                self.session_id = payload.decode("ascii", errors="replace").strip()
             return {"type": "uuid", "uuid": self.session_id}
 
         if frame_type == FRAME_AUDIO:
