@@ -101,6 +101,7 @@ class SIPAudioAdapter:
         self.caller_phone: str | None = None
         self.dtmf_buffer: list[str] = []
         self._closed = False
+        self.playback_stopped = False  # set True to stop TTS mid-stream
 
     async def read_next(self) -> dict[str, Any] | None:
         """Read and parse the next AudioSocket frame.
@@ -168,12 +169,13 @@ class SIPAudioAdapter:
         """
         if self._closed:
             return
+        self.playback_stopped = False
         pcm_8k = resample_24k_to_8k(pcm16_24k)
         frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
         batch_size = 25   # 25 frames = 500ms of audio per batch
         frame_count = 0
         for i in range(0, len(pcm_8k), frame_size):
-            if self._closed:
+            if self._closed or self.playback_stopped:
                 break
             chunk = pcm_8k[i : i + frame_size]
             if not chunk:

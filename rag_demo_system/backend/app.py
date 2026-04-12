@@ -1233,7 +1233,7 @@ async def sip_call_handler(
         # Collect raw 8kHz audio separately for STT (avoids double resampling)
         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
         vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
-        _raw_8k_buffer = bytearray()  # collects raw 8kHz for STT
+        _echo_samples: list[float] = []  # rolling RMS baseline during TTS
 
         # 5. Send intro TTS as background task (do not block the read loop)
         intro_text = (
@@ -1285,42 +1285,45 @@ async def sip_call_handler(
             pcm_16k = frame["pcm16"]
             pcm_raw_8k = frame.get("pcm_raw_8k", b"")
 
-            # During TTS playback: skip VAD to avoid echo self-trigger.
-            # Barge-in via energy detection: if caller speaks loudly enough
-            # over the TTS, detect it and interrupt.
+            # ── Stop-and-listen barge-in pattern ──
+            # During TTS: monitor energy. On suspected speech, stop TTS
+            # immediately (echo dies), wait for echo tail, then listen.
             if session.assistant_speaking:
-                # Energy-based barge-in: check if caller audio is loud
-                # (real speech is louder than TTS echo from phone speaker)
-                if pcm_raw_8k:
+                if pcm_raw_8k and not session.interrupted:
                     import struct as _st
                     import math as _math
                     _n = len(pcm_raw_8k) // 2
                     if _n > 0:
                         _samples = _st.unpack(f"<{_n}h", pcm_raw_8k)
                         _rms = _math.sqrt(sum(s * s for s in _samples) / _n)
-                        # High threshold: real speech over phone is typically 5000-15000 RMS.
-                        # Echo/feedback from phone speaker is typically 2000-6000 RMS.
-                        if _rms > 8000 and not session.interrupted:
+                        # Track echo baseline (rolling average of first frames)
+                        _echo_samples.append(_rms)
+                        if len(_echo_samples) > 25:
+                            _echo_samples.pop(0)
+                        _echo_baseline = sum(_echo_samples) / len(_echo_samples) if _echo_samples else 2000
+                        # Trigger: energy > 2.5x baseline AND above absolute minimum
+                        if _rms > max(_echo_baseline * 2.5, 4000):
+                            # Stop TTS immediately
+                            adapter.playback_stopped = True
                             session.interrupted = True
                             session.assistant_speaking = False
-                            print(f"[SIP:{session_id[:8]}] BARGE-IN (energy={_rms:.0f})", flush=True)
+                            # Reset VAD for clean start
+                            vad.reset()
+                            _echo_samples.clear()
+                            print(f"[SIP:{session_id[:8]}] BARGE-IN (energy={_rms:.0f}, baseline={_echo_baseline:.0f})", flush=True)
                             await broadcast_sip_event({
                                 "type": "sip.barge_in",
                                 "call_id": session_id,
                             })
+                            # Wait 80ms for echo tail to clear from Asterisk buffer
+                            await asyncio.sleep(0.08)
                 continue
 
-            # VAD processing (only when bot is NOT speaking)
+            # ── Normal listening mode (bot NOT speaking) ──
             was_speaking = vad.is_speaking
             speech_audio = vad.feed(pcm_16k)
 
-            # Also accumulate raw 8kHz for STT (better quality than resampled)
-            if vad.is_speaking:
-                _raw_8k_buffer.extend(pcm_raw_8k)
-
             if not was_speaking and vad.is_speaking:
-                _raw_8k_buffer.clear()
-                _raw_8k_buffer.extend(pcm_raw_8k)
                 print(f"[SIP:{session_id[:8]}] VAD: speech_start", flush=True)
                 await broadcast_sip_event({
                     "type": "sip.vad.speech",
@@ -1330,13 +1333,18 @@ async def sip_call_handler(
 
             # Speech ended: VAD returned accumulated audio (16kHz)
             if speech_audio is not None:
-                _raw_8k_buffer.clear()
+                # Guard: discard very short audio (< 0.3s at 16kHz = 9600 bytes)
+                # Prevents Whisper hallucinations on echo residue or noise bursts
+                if len(speech_audio) < 9600:
+                    print(f"[SIP:{session_id[:8]}] VAD: speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
+                    continue
+
                 # Resample 16kHz VAD output to 24kHz to match browser pipeline.
                 # transcribe_audio() expects 24kHz (hardcoded sample_rate_hz=24000).
-                from .sip_audio import resample_poly
+                from scipy.signal import resample_poly as _resample_poly
                 import numpy as _np
                 _samples = _np.frombuffer(speech_audio, dtype=_np.int16)
-                _resampled = resample_poly(_samples, up=3, down=2).astype(_np.int16)
+                _resampled = _resample_poly(_samples, up=3, down=2).astype(_np.int16)
                 speech_24k = _resampled.tobytes()
                 print(f"[SIP:{session_id[:8]}] VAD: speech_end ({len(speech_audio)} bytes 16kHz -> {len(speech_24k)} bytes 24kHz)", flush=True)
                 await broadcast_sip_event({
@@ -1347,6 +1355,7 @@ async def sip_call_handler(
                 # Fire-and-forget: process utterance in background
                 session.assistant_speaking = True
                 session.interrupted = False
+                _echo_samples.clear()
                 asyncio.create_task(_sip_process_utterance(
                     adapter, session, session_id, speech_24k,
                 ))
