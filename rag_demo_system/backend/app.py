@@ -1298,8 +1298,9 @@ async def sip_call_handler(
                     if _n > 0:
                         _samples = _st.unpack(f"<{_n}h", pcm_raw_8k)
                         _rms = _math.sqrt(sum(s * s for s in _samples) / _n)
-                        # High threshold: only real speech, not echo
-                        if _rms > 3000 and not session.interrupted:
+                        # High threshold: real speech over phone is typically 5000-15000 RMS.
+                        # Echo/feedback from phone speaker is typically 2000-6000 RMS.
+                        if _rms > 8000 and not session.interrupted:
                             session.interrupted = True
                             session.assistant_speaking = False
                             print(f"[SIP:{session_id[:8]}] BARGE-IN (energy={_rms:.0f})", flush=True)
@@ -1327,12 +1328,17 @@ async def sip_call_handler(
                     "event": "start",
                 })
 
-            # Speech ended: VAD returned accumulated audio
+            # Speech ended: VAD returned accumulated audio (16kHz)
             if speech_audio is not None:
-                # Use raw 8kHz audio for STT instead of resampled 16kHz
-                raw_for_stt = bytes(_raw_8k_buffer) if _raw_8k_buffer else speech_audio
                 _raw_8k_buffer.clear()
-                print(f"[SIP:{session_id[:8]}] VAD: speech_end ({len(raw_for_stt)} bytes raw 8kHz)", flush=True)
+                # Resample 16kHz VAD output to 24kHz to match browser pipeline.
+                # transcribe_audio() expects 24kHz (hardcoded sample_rate_hz=24000).
+                from .sip_audio import resample_poly
+                import numpy as _np
+                _samples = _np.frombuffer(speech_audio, dtype=_np.int16)
+                _resampled = resample_poly(_samples, up=3, down=2).astype(_np.int16)
+                speech_24k = _resampled.tobytes()
+                print(f"[SIP:{session_id[:8]}] VAD: speech_end ({len(speech_audio)} bytes 16kHz -> {len(speech_24k)} bytes 24kHz)", flush=True)
                 await broadcast_sip_event({
                     "type": "sip.vad.speech",
                     "call_id": session_id,
@@ -1342,7 +1348,7 @@ async def sip_call_handler(
                 session.assistant_speaking = True
                 session.interrupted = False
                 asyncio.create_task(_sip_process_utterance(
-                    adapter, session, session_id, raw_for_stt,
+                    adapter, session, session_id, speech_24k,
                 ))
 
     except Exception as exc:  # noqa: BLE001
