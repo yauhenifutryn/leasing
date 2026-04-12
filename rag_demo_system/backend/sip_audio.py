@@ -154,15 +154,14 @@ class SIPAudioAdapter:
         """Write TTS audio (24kHz PCM16) back to AudioSocket as 8kHz 20ms frames.
 
         AudioSocket expects 20ms frames: 160 samples at 8kHz = 320 bytes each.
-        Frames are paced at 20ms intervals so Asterisk plays them in real time.
-        Without pacing, Asterisk's jitter buffer overflows and audio plays too fast.
+        Asterisk 20 reads frames from the TCP socket at its own pace (20ms tick),
+        so we send all frames and let Asterisk consume them from the TCP buffer.
         """
         if self._closed:
             return
         pcm_8k = resample_24k_to_8k(pcm16_24k)
-        # Send as 20ms frames with real-time pacing
+        # Send as proper 20ms frames
         frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
-        frame_count = 0
         for i in range(0, len(pcm_8k), frame_size):
             if self._closed:
                 break
@@ -171,11 +170,6 @@ class SIPAudioAdapter:
                 break
             header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
             self.writer.write(header + chunk)
-            frame_count += 1
-            # Pace each frame at 20ms for real-time playback
-            if frame_count % 5 == 0:
-                await self.writer.drain()
-                await asyncio.sleep(0.1)  # 100ms for 5 frames = 20ms each
         await self.writer.drain()
 
     async def close(self) -> None:
