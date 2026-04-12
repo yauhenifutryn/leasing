@@ -106,6 +106,17 @@ sed -i "s/CHANGE_ME_dev_password/$DEV_PASS/" "$ASTERISK_ETC/pjsip.conf"
 sed -i "s/CHANGE_ME_client_password/$CLIENT_PASS/" "$ASTERISK_ETC/pjsip.conf"
 sed -i "s/CHANGE_ME_ami_secret/$AMI_PASS/" "$ASTERISK_ETC/manager.conf"
 
+# Disable conflicting dialplan modules (Lua, AEL override extensions.conf)
+for mod in pbx_lua pbx_ael chan_sip; do
+    if ! grep -q "noload => ${mod}.so" "$ASTERISK_ETC/modules.conf" 2>/dev/null; then
+        echo "noload => ${mod}.so" >> "$ASTERISK_ETC/modules.conf"
+    fi
+done
+
+# Remove conflicting config files that override our dialplan
+mv "$ASTERISK_ETC/extensions.lua" "$ASTERISK_ETC/extensions.lua.bak" 2>/dev/null || true
+mv "$ASTERISK_ETC/extensions.ael" "$ASTERISK_ETC/extensions.ael.bak" 2>/dev/null || true
+
 pass "Asterisk configs installed with generated passwords"
 
 # ---------------------------------------------------------------------------
@@ -116,6 +127,7 @@ log "--- Step 3: Start Asterisk ---"
 
 # Stop if running, then start fresh
 systemctl stop asterisk 2>/dev/null || true
+pkill -9 asterisk 2>/dev/null || true
 sleep 1
 systemctl enable asterisk 2>/dev/null || true
 systemctl start asterisk 2>/dev/null || {

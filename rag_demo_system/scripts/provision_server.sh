@@ -701,47 +701,11 @@ install_turn_server() {
 # Step 9b: Asterisk PBX for SIP telephony
 # ---------------------------------------------------------------------------
 install_asterisk() {
-  if command -v asterisk &>/dev/null; then
-    log "Asterisk already installed, updating config"
-  else
-    log "Installing Asterisk PBX..."
-    apt-get install -y asterisk || {
-      log "WARNING: Asterisk installation failed (non-fatal, SIP unavailable)"
-      return
-    }
-  fi
-
-  # Verify AudioSocket module is available
-  if ! asterisk -rx "module show like audiosocket" 2>/dev/null | grep -q audiosocket; then
-    log "WARNING: app_audiosocket not found. Asterisk version may be too old."
-    log "  Need Asterisk 16+ for AudioSocket, 20.14+ for DTMF support."
-  fi
-
-  # Copy config files
-  local ASTERISK_ETC="/etc/asterisk"
-  cp "$REPO_ROOT/config/asterisk/pjsip.conf" "$ASTERISK_ETC/pjsip.conf"
-  cp "$REPO_ROOT/config/asterisk/extensions.conf" "$ASTERISK_ETC/extensions.conf"
-  cp "$REPO_ROOT/config/asterisk/manager.conf" "$ASTERISK_ETC/manager.conf"
-
-  # Generate secure passwords
-  local DEV_PASS CLIENT_PASS AMI_PASS
-  DEV_PASS=$(openssl rand -hex 16)
-  CLIENT_PASS=$(openssl rand -hex 16)
-  AMI_PASS=$(openssl rand -hex 16)
-
-  sed -i "s/CHANGE_ME_dev_password/$DEV_PASS/" "$ASTERISK_ETC/pjsip.conf"
-  sed -i "s/CHANGE_ME_client_password/$CLIENT_PASS/" "$ASTERISK_ETC/pjsip.conf"
-  sed -i "s/CHANGE_ME_ami_secret/$AMI_PASS/" "$ASTERISK_ETC/manager.conf"
-
-  log "SIP credentials generated:"
-  log "  dev-user:     dev / $DEV_PASS"
-  log "  client-user:  client / $CLIENT_PASS"
-  log "  AMI secret:   $AMI_PASS"
-  log "  Set AMI_SECRET=$AMI_PASS in your .env file"
-
-  systemctl enable asterisk 2>/dev/null || true
-  systemctl restart asterisk 2>/dev/null || true
-  log "Asterisk installed and configured"
+  # SIP/Asterisk setup is fully handled by deploy_sip.sh which should
+  # run AFTER provision_server.sh. deploy_sip.sh installs Asterisk 20.x
+  # (not 18.x which has AudioSocket bugs), configures endpoints, generates
+  # passwords, disables conflicting modules, and sets up QR codes.
+  log "Asterisk setup deferred to deploy_sip.sh (run after provision + smoke)"
 }
 
 # ---------------------------------------------------------------------------
