@@ -105,14 +105,14 @@ class VoiceConfig:
 
 
 @dataclass
-class SIPConfig:
+class JambonzConfig:
     enabled: bool
-    audiosocket_host: str
-    audiosocket_port: int
-    ami_host: str
-    ami_port: int
-    ami_username: str
-    ami_secret: str
+    api_base_url: str
+    account_sid: str
+    app_sid: str
+    sip_realm: str
+    sip_user: str
+    sip_password: str
 
 
 @dataclass
@@ -126,7 +126,7 @@ class Settings:
     query_rewrite: QueryRewriteConfig
     voice: VoiceConfig
     tools: ToolsConfig
-    sip: SIPConfig
+    jambonz: JambonzConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -175,7 +175,7 @@ def load_settings(path: Path | None = None) -> Settings:
     query_rewrite = payload.get("query_rewrite", {})
     voice = payload.get("voice", {})
     tools_cfg = payload.get("tools", {})
-    sip_cfg = payload.get("sip", {})
+    jambonz_cfg = payload.get("jambonz", {})
 
     return Settings(
         app=AppConfig(
@@ -256,13 +256,13 @@ def load_settings(path: Path | None = None) -> Settings:
             crm_webhook_url=os.getenv("CRM_WEBHOOK_URL", tools_cfg.get("crm_webhook_url", "")),
             crm_webhook_token=os.getenv("CRM_WEBHOOK_TOKEN", tools_cfg.get("crm_webhook_token", "")),
         ),
-        sip=SIPConfig(
-            enabled=os.getenv("SIP_ENABLED", str(sip_cfg.get("enabled", False))).lower() in ("true", "1", "yes"),
-            audiosocket_host=os.getenv("AUDIOSOCKET_HOST", sip_cfg.get("audiosocket_host", "127.0.0.1")),
-            audiosocket_port=int(os.getenv("AUDIOSOCKET_PORT", sip_cfg.get("audiosocket_port", 9092))),
-            ami_host=os.getenv("AMI_HOST", sip_cfg.get("ami_host", "127.0.0.1")),
-            ami_port=int(os.getenv("AMI_PORT", sip_cfg.get("ami_port", 5038))),
-            ami_username=os.getenv("AMI_USERNAME", sip_cfg.get("ami_username", "voicebot")),
-            ami_secret=os.getenv("AMI_SECRET", sip_cfg.get("ami_secret", "")),
+        jambonz=JambonzConfig(
+            enabled=os.getenv("JAMBONZ_ENABLED", str(jambonz_cfg.get("enabled", False))).lower() in ("true", "1", "yes"),
+            api_base_url=os.getenv("JAMBONZ_API_BASE_URL", jambonz_cfg.get("api_base_url", "http://127.0.0.1:3000")),
+            account_sid=os.getenv("JAMBONZ_ACCOUNT_SID", jambonz_cfg.get("account_sid", "")),
+            app_sid=os.getenv("JAMBONZ_APP_SID", jambonz_cfg.get("app_sid", "")),
+            sip_realm=os.getenv("JAMBONZ_SIP_REALM", jambonz_cfg.get("sip_realm", "")),
+            sip_user=os.getenv("JAMBONZ_SIP_USER", jambonz_cfg.get("sip_user", "test")),
+            sip_password=os.getenv("JAMBONZ_SIP_PASSWORD", jambonz_cfg.get("sip_password", "")),
         ),
     )
