@@ -68,6 +68,13 @@ def resample_24k_to_8k(pcm16_24k: bytes) -> bytes:
     return resampled.tobytes()
 
 
+def resample_24k_to_16k(pcm16_24k: bytes) -> bytes:
+    """Resample PCM16 audio from 24kHz (Silero TTS) to 16kHz for AudioSocket slin16."""
+    samples = np.frombuffer(pcm16_24k, dtype=np.int16)
+    resampled = resample_poly(samples, up=2, down=3).astype(np.int16)
+    return resampled.tobytes()
+
+
 def resample_16k_to_8k(pcm16_16k: bytes) -> bytes:
     """Resample PCM16 audio from 16kHz to 8kHz for AudioSocket."""
     samples = np.frombuffer(pcm16_16k, dtype=np.int16)
@@ -151,21 +158,21 @@ class SIPAudioAdapter:
         return {"type": "unknown", "frame_type": frame_type}
 
     async def write_audio(self, pcm16_24k: bytes) -> None:
-        """Write TTS audio (24kHz PCM16) back to AudioSocket as 8kHz 20ms frames.
+        """Write TTS audio (24kHz PCM16) back to AudioSocket as 20ms frames.
 
-        AudioSocket expects 20ms frames: 160 samples at 8kHz = 320 bytes each.
-        Asterisk 20 reads frames from the TCP socket at its own pace (20ms tick),
-        so we send all frames and let Asterisk consume them from the TCP buffer.
+        AudioSocket in Asterisk 20 uses slin16 (16kHz signed linear).
+        20ms at 16kHz = 320 samples = 640 bytes per frame.
+        Asterisk reads frames from TCP at its own 20ms tick rate.
         """
         if self._closed:
             return
-        pcm_8k = resample_24k_to_8k(pcm16_24k)
-        # Send as proper 20ms frames
-        frame_size = 320  # 160 samples * 2 bytes at 8kHz = 20ms
-        for i in range(0, len(pcm_8k), frame_size):
+        pcm_out = resample_24k_to_16k(pcm16_24k)
+        # Send as 20ms frames: 320 samples at 16kHz = 640 bytes
+        frame_size = 640
+        for i in range(0, len(pcm_out), frame_size):
             if self._closed:
                 break
-            chunk = pcm_8k[i : i + frame_size]
+            chunk = pcm_out[i : i + frame_size]
             if not chunk:
                 break
             header = struct.pack("!BH", FRAME_AUDIO, len(chunk))

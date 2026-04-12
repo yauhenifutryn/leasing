@@ -174,7 +174,7 @@ class TestSIPAudioAdapter:
             adapter = SIPAudioAdapter(reader, writer)
             pcm_24k = struct.pack("<480h", *([500] * 480))
             await adapter.write_audio(pcm_24k)
-            assert len(written_data) == 3 + 320  # header + 160 samples at 8kHz
+            assert len(written_data) == 3 + 640  # header + 320 samples at 16kHz
             assert written_data[0] == AUDIO_TYPE
 
         asyncio.run(_run())
