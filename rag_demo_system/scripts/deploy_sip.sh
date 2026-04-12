@@ -212,30 +212,60 @@ if [ -z "$PUBLIC_IP" ]; then
     log "WARNING: Could not detect public IP, using hostname -I: $PUBLIC_IP"
 fi
 
-# Generate Zoiper provisioning URIs
-# Format: sip:username:password@domain
-DEV_SIP_URI="dev:${DEV_PASS}@${PUBLIC_IP}"
-CLIENT_SIP_URI="client:${CLIENT_PASS}@${PUBLIC_IP}"
-
-# Generate QR codes if qrencode is available
+# Generate Zoiper provisioning data
+# Zoiper QR expects provisioning XML or plain SIP URI
 QR_DIR="$APP_DIR/.state/sip_qr"
-mkdir -p "$QR_DIR"
+FRONTEND_QR="$APP_DIR/frontend/sip_qr"
+mkdir -p "$QR_DIR" "$FRONTEND_QR"
+
+# Zoiper provisioning XML format (most reliable for QR scan)
+cat > "$FRONTEND_QR/dev.xml" << XMLEOF
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+  <accounts>
+    <account>
+      <name>Leasing Voice Bot (dev)</name>
+      <host>$PUBLIC_IP</host>
+      <username>dev</username>
+      <password>$DEV_PASS</password>
+      <transport>UDP</transport>
+    </account>
+  </accounts>
+</config>
+XMLEOF
+
+cat > "$FRONTEND_QR/client.xml" << XMLEOF
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+  <accounts>
+    <account>
+      <name>Leasing Voice Bot</name>
+      <host>$PUBLIC_IP</host>
+      <username>client</username>
+      <password>$CLIENT_PASS</password>
+      <transport>UDP</transport>
+    </account>
+  </accounts>
+</config>
+XMLEOF
+
+# Generate QR codes pointing to the provisioning XML URLs
+DEV_PROVISION_URL="http://${PUBLIC_IP}:8000/sip_qr/dev.xml"
+CLIENT_PROVISION_URL="http://${PUBLIC_IP}:8000/sip_qr/client.xml"
+
+# Install qrencode if needed
+if ! command -v qrencode &>/dev/null; then
+    apt-get install -y -qq qrencode > /dev/null 2>&1 || true
+fi
 
 if command -v qrencode &>/dev/null; then
-    qrencode -t UTF8 "sip:${DEV_SIP_URI}" > "$QR_DIR/dev_qr.txt"
-    qrencode -t PNG -o "$QR_DIR/dev_qr.png" "sip:${DEV_SIP_URI}" 2>/dev/null || true
-    qrencode -t UTF8 "sip:${CLIENT_SIP_URI}" > "$QR_DIR/client_qr.txt"
-    qrencode -t PNG -o "$QR_DIR/client_qr.png" "sip:${CLIENT_SIP_URI}" 2>/dev/null || true
-    pass "QR codes generated in $QR_DIR"
+    qrencode -t UTF8 "$DEV_PROVISION_URL" > "$QR_DIR/dev_qr.txt"
+    qrencode -t PNG -s 8 -o "$FRONTEND_QR/dev_qr.png" "$DEV_PROVISION_URL" 2>/dev/null || true
+    qrencode -t UTF8 "$CLIENT_PROVISION_URL" > "$QR_DIR/client_qr.txt"
+    qrencode -t PNG -s 8 -o "$FRONTEND_QR/client_qr.png" "$CLIENT_PROVISION_URL" 2>/dev/null || true
+    pass "QR codes generated (scan from http://$PUBLIC_IP:8000/sip_qr/dev_qr.png)"
 else
-    # Install qrencode
-    apt-get install -y -qq qrencode > /dev/null 2>&1 && {
-        qrencode -t UTF8 "sip:${DEV_SIP_URI}" > "$QR_DIR/dev_qr.txt"
-        qrencode -t PNG -o "$QR_DIR/dev_qr.png" "sip:${DEV_SIP_URI}" 2>/dev/null || true
-        qrencode -t UTF8 "sip:${CLIENT_SIP_URI}" > "$QR_DIR/client_qr.txt"
-        qrencode -t PNG -o "$QR_DIR/client_qr.png" "sip:${CLIENT_SIP_URI}" 2>/dev/null || true
-        pass "QR codes generated in $QR_DIR"
-    } || log "WARNING: qrencode not available, skipping QR generation"
+    log "WARNING: qrencode not available, skipping QR generation"
 fi
 
 # Save credentials to a file for reference
@@ -283,11 +313,15 @@ log ""
 log "  Dial 100 from Zoiper to reach the voice bot."
 log ""
 log "  Credentials saved to: $QR_DIR/credentials.txt"
+log ""
+log "  QR setup (open on phone browser, or scan QR):"
+log "    Dev QR image:    http://$PUBLIC_IP:8000/sip_qr/dev_qr.png"
+log "    Client QR image: http://$PUBLIC_IP:8000/sip_qr/client_qr.png"
 
-# Print QR code for dev account if available
+# Print QR code for dev account in terminal if available
 if [ -f "$QR_DIR/dev_qr.txt" ]; then
     log ""
-    log "  Dev account QR code (scan in Zoiper -> Scan QR):"
+    log "  Dev account QR (scan in Zoiper -> Scan QR):"
     cat "$QR_DIR/dev_qr.txt"
 fi
 
