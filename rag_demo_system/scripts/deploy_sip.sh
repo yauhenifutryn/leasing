@@ -30,12 +30,49 @@ log "============================================="
 log ""
 log "--- Step 1: Install Asterisk ---"
 
-if command -v asterisk &>/dev/null; then
-    log "Asterisk already installed: $(asterisk -V 2>/dev/null || echo 'unknown version')"
+# Asterisk 18 (Ubuntu default) has a deadlocking bug in app_audiosocket:
+# ast_waitfor_nandfds timeout=-1 blocks forever, no caller audio forwarded.
+# Fixed in Asterisk 20.14.0+. We install from Asterisk official repos.
+CURRENT_VER=$(asterisk -V 2>/dev/null | grep -oP '\d+' | head -1 || echo "0")
+if [ "$CURRENT_VER" -ge 20 ] 2>/dev/null; then
+    log "Asterisk $CURRENT_VER already installed (>= 20, AudioSocket OK)"
 else
-    log "Installing Asterisk..."
+    if [ "$CURRENT_VER" -gt 0 ] 2>/dev/null; then
+        log "Asterisk $CURRENT_VER found but too old (AudioSocket bug). Upgrading to 20.x..."
+        systemctl stop asterisk 2>/dev/null || true
+        apt-get remove -y -qq asterisk asterisk-core asterisk-modules 2>/dev/null || true
+    else
+        log "Installing Asterisk 20.x from official repos..."
+    fi
+
+    # Add Asterisk official repository for 20.x LTS
     apt-get update -qq
-    apt-get install -y -qq asterisk > /dev/null 2>&1 || fail "Asterisk installation failed"
+    apt-get install -y -qq gnupg2 > /dev/null 2>&1 || true
+    # Try the Asterisk 20 PPA or build from source
+    # First try: Ubuntu universe may have a newer version
+    apt-get install -y -qq software-properties-common > /dev/null 2>&1 || true
+    add-apt-repository -y universe 2>/dev/null || true
+
+    # Download and compile Asterisk 20 from source if apt version is too old
+    if ! apt-cache show asterisk 2>/dev/null | grep -qP "Version: (2[0-9]|[3-9][0-9])"; then
+        log "Building Asterisk 20 from source (apt only has 18.x)..."
+        apt-get install -y -qq build-essential libncurses5-dev libssl-dev libxml2-dev \
+            libsqlite3-dev uuid-dev libjansson-dev libedit-dev > /dev/null 2>&1
+        ASTERISK_SRC="/tmp/asterisk-20-build"
+        rm -rf "$ASTERISK_SRC"
+        mkdir -p "$ASTERISK_SRC"
+        cd "$ASTERISK_SRC"
+        curl -sL "https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-20-current.tar.gz" | tar xz --strip-components=1
+        contrib/scripts/install_prereq install > /dev/null 2>&1 || true
+        ./configure --with-jansson-bundled > /dev/null 2>&1 || fail "Asterisk configure failed"
+        make -j$(nproc) > /dev/null 2>&1 || fail "Asterisk build failed"
+        make install > /dev/null 2>&1 || fail "Asterisk install failed"
+        make samples > /dev/null 2>&1 || true
+        cd "$APP_DIR"
+        rm -rf "$ASTERISK_SRC"
+    else
+        apt-get install -y -qq asterisk > /dev/null 2>&1 || fail "Asterisk installation failed"
+    fi
     pass "Asterisk installed: $(asterisk -V 2>/dev/null || echo 'unknown version')"
 fi
 
