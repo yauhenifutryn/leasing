@@ -92,18 +92,30 @@ log "--- Step 2: Configure Asterisk ---"
 
 ASTERISK_ETC="/etc/asterisk"
 
+# Detect public IP early (needed for pjsip.conf NAT settings)
+PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || \
+            curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
+            curl -s --max-time 5 https://icanhazip.com 2>/dev/null || \
+            echo "")
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    log "WARNING: Could not detect public IP, using: $PUBLIC_IP"
+fi
+log "Public IP: $PUBLIC_IP"
+
 # Generate secure passwords
 DEV_PASS=$(openssl rand -hex 12)
 CLIENT_PASS=$(openssl rand -hex 12)
 AMI_PASS=$(openssl rand -hex 12)
 
-# Copy configs and inject passwords
+# Copy configs and inject passwords + public IP
 cp "$REPO_ROOT/config/asterisk/pjsip.conf" "$ASTERISK_ETC/pjsip.conf"
 cp "$REPO_ROOT/config/asterisk/extensions.conf" "$ASTERISK_ETC/extensions.conf"
 cp "$REPO_ROOT/config/asterisk/manager.conf" "$ASTERISK_ETC/manager.conf"
 
 sed -i "s/CHANGE_ME_dev_password/$DEV_PASS/" "$ASTERISK_ETC/pjsip.conf"
 sed -i "s/CHANGE_ME_client_password/$CLIENT_PASS/" "$ASTERISK_ETC/pjsip.conf"
+sed -i "s/CHANGE_ME_PUBLIC_IP/$PUBLIC_IP/g" "$ASTERISK_ETC/pjsip.conf"
 sed -i "s/CHANGE_ME_ami_secret/$AMI_PASS/" "$ASTERISK_ETC/manager.conf"
 
 # Disable conflicting dialplan modules (Lua, AEL override extensions.conf)
@@ -251,15 +263,7 @@ fi
 log ""
 log "--- Step 7: Generate QR codes ---"
 
-# Detect public IP (try multiple methods)
-PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || \
-            curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
-            curl -s --max-time 5 https://icanhazip.com 2>/dev/null || \
-            echo "")
-if [ -z "$PUBLIC_IP" ]; then
-    PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<SERVER_IP>")
-    log "WARNING: Could not detect public IP, using hostname -I: $PUBLIC_IP"
-fi
+# PUBLIC_IP already detected in Step 2
 
 # Generate Zoiper provisioning data
 # Zoiper QR expects provisioning XML or plain SIP URI
