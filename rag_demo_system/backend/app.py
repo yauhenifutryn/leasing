@@ -1977,6 +1977,25 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         print(f"[Jambonz:{session_id[:8]}] Cleaned up", flush=True)
 
 
+@app.get("/api/jambonz/credentials")
+async def jambonz_credentials() -> JSONResponse:
+    """Return SIP credentials for Zoiper setup (shown on monitor page)."""
+    if not settings.jambonz.enabled:
+        return JSONResponse(status_code=200, content={"ok": False, "reason": "jambonz not enabled"})
+
+    server_ip = os.getenv("PUBLIC_IP", os.getenv("HOSTNAME", "localhost"))
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "server": server_ip,
+            "username": settings.jambonz.sip_user,
+            "password": settings.jambonz.sip_password,
+            "transport": "UDP",
+        },
+    )
+
+
 @app.websocket("/ws/sip-monitor")
 async def sip_monitor_ws(websocket: WebSocket) -> None:
     """Read-only WebSocket for SIP call monitoring."""

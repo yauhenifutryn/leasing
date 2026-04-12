@@ -36,6 +36,16 @@
   <button id="btnCopy">Copy All</button>
   <button id="btnClear">Clear</button>
 </div>
+<div class="setup" id="setupCard" style="background:#f8f9fa; border:1px solid #dee2e6; padding:12px; margin-bottom:16px; border-radius:4px; display:none;">
+  <h3 style="font-size:14px; margin-bottom:8px;">Zoiper Setup</h3>
+  <table style="font-size:13px; border-collapse:collapse;">
+    <tr><td style="padding:2px 8px 2px 0; color:#999;">Server:</td><td id="sipServer" style="font-weight:bold;"></td></tr>
+    <tr><td style="padding:2px 8px 2px 0; color:#999;">Username:</td><td id="sipUser" style="font-weight:bold;"></td></tr>
+    <tr><td style="padding:2px 8px 2px 0; color:#999;">Password:</td><td id="sipPass" style="font-weight:bold;"></td></tr>
+    <tr><td style="padding:2px 8px 2px 0; color:#999;">Transport:</td><td>UDP</td></tr>
+  </table>
+  <button id="btnCopyCreds" style="margin-top:8px; background:#f0f0f0; color:#333; border:1px solid #ccc; padding:4px 10px; cursor:pointer; font-family:monospace; border-radius:3px; font-size:12px;">Copy Credentials</button>
+</div>
 <div class="calls" id="activeCalls"></div>
 <div class="log" id="log"></div>
 <script>
@@ -198,6 +208,31 @@
     document.execCommand('copy');
     document.body.removeChild(ta);
   }
+
+  // Load SIP credentials from API
+  fetch('/api/jambonz/credentials')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        document.getElementById('sipServer').textContent = data.server;
+        document.getElementById('sipUser').textContent = data.username;
+        document.getElementById('sipPass').textContent = data.password;
+        document.getElementById('setupCard').style.display = 'block';
+      }
+    })
+    .catch(function() {});
+
+  document.getElementById('btnCopyCreds').addEventListener('click', function() {
+    var s = document.getElementById('sipServer').textContent;
+    var u = document.getElementById('sipUser').textContent;
+    var p = document.getElementById('sipPass').textContent;
+    var text = 'Server: ' + s + '\nUsername: ' + u + '\nPassword: ' + p + '\nTransport: UDP';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function() { fallbackCopy(text); });
+    } else {
+      fallbackCopy(text);
+    }
+  });
 
   connect();
 })();
