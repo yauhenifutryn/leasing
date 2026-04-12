@@ -151,12 +151,24 @@ class SIPAudioAdapter:
         return {"type": "unknown", "frame_type": frame_type}
 
     async def write_audio(self, pcm16_24k: bytes) -> None:
-        """Write TTS audio (24kHz PCM16) back to AudioSocket as 8kHz frames."""
+        """Write TTS audio (24kHz PCM16) back to AudioSocket as 8kHz 20ms frames.
+
+        AudioSocket expects 20ms frames: 160 samples at 8kHz = 320 bytes each.
+        Sending larger chunks causes Asterisk to drop the audio silently.
+        """
         if self._closed:
             return
         pcm_8k = resample_24k_to_8k(pcm16_24k)
-        frame = build_audio_frame(pcm_8k)
-        self.writer.write(frame)
+        # Send as 20ms frames (320 bytes = 160 samples at 8kHz, 16-bit)
+        frame_size = 320
+        for i in range(0, len(pcm_8k), frame_size):
+            if self._closed:
+                break
+            chunk = pcm_8k[i : i + frame_size]
+            if not chunk:
+                break
+            header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
+            self.writer.write(header + chunk)
         await self.writer.drain()
 
     async def close(self) -> None:
