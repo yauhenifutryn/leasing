@@ -94,65 +94,96 @@ info "Jambonz API server ready"
 
 API="http://localhost:3000/v1"
 
-# ── 6. Configure via REST API ──
-# 6a. Create service provider
-SP_SID=$(curl -s -X POST "$API/ServiceProviders" \
-    -H "Content-Type: application/json" \
-    -d '{"name":"voice-pipeline"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
-
-if [ -z "$SP_SID" ]; then
-    SP_SID=$(curl -s "$API/ServiceProviders" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['service_provider_sid'] if d else '')" 2>/dev/null || echo "")
+# ── 6. Get admin API token from database ──
+info "Reading admin API token from database..."
+ADMIN_TOKEN=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT token FROM api_keys WHERE account_sid IS NULL AND service_provider_sid IS NULL LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$ADMIN_TOKEN" ]; then
+    fail "Could not read admin API token from database"
 fi
-info "Service Provider: $SP_SID"
+info "Admin token: ${ADMIN_TOKEN:0:8}..."
+AUTH="-H Authorization:\ Bearer\ $ADMIN_TOKEN"
 
-# 6b. Create account
+# Helper: authenticated curl
+acurl() { curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" "$@"; }
+
+# ── 7. Configure via REST API ──
 SIP_REALM="voice.${PUBLIC_IP}.nip.io"
-SIP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
+SIP_USER="${JAMBONZ_SIP_USER:-test}"
 
-ACCOUNT_SID=$(curl -s -X POST "$API/Accounts" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"name\": \"leasing-voice\",
-        \"service_provider_sid\": \"$SP_SID\",
-        \"sip_realm\": \"$SIP_REALM\",
-        \"webhook_secret\": \"$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')\"
-    }" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
-
+# 7a. Get or verify account (db-create makes a default one)
+ACCOUNT_SID=$(acurl "$API/Accounts" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['account_sid'] if d else '')" 2>/dev/null || echo "")
 if [ -z "$ACCOUNT_SID" ]; then
-    ACCOUNT_SID=$(curl -s "$API/Accounts" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['account_sid'] if d else '')" 2>/dev/null || echo "")
+    fail "No account found. Check: docker compose logs db-create"
 fi
+
+# Set SIP realm on the account
+acurl -X PUT "$API/Accounts/$ACCOUNT_SID" \
+    -d "{\"sip_realm\": \"$SIP_REALM\"}" >/dev/null 2>&1
 info "Account: $ACCOUNT_SID (realm: $SIP_REALM)"
 
-# 6c. Create application (WebSocket)
-APP_WS_URL="ws://host.docker.internal:8000/ws/jambonz"
-APP_SID=$(curl -s -X POST "$API/Accounts/$ACCOUNT_SID/Applications" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"name\": \"voice-bot\",
-        \"account_sid\": \"$ACCOUNT_SID\",
-        \"call_hook\": {\"url\": \"$APP_WS_URL\", \"method\": \"WS\"},
-        \"call_status_hook\": {\"url\": \"http://host.docker.internal:8000/api/jambonz/call-status\", \"method\": \"POST\"},
-        \"speech_synthesis_vendor\": \"custom\",
-        \"speech_recognizer_vendor\": \"custom\"
-    }" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
+# 7b. Create or get application (WebSocket)
+APP_SID=$(acurl "$API/Accounts/$ACCOUNT_SID/Applications" | python3 -c "
+import sys, json
+apps = json.load(sys.stdin)
+# Find existing voice-bot app or return empty
+for a in apps:
+    if a.get('name') == 'voice-bot':
+        print(a['application_sid'])
+        sys.exit(0)
+print('')
+" 2>/dev/null || echo "")
 
 if [ -z "$APP_SID" ]; then
-    APP_SID=$(curl -s "$API/Accounts/$ACCOUNT_SID/Applications" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['application_sid'] if d else '')" 2>/dev/null || echo "")
+    APP_SID=$(acurl -X POST "$API/Accounts/$ACCOUNT_SID/Applications" \
+        -d "{
+            \"name\": \"voice-bot\",
+            \"account_sid\": \"$ACCOUNT_SID\",
+            \"call_hook\": {\"url\": \"ws://host.docker.internal:8000/ws/jambonz\", \"method\": \"WS\"},
+            \"call_status_hook\": {\"url\": \"http://host.docker.internal:8000/api/jambonz/call-status\", \"method\": \"POST\"}
+        }" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
+fi
+if [ -z "$APP_SID" ]; then
+    fail "Could not create application. Check: acurl $API/Accounts/$ACCOUNT_SID/Applications"
 fi
 info "Application: $APP_SID"
 
-# 6d. Create SIP user
-SIP_USER="${JAMBONZ_SIP_USER:-test}"
-curl -s -X POST "$API/Accounts/$ACCOUNT_SID/SipCredentials" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"username\": \"$SIP_USER\",
-        \"password\": \"$SIP_PASSWORD\"
-    }" >/dev/null 2>&1 || true
-info "SIP user created: $SIP_USER"
-
-# ── 7. Update backend .env ──
+# 7c. Create or update SIP credentials
+# Generate password only if not already in backend .env
 ENV_FILE="$APP_DIR/.env"
+EXISTING_PASS=$(grep '^JAMBONZ_SIP_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'" || echo "")
+if [ -n "$EXISTING_PASS" ]; then
+    SIP_PASSWORD="$EXISTING_PASS"
+    info "SIP password: reusing existing from .env"
+else
+    SIP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
+    info "SIP password: generated new"
+fi
+
+# Check if SIP user exists
+SIP_EXISTS=$(acurl "$API/Accounts/$ACCOUNT_SID/SipCredentials" | python3 -c "
+import sys, json
+creds = json.load(sys.stdin)
+for c in creds:
+    if c.get('username') == '$SIP_USER':
+        print(c.get('sip_credential_sid', 'exists'))
+        sys.exit(0)
+print('')
+" 2>/dev/null || echo "")
+
+if [ -n "$SIP_EXISTS" ] && [ "$SIP_EXISTS" != "exists" ]; then
+    # Update existing credentials
+    acurl -X PUT "$API/Accounts/$ACCOUNT_SID/SipCredentials/$SIP_EXISTS" \
+        -d "{\"password\": \"$SIP_PASSWORD\"}" >/dev/null 2>&1
+    info "SIP user updated: $SIP_USER"
+else
+    # Create new
+    acurl -X POST "$API/Accounts/$ACCOUNT_SID/SipCredentials" \
+        -d "{\"username\": \"$SIP_USER\", \"password\": \"$SIP_PASSWORD\"}" >/dev/null 2>&1
+    info "SIP user created: $SIP_USER"
+fi
+
+# ── 8. Update backend .env ──
 # Remove old SIP/Jambonz vars
 sed -i '/^SIP_ENABLED=/d; /^AUDIOSOCKET_/d; /^AMI_/d; /^JAMBONZ_/d; /^PUBLIC_IP=/d' "$ENV_FILE" 2>/dev/null || true
 
@@ -170,13 +201,13 @@ PUBLIC_IP=$PUBLIC_IP
 EOF
 info "Updated $ENV_FILE with Jambonz config"
 
-# ── 8. Restart backend ──
+# ── 9. Restart backend ──
 if [ -f "$APP_DIR/scripts/restart_all.sh" ]; then
     info "Restarting backend..."
     bash "$APP_DIR/scripts/restart_all.sh" || warn "Backend restart returned non-zero"
 fi
 
-# ── 9. Verify ──
+# ── 10. Verify ──
 sleep 3
 SIP_OK=false
 if ss -ulnp 2>/dev/null | grep -q ':5060 ' || netstat -ulnp 2>/dev/null | grep -q ':5060 '; then
