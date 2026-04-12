@@ -197,17 +197,79 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Step 7: Generate Zoiper QR codes for easy mobile setup
+# ---------------------------------------------------------------------------
+log ""
+log "--- Step 7: Generate QR codes ---"
+
+# Detect public IP (try multiple methods)
+PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || \
+            curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
+            curl -s --max-time 5 https://icanhazip.com 2>/dev/null || \
+            echo "")
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<SERVER_IP>")
+    log "WARNING: Could not detect public IP, using hostname -I: $PUBLIC_IP"
+fi
+
+# Generate Zoiper provisioning URIs
+# Format: sip:username:password@domain
+DEV_SIP_URI="dev:${DEV_PASS}@${PUBLIC_IP}"
+CLIENT_SIP_URI="client:${CLIENT_PASS}@${PUBLIC_IP}"
+
+# Generate QR codes if qrencode is available
+QR_DIR="$APP_DIR/.state/sip_qr"
+mkdir -p "$QR_DIR"
+
+if command -v qrencode &>/dev/null; then
+    qrencode -t UTF8 "sip:${DEV_SIP_URI}" > "$QR_DIR/dev_qr.txt"
+    qrencode -t PNG -o "$QR_DIR/dev_qr.png" "sip:${DEV_SIP_URI}" 2>/dev/null || true
+    qrencode -t UTF8 "sip:${CLIENT_SIP_URI}" > "$QR_DIR/client_qr.txt"
+    qrencode -t PNG -o "$QR_DIR/client_qr.png" "sip:${CLIENT_SIP_URI}" 2>/dev/null || true
+    pass "QR codes generated in $QR_DIR"
+else
+    # Install qrencode
+    apt-get install -y -qq qrencode > /dev/null 2>&1 && {
+        qrencode -t UTF8 "sip:${DEV_SIP_URI}" > "$QR_DIR/dev_qr.txt"
+        qrencode -t PNG -o "$QR_DIR/dev_qr.png" "sip:${DEV_SIP_URI}" 2>/dev/null || true
+        qrencode -t UTF8 "sip:${CLIENT_SIP_URI}" > "$QR_DIR/client_qr.txt"
+        qrencode -t PNG -o "$QR_DIR/client_qr.png" "sip:${CLIENT_SIP_URI}" 2>/dev/null || true
+        pass "QR codes generated in $QR_DIR"
+    } || log "WARNING: qrencode not available, skipping QR generation"
+fi
+
+# Save credentials to a file for reference
+cat > "$QR_DIR/credentials.txt" << CREDEOF
+SIP Credentials (generated $(date +%Y-%m-%d_%H:%M:%S))
+Server: $PUBLIC_IP
+
+Dev account:
+  Username: dev
+  Password: $DEV_PASS
+  SIP URI:  sip:$DEV_SIP_URI
+
+Client account:
+  Username: client
+  Password: $CLIENT_PASS
+  SIP URI:  sip:$CLIENT_SIP_URI
+
+AMI Secret: $AMI_PASS
+
+Monitor page: http://$PUBLIC_IP:8000/sip_monitor.html
+CREDEOF
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
-SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<SERVER_IP>")
-
 log ""
 log "============================================="
 log "  SIP DEPLOYMENT COMPLETE"
 log "============================================="
 log ""
+log "  Public IP: $PUBLIC_IP"
+log ""
 log "  Zoiper credentials:"
-log "    Domain:   $SERVER_IP"
+log "    Domain:   $PUBLIC_IP"
 log "    Username: dev"
 log "    Password: $DEV_PASS"
 log ""
@@ -216,7 +278,17 @@ log "    Username: client"
 log "    Password: $CLIENT_PASS"
 log ""
 log "  Monitor page:"
-log "    http://$SERVER_IP:8000/sip_monitor.html"
+log "    http://$PUBLIC_IP:8000/sip_monitor.html"
 log ""
 log "  Dial 100 from Zoiper to reach the voice bot."
+log ""
+log "  Credentials saved to: $QR_DIR/credentials.txt"
+
+# Print QR code for dev account if available
+if [ -f "$QR_DIR/dev_qr.txt" ]; then
+    log ""
+    log "  Dev account QR code (scan in Zoiper -> Scan QR):"
+    cat "$QR_DIR/dev_qr.txt"
+fi
+
 log "============================================="
