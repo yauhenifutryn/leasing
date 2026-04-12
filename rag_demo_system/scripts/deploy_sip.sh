@@ -101,10 +101,10 @@ sleep 1
 
 # Verify endpoints
 ENDPOINTS=$(asterisk -rx "pjsip show endpoints" 2>/dev/null || echo "")
-if echo "$ENDPOINTS" | grep -q "dev-user"; then
-    pass "SIP endpoint dev-user registered"
+if echo "$ENDPOINTS" | grep -q " dev "; then
+    pass "SIP endpoint 'dev' registered"
 else
-    log "WARNING: dev-user endpoint not visible yet (may need Zoiper to register)"
+    log "WARNING: 'dev' endpoint not visible yet (may need Zoiper to register)"
 fi
 
 # ---------------------------------------------------------------------------
