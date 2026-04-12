@@ -172,11 +172,10 @@ class SIPAudioAdapter:
             header = struct.pack("!BH", FRAME_AUDIO, len(chunk))
             self.writer.write(header + chunk)
             frame_count += 1
-            # Drain and pace every 10 frames (200ms) to avoid overwhelming
-            # the TCP buffer while keeping real-time playback
-            if frame_count % 10 == 0:
+            # Pace each frame at 20ms for real-time playback
+            if frame_count % 5 == 0:
                 await self.writer.drain()
-                await asyncio.sleep(0.18)  # ~200ms for 10 frames, slight underrun to avoid gaps
+                await asyncio.sleep(0.1)  # 100ms for 5 frames = 20ms each
         await self.writer.drain()
 
     async def close(self) -> None:

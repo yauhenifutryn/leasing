@@ -1240,10 +1240,13 @@ async def sip_call_handler(
         # 6. Audio loop: read frames, feed VAD, dispatch on speech end
         # This runs concurrently with TTS playback (full-duplex AudioSocket).
         _frame_count = 0
+        print(f"[SIP:{session_id[:8]}] Entering audio read loop...", flush=True)
         while True:
             frame = await adapter.read_next()
+            if _frame_count == 0 and frame is not None:
+                print(f"[SIP:{session_id[:8]}] First frame from read_next: type={frame.get('type')}", flush=True)
             if frame is None or frame["type"] == "hangup":
-                print(f"[SIP:{session_id[:8]}] Hangup", flush=True)
+                print(f"[SIP:{session_id[:8]}] Hangup (frames received: {_frame_count})", flush=True)
                 await broadcast_sip_event({
                     "type": "sip.call.end",
                     "call_id": session_id,
