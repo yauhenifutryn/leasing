@@ -57,18 +57,78 @@ async def broadcast_sip_event(event: dict[str, Any]) -> None:
             _sip_monitor_clients.discard(ws)
 
 
+class _JambonzWebSocketShim:
+    """Adapts Jambonz audio WebSocket to the interface expected by _stream_voice_response.
+
+    Intercepts audio events: decodes base64 PCM 24kHz and sends as binary
+    WebSocket frames (no resampling needed). Other events broadcast to SIP monitor.
+    """
+
+    def __init__(self, ws: WebSocket, session_id: str) -> None:
+        self._ws = ws
+        self._session_id = session_id
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        event_type = data.get("type", "")
+
+        if event_type == "response.output_audio.delta":
+            import base64 as _b64
+            audio_b64 = data.get("delta", "")
+            if audio_b64:
+                pcm_raw = _b64.b64decode(audio_b64)
+                await self._ws.send_bytes(pcm_raw)
+            return
+
+        if event_type == "response.output_text.delta":
+            await broadcast_sip_event({
+                "type": "sip.llm.sentence",
+                "call_id": self._session_id,
+                "text": data.get("delta", ""),
+            })
+            return
+
+        if event_type == "tool_call.start":
+            await broadcast_sip_event({
+                "type": "sip.tool.start",
+                "call_id": self._session_id,
+                "tool": data.get("tool", ""),
+                "params": data.get("params", {}),
+            })
+            return
+
+        if event_type == "tool_call.done":
+            await broadcast_sip_event({
+                "type": "sip.tool.result",
+                "call_id": self._session_id,
+                "tool": data.get("tool", ""),
+                "ok": data.get("ok", False),
+            })
+            return
+
+        if event_type == "response.done":
+            await broadcast_sip_event({
+                "type": "sip.response.done",
+                "call_id": self._session_id,
+            })
+            return
+
+        await broadcast_sip_event({
+            **data,
+            "call_id": self._session_id,
+        })
+
+
 app = FastAPI(title="Micro Leasing RAG Demo")
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
 
 _shared_vad: SileroVAD | None = None
-_sip_server: asyncio.Server | None = None
 
 
 @app.on_event("startup")
 async def _warmup() -> None:
-    """Pre-load models and optionally start SIP server on startup."""
-    global _shared_vad, _sip_server
+    """Pre-load models and optionally start Jambonz listener on startup."""
+    global _shared_vad
     try:
         engine.retrieve("warmup", fast=True, voice_fast=True)
     except Exception:  # noqa: BLE001
@@ -79,18 +139,8 @@ async def _warmup() -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    # Start AudioSocket TCP server if SIP is enabled
-    if settings.sip.enabled:
-        _sip_server = await asyncio.start_server(
-            sip_call_handler,
-            host=settings.sip.audiosocket_host,
-            port=settings.sip.audiosocket_port,
-        )
-        print(
-            f"[SIP] AudioSocket server listening on "
-            f"{settings.sip.audiosocket_host}:{settings.sip.audiosocket_port}",
-            flush=True,
-        )
+    if settings.jambonz.enabled:
+        print("[Jambonz] Enabled. Waiting for calls on /ws/jambonz", flush=True)
 
 
 app.add_middleware(
@@ -978,9 +1028,6 @@ async def _stream_voice_response(
     producer_task = asyncio.create_task(llm_producer())
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
-    # SIP: wait for Asterisk to finish playing buffered audio + echo to die
-    if session.transport == "sip" and not session.interrupted:
-        await asyncio.sleep(1.5)
     session.assistant_speaking = False
     if rtc_handler is not None:
         rtc_handler.tts_track.flush()
@@ -1027,361 +1074,6 @@ async def _stream_voice_response(
         "citations": [], "timings": timings,
         "voice_timings": voice_timings,
     })
-
-
-# ---------------------------------------------------------------------------
-# SIP telephony: WebSocket shim + call handler
-# ---------------------------------------------------------------------------
-
-
-class _SIPWebSocketShim:
-    """Adapts SIP AudioSocket to the WebSocket interface expected by _stream_voice_response.
-
-    Translates send_json calls: text events go to monitor, audio events go
-    to the AudioSocket adapter (resampled from 24kHz to 8kHz).
-    """
-
-    def __init__(self, adapter: Any, session_id: str) -> None:
-        self._adapter = adapter
-        self._session_id = session_id
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        event_type = data.get("type", "")
-
-        if event_type == "response.output_audio.delta":
-            import base64 as _b64
-            audio_b64 = data.get("delta", "")
-            if audio_b64:
-                pcm_raw = _b64.b64decode(audio_b64)
-                await self._adapter.write_audio(pcm_raw)
-            return
-
-        if event_type == "response.output_text.delta":
-            await broadcast_sip_event({
-                "type": "sip.llm.sentence",
-                "call_id": self._session_id,
-                "text": data.get("delta", ""),
-            })
-            return
-
-        if event_type == "tool_call.start":
-            await broadcast_sip_event({
-                "type": "sip.tool.start",
-                "call_id": self._session_id,
-                "tool": data.get("tool", ""),
-                "params": data.get("params", {}),
-            })
-            return
-
-        if event_type == "tool_call.done":
-            await broadcast_sip_event({
-                "type": "sip.tool.result",
-                "call_id": self._session_id,
-                "tool": data.get("tool", ""),
-                "ok": data.get("ok", False),
-            })
-            return
-
-        if event_type == "response.done":
-            await broadcast_sip_event({
-                "type": "sip.response.done",
-                "call_id": self._session_id,
-            })
-            return
-
-        # All other events: broadcast to monitor as-is
-        await broadcast_sip_event({
-            **data,
-            "call_id": self._session_id,
-        })
-
-
-async def _sip_send_tts(
-    adapter: Any,
-    session: VoiceSession,
-    session_id: str,
-    text: str,
-) -> None:
-    """Synthesize text and send audio back through AudioSocket."""
-    try:
-        print(f"[SIP:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
-        audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
-        audio_b64 = audio_resp.get("audio_b64") or ""
-        sample_rate = audio_resp.get("sample_rate_hz", 24000)
-        print(f"[SIP:{session_id[:8]}] TTS got {len(audio_b64)} chars b64, sample_rate={sample_rate}", flush=True)
-        if audio_b64:
-            import base64 as _b64
-            pcm_raw = _b64.b64decode(audio_b64)
-            print(f"[SIP:{session_id[:8]}] TTS decoded {len(pcm_raw)} bytes PCM, writing to AudioSocket...", flush=True)
-            await adapter.write_audio(pcm_raw)
-            print(f"[SIP:{session_id[:8]}] TTS audio sent OK", flush=True)
-        else:
-            print(f"[SIP:{session_id[:8]}] TTS returned empty audio", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        import traceback
-        print(f"[SIP:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
-
-    # Wait for Asterisk to finish playing buffered audio + echo to die.
-    # Our frames are in Asterisk's TCP buffer; it plays them at 20ms/frame.
-    # Without this delay, echo from the last frames triggers VAD immediately.
-    if not session.interrupted:
-        await asyncio.sleep(1.5)
-    session.assistant_speaking = False
-
-    await broadcast_sip_event({
-        "type": "sip.tts.start",
-        "call_id": session_id,
-        "text": text,
-    })
-
-
-async def _sip_process_utterance(
-    adapter: Any,
-    session: VoiceSession,
-    session_id: str,
-    speech_audio: bytes,
-) -> None:
-    """Transcribe speech audio and stream LLM response back via SIP."""
-    import base64 as _b64mod
-
-    audio_b64 = _b64mod.b64encode(speech_audio).decode()
-    question_id = str(uuid.uuid4())
-    t_speech_stopped = time.time()
-
-    try:
-        transcript = transcribe_audio(audio_b64, session_id=session_id)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[SIP:{session_id[:8]}] STT error: {exc}", flush=True)
-        session.assistant_speaking = False
-        return
-
-    t_stt_done = time.time()
-    text = (transcript.get("text") or "").strip()
-    if not text:
-        print(f"[SIP:{session_id[:8]}] STT error: Whisper returned empty transcription", flush=True)
-        session.assistant_speaking = False
-        return
-
-    print(f"[SIP:{session_id[:8]}] STT: {text}", flush=True)
-    await broadcast_sip_event({
-        "type": "sip.stt.result",
-        "call_id": session_id,
-        "text": text,
-    })
-
-    session.on_transcript_final(text)
-
-    sip_ws = _SIPWebSocketShim(adapter, session_id)
-    await _stream_voice_response(
-        websocket=sip_ws,
-        session=session,
-        session_id=session_id,
-        message=text,
-        t_speech_stopped=t_speech_stopped,
-        t_stt_done=t_stt_done,
-        question_id=question_id,
-        rtc_handler=None,
-    )
-
-
-async def sip_call_handler(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-) -> None:
-    """Handle one SIP call via AudioSocket.
-
-    Lifecycle: read UUID -> query AMI for caller -> create session ->
-    run intro -> audio loop with VAD -> pipeline -> TTS back.
-    """
-    from .sip_audio import SIPAudioAdapter, query_caller_id_ami
-
-    adapter = SIPAudioAdapter(reader, writer)
-    session_id = ""
-    session: VoiceSession | None = None
-
-    try:
-        # 1. Read UUID frame
-        first = await adapter.read_next()
-        if first is None or first.get("type") != "uuid":
-            print("[SIP] No UUID frame received, closing", flush=True)
-            await adapter.close()
-            return
-        session_id = first["uuid"]
-        print(f"[SIP:{session_id[:8]}] Connected", flush=True)
-
-        # 2. Query AMI for caller phone number
-        caller_phone = await query_caller_id_ami(
-            channel_id=session_id,
-            ami_host=settings.sip.ami_host,
-            ami_port=settings.sip.ami_port,
-            ami_username=settings.sip.ami_username,
-            ami_secret=settings.sip.ami_secret,
-        )
-        print(f"[SIP:{session_id[:8]}] Caller: {caller_phone or 'unknown'}", flush=True)
-
-        await broadcast_sip_event({
-            "type": "sip.call.start",
-            "call_id": session_id,
-            "phone": caller_phone or "unknown",
-        })
-
-        # 3. Create voice session
-        session = VoiceSession(
-            session_id=session_id,
-            backend="our_rag",
-            transport="sip",
-            client_phone=caller_phone,
-            call_id=session_id,
-        )
-        voice_sessions[session_id] = session
-        adapter.caller_phone = caller_phone
-
-        # 4. Create VAD for this call
-        # Use 16kHz VAD (Silero VAD supports 8k and 16k; 16k is more accurate)
-        # Collect raw 8kHz audio separately for STT (avoids double resampling)
-        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
-        vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
-        _echo_samples: list[float] = []  # rolling RMS baseline during TTS
-
-        # 5. Send intro TTS as background task (do not block the read loop)
-        # Small delay before intro: Asterisk needs time to set up the audio path
-        # after AudioSocket connect. Without this, first syllable gets clipped.
-        await asyncio.sleep(0.5)
-        intro_text = (
-            "Здравствуйте! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
-            "Как я могу к вам обращаться?"
-        )
-        session.assistant_speaking = True
-        asyncio.create_task(_sip_send_tts(adapter, session, session_id, intro_text))
-
-        # 6. Audio loop: read frames, feed VAD, dispatch on speech end
-        # This runs concurrently with TTS playback (full-duplex AudioSocket).
-        _frame_count = 0
-        print(f"[SIP:{session_id[:8]}] Entering audio read loop...", flush=True)
-        while True:
-            frame = await adapter.read_next()
-            if _frame_count == 0 and frame is not None:
-                print(f"[SIP:{session_id[:8]}] First frame from read_next: type={frame.get('type')}", flush=True)
-            if frame is None or frame["type"] == "hangup":
-                print(f"[SIP:{session_id[:8]}] Hangup (frames received: {_frame_count})", flush=True)
-                await broadcast_sip_event({
-                    "type": "sip.call.end",
-                    "call_id": session_id,
-                })
-                break
-
-            if frame["type"] == "dtmf":
-                digit = frame["digit"]
-                print(f"[SIP:{session_id[:8]}] DTMF: {digit}", flush=True)
-                await broadcast_sip_event({
-                    "type": "sip.dtmf",
-                    "call_id": session_id,
-                    "digit": digit,
-                })
-                continue
-
-            if frame["type"] == "error":
-                print(f"[SIP:{session_id[:8]}] Error: {frame.get('message')}", flush=True)
-                break
-
-            if frame["type"] != "audio":
-                continue
-
-            _frame_count += 1
-            if _frame_count == 1:
-                print(f"[SIP:{session_id[:8]}] First audio frame received from caller", flush=True)
-            if _frame_count % 500 == 0:
-                print(f"[SIP:{session_id[:8]}] Audio frames: {_frame_count}, VAD speaking: {vad.is_speaking}, asst: {session.assistant_speaking}", flush=True)
-
-            pcm_16k = frame["pcm16"]
-            pcm_raw_8k = frame.get("pcm_raw_8k", b"")
-
-            # ── Stop-and-listen barge-in pattern ──
-            # During TTS: monitor energy. On suspected speech, stop TTS
-            # immediately (echo dies), wait for echo tail, then listen.
-            if session.assistant_speaking:
-                # Skip barge-in detection for first 1.5s of TTS playback.
-                # Echo energy is highest at TTS start; baseline needs time to stabilize.
-                _tts_elapsed = asyncio.get_event_loop().time() - adapter.tts_start_time
-                if pcm_raw_8k and not session.interrupted and _tts_elapsed > 1.5:
-                    import struct as _st
-                    import math as _math
-                    _n = len(pcm_raw_8k) // 2
-                    if _n > 0:
-                        _samples = _st.unpack(f"<{_n}h", pcm_raw_8k)
-                        _rms = _math.sqrt(sum(s * s for s in _samples) / _n)
-                        # Track echo baseline (rolling average of first frames)
-                        _echo_samples.append(_rms)
-                        if len(_echo_samples) > 25:
-                            _echo_samples.pop(0)
-                        _echo_baseline = sum(_echo_samples) / len(_echo_samples) if _echo_samples else 2000
-                        # Trigger: energy > 2.5x baseline AND above absolute minimum
-                        if _rms > max(_echo_baseline * 2.5, 4000):
-                            # Stop TTS immediately
-                            adapter.playback_stopped = True
-                            session.interrupted = True
-                            session.assistant_speaking = False
-                            # Reset VAD for clean start
-                            vad.reset()
-                            _echo_samples.clear()
-                            print(f"[SIP:{session_id[:8]}] BARGE-IN (energy={_rms:.0f}, baseline={_echo_baseline:.0f})", flush=True)
-                            await broadcast_sip_event({
-                                "type": "sip.barge_in",
-                                "call_id": session_id,
-                            })
-                            # Wait 80ms for echo tail to clear from Asterisk buffer
-                            await asyncio.sleep(0.08)
-                continue
-
-            # ── Normal listening mode (bot NOT speaking) ──
-            was_speaking = vad.is_speaking
-            speech_audio = vad.feed(pcm_16k)
-
-            if not was_speaking and vad.is_speaking:
-                print(f"[SIP:{session_id[:8]}] VAD: speech_start", flush=True)
-                await broadcast_sip_event({
-                    "type": "sip.vad.speech",
-                    "call_id": session_id,
-                    "event": "start",
-                })
-
-            # Speech ended: VAD returned accumulated audio (16kHz)
-            if speech_audio is not None:
-                # Guard: discard very short audio (< 0.5s at 16kHz = 16000 bytes)
-                # Prevents Whisper hallucinations on echo residue or noise bursts
-                if len(speech_audio) < 16000:
-                    print(f"[SIP:{session_id[:8]}] VAD: speech_end SKIPPED (too short: {len(speech_audio)} bytes)", flush=True)
-                    continue
-
-                # Resample 16kHz VAD output to 24kHz to match browser pipeline.
-                # transcribe_audio() expects 24kHz (hardcoded sample_rate_hz=24000).
-                from scipy.signal import resample_poly as _resample_poly
-                import numpy as _np
-                _samples = _np.frombuffer(speech_audio, dtype=_np.int16)
-                _resampled = _resample_poly(_samples, up=3, down=2).astype(_np.int16)
-                speech_24k = _resampled.tobytes()
-                print(f"[SIP:{session_id[:8]}] VAD: speech_end ({len(speech_audio)} bytes 16kHz -> {len(speech_24k)} bytes 24kHz)", flush=True)
-                await broadcast_sip_event({
-                    "type": "sip.vad.speech",
-                    "call_id": session_id,
-                    "event": "end",
-                })
-                # Fire-and-forget: process utterance in background
-                session.assistant_speaking = True
-                session.interrupted = False
-                _echo_samples.clear()
-                asyncio.create_task(_sip_process_utterance(
-                    adapter, session, session_id, speech_24k,
-                ))
-
-    except Exception as exc:  # noqa: BLE001
-        import traceback
-        print(f"[SIP:{session_id[:8]}] Error: {exc}\n{traceback.format_exc()}", flush=True)
-    finally:
-        if session is not None:
-            voice_sessions.pop(session_id, None)
-        await adapter.close()
-        print(f"[SIP:{session_id[:8]}] Cleaned up", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1982,6 +1674,307 @@ async def voice_status() -> JSONResponse:
             "services": build_voice_statuses(),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Jambonz telephony: WebSocket handlers
+# ---------------------------------------------------------------------------
+
+
+async def _jambonz_send_tts(
+    ws: WebSocket,
+    session: VoiceSession,
+    session_id: str,
+    text: str,
+) -> None:
+    """Synthesize text and send audio back as binary WebSocket frames."""
+    try:
+        print(f"[Jambonz:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
+        audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
+        audio_b64 = audio_resp.get("audio_b64") or ""
+        if audio_b64:
+            import base64 as _b64
+            pcm_24k = _b64.b64decode(audio_b64)
+            await ws.send_bytes(pcm_24k)
+            print(f"[Jambonz:{session_id[:8]}] TTS sent {len(pcm_24k)} bytes PCM 24kHz", flush=True)
+        else:
+            print(f"[Jambonz:{session_id[:8]}] TTS returned empty audio", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        print(f"[Jambonz:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
+
+    session.assistant_speaking = False
+    await broadcast_sip_event({
+        "type": "sip.tts.start",
+        "call_id": session_id,
+        "text": text,
+    })
+
+
+async def _jambonz_process_utterance(
+    ws: WebSocket,
+    session: VoiceSession,
+    session_id: str,
+    speech_audio: bytes,
+) -> None:
+    """Transcribe speech audio and stream LLM response back via Jambonz."""
+    import base64 as _b64mod
+
+    audio_b64 = _b64mod.b64encode(speech_audio).decode()
+    question_id = str(uuid.uuid4())
+    t_speech_stopped = time.time()
+
+    try:
+        transcript = transcribe_audio(audio_b64, session_id=session_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Jambonz:{session_id[:8]}] STT error: {exc}", flush=True)
+        session.assistant_speaking = False
+        return
+
+    t_stt_done = time.time()
+    text = (transcript.get("text") or "").strip()
+    if not text:
+        print(f"[Jambonz:{session_id[:8]}] STT: empty transcription", flush=True)
+        session.assistant_speaking = False
+        return
+
+    print(f"[Jambonz:{session_id[:8]}] STT: {text}", flush=True)
+    await broadcast_sip_event({
+        "type": "sip.stt.result",
+        "call_id": session_id,
+        "text": text,
+    })
+
+    session.on_transcript_final(text)
+
+    jambonz_ws = _JambonzWebSocketShim(ws, session_id)
+    await _stream_voice_response(
+        websocket=jambonz_ws,
+        session=session,
+        session_id=session_id,
+        message=text,
+        t_speech_stopped=t_speech_stopped,
+        t_stt_done=t_stt_done,
+        question_id=question_id,
+        rtc_handler=None,
+    )
+
+
+@app.websocket("/ws/jambonz")
+async def jambonz_control_ws(websocket: WebSocket) -> None:
+    """Jambonz call control WebSocket (subprotocol: ws.jambonz.org)."""
+    await websocket.accept(subprotocol="ws.jambonz.org")
+    call_sid = ""
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            msg = json.loads(raw)
+            msg_type = msg.get("type", "")
+
+            if msg_type == "session:new":
+                call_sid = msg.get("callSid", "")
+                caller_phone = msg.get("from", "")
+                caller_name = msg.get("callerName", "")
+                print(
+                    f"[Jambonz:{call_sid[:8]}] session:new from={caller_phone} name={caller_name}",
+                    flush=True,
+                )
+
+                audio_ws_url = "ws://host.docker.internal:8000/ws/jambonz-audio"
+                ack = {
+                    "type": "ack",
+                    "data": {
+                        "verb": "listen",
+                        "url": audio_ws_url,
+                        "sampleRate": 16000,
+                        "passDtmf": True,
+                        "bidirectionalAudio": {
+                            "enabled": True,
+                            "streaming": True,
+                            "sampleRate": 24000,
+                        },
+                        "metadata": {
+                            "from": caller_phone,
+                            "callSid": call_sid,
+                        },
+                    },
+                }
+                await websocket.send_text(json.dumps(ack))
+
+            elif msg_type == "call:status":
+                status = msg.get("callStatus", "")
+                print(f"[Jambonz:{call_sid[:8]}] call:status={status}", flush=True)
+                if status in ("completed", "failed", "no-answer", "busy"):
+                    await broadcast_sip_event({
+                        "type": "sip.call.end",
+                        "call_id": call_sid,
+                        "reason": status,
+                    })
+                    break
+
+            elif msg_type == "verb:hook":
+                print(f"[Jambonz:{call_sid[:8]}] verb:hook reason={msg.get('reason', '')}", flush=True)
+
+    except WebSocketDisconnect:
+        print(f"[Jambonz:{call_sid[:8]}] Control WS disconnected", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Jambonz:{call_sid[:8]}] Control WS error: {exc}", flush=True)
+
+
+@app.websocket("/ws/jambonz-audio")
+async def jambonz_audio_ws(websocket: WebSocket) -> None:
+    """Jambonz bidirectional audio WebSocket (subprotocol: audio.jambonz.org)."""
+    await websocket.accept(subprotocol="audio.jambonz.org")
+    session_id = ""
+    session: VoiceSession | None = None
+    _frame_count = 0
+
+    try:
+        # 1. First frame: JSON metadata
+        raw_meta = await websocket.receive_text()
+        meta = json.loads(raw_meta)
+        call_sid = meta.get("callSid", "")
+        sample_rate = meta.get("sampleRate", 16000)
+        caller_meta = meta.get("metadata", {})
+        caller_phone = caller_meta.get("from", "")
+        session_id = call_sid or str(uuid.uuid4())
+
+        print(
+            f"[Jambonz:{session_id[:8]}] Audio WS connected, "
+            f"sampleRate={sample_rate}, caller={caller_phone}",
+            flush=True,
+        )
+
+        await broadcast_sip_event({
+            "type": "sip.call.start",
+            "call_id": session_id,
+            "phone": caller_phone or "unknown",
+        })
+
+        # 2. Create voice session
+        session = VoiceSession(
+            session_id=session_id,
+            backend="our_rag",
+            transport="jambonz",
+            client_phone=caller_phone or None,
+            call_id=call_sid,
+        )
+        voice_sessions[session_id] = session
+
+        # 3. Create VAD (16kHz native)
+        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+        vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
+
+        # 4. Send welcome TTS
+        session.assistant_speaking = True
+        intro_text = (
+            "Здравствуйте! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
+            "Как я могу к вам обращаться?"
+        )
+        asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, intro_text))
+
+        # 5. Audio loop
+        while True:
+            msg = await websocket.receive()
+
+            # Binary frame: caller audio (L16 PCM 16kHz)
+            if "bytes" in msg and msg["bytes"]:
+                pcm_16k = msg["bytes"]
+                _frame_count += 1
+                if _frame_count == 1:
+                    print(f"[Jambonz:{session_id[:8]}] First audio frame ({len(pcm_16k)} bytes)", flush=True)
+
+                # Barge-in: clean VAD on caller-only audio
+                if session.assistant_speaking:
+                    was_speaking = vad.is_speaking
+                    vad.feed(pcm_16k)
+                    if not was_speaking and vad.is_speaking:
+                        session.interrupted = True
+                        session.assistant_speaking = False
+                        vad.reset()
+                        await websocket.send_text(json.dumps({"type": "killAudio"}))
+                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN", flush=True)
+                        await broadcast_sip_event({
+                            "type": "sip.barge_in",
+                            "call_id": session_id,
+                        })
+                    continue
+
+                # Normal listening: feed VAD
+                was_speaking = vad.is_speaking
+                speech_audio = vad.feed(pcm_16k)
+
+                if not was_speaking and vad.is_speaking:
+                    print(f"[Jambonz:{session_id[:8]}] VAD: speech_start", flush=True)
+                    await broadcast_sip_event({
+                        "type": "sip.vad.speech",
+                        "call_id": session_id,
+                        "event": "start",
+                    })
+
+                if speech_audio is not None:
+                    if len(speech_audio) < 16000:
+                        print(
+                            f"[Jambonz:{session_id[:8]}] VAD: speech_end SKIPPED "
+                            f"(too short: {len(speech_audio)} bytes)",
+                            flush=True,
+                        )
+                        continue
+
+                    from scipy.signal import resample_poly as _resample_poly
+                    import numpy as _np
+                    _samples = _np.frombuffer(speech_audio, dtype=_np.int16)
+                    _resampled = _resample_poly(_samples, up=3, down=2).astype(_np.int16)
+                    speech_24k = _resampled.tobytes()
+
+                    print(
+                        f"[Jambonz:{session_id[:8]}] VAD: speech_end "
+                        f"({len(speech_audio)} bytes 16kHz -> {len(speech_24k)} bytes 24kHz)",
+                        flush=True,
+                    )
+                    await broadcast_sip_event({
+                        "type": "sip.vad.speech",
+                        "call_id": session_id,
+                        "event": "end",
+                    })
+
+                    session.assistant_speaking = True
+                    session.interrupted = False
+                    asyncio.create_task(_jambonz_process_utterance(
+                        websocket, session, session_id, speech_24k,
+                    ))
+
+            # Text frame: JSON control messages
+            elif "text" in msg and msg["text"]:
+                ctrl = json.loads(msg["text"])
+                event_type = ctrl.get("event", ctrl.get("type", ""))
+
+                if event_type == "dtmf":
+                    digit = ctrl.get("dtmf", "")
+                    print(f"[Jambonz:{session_id[:8]}] DTMF: {digit}", flush=True)
+                    await broadcast_sip_event({
+                        "type": "sip.dtmf",
+                        "call_id": session_id,
+                        "digit": digit,
+                    })
+
+                elif event_type == "disconnect":
+                    print(f"[Jambonz:{session_id[:8]}] Remote disconnect", flush=True)
+                    break
+
+    except WebSocketDisconnect:
+        print(f"[Jambonz:{session_id[:8]}] Audio WS disconnected (frames: {_frame_count})", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        print(f"[Jambonz:{session_id[:8]}] Audio WS error: {exc}\n{traceback.format_exc()}", flush=True)
+    finally:
+        if session is not None:
+            voice_sessions.pop(session_id, None)
+        await broadcast_sip_event({
+            "type": "sip.call.end",
+            "call_id": session_id,
+        })
+        print(f"[Jambonz:{session_id[:8]}] Cleaned up", flush=True)
 
 
 @app.websocket("/ws/sip-monitor")
