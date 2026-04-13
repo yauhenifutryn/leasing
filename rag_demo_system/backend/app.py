@@ -1795,6 +1795,7 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                             "verb": "listen",
                             "url": audio_ws_url,
                             "sampleRate": 16000,
+                            "mixType": "mixed",
                             "passDtmf": True,
                             "bidirectionalAudio": {
                                 "enabled": True,
@@ -1913,40 +1914,34 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         _rms = 0
                     print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking} rms={_rms:.0f} bytes={len(pcm_16k)}", flush=True)
 
-                # Barge-in: VAD + energy-based detection on caller-only audio
+                # Barge-in on mixed audio (caller + bot TTS combined)
+                # Same approach as Asterisk: rolling energy baseline + threshold
                 if session.assistant_speaking:
-                    was_speaking = vad.is_speaking
-                    vad.feed(pcm_16k)
+                    import struct as _bst
+                    import math as _bm
+                    _bn = len(pcm_16k) // 2
+                    if _bn > 0:
+                        _bsamps = _bst.unpack(f"<{_bn}h", pcm_16k[:_bn*2])
+                        _brms = _bm.sqrt(sum(s*s for s in _bsamps) / _bn)
+                    else:
+                        _brms = 0
 
-                    # Primary: VAD detects speech start
-                    vad_triggered = not was_speaking and vad.is_speaking
+                    # Track echo baseline (rolling average of TTS energy)
+                    if not hasattr(session, '_echo_samples'):
+                        session._echo_samples = []
+                    session._echo_samples.append(_brms)
+                    if len(session._echo_samples) > 25:
+                        session._echo_samples.pop(0)
+                    _baseline = sum(session._echo_samples) / len(session._echo_samples) if session._echo_samples else 500
 
-                    # Fallback: energy-based detection for when phone AEC
-                    # suppresses mic (rms is low but still above silence)
-                    if not vad_triggered and not hasattr(session, '_barge_energy_count'):
-                        session._barge_energy_count = 0
-                    if not vad_triggered:
-                        import struct as _bst
-                        import math as _bm
-                        _bn = len(pcm_16k) // 2
-                        if _bn > 0:
-                            _bsamps = _bst.unpack(f"<{_bn}h", pcm_16k[:_bn*2])
-                            _brms = _bm.sqrt(sum(s*s for s in _bsamps) / _bn)
-                            if _brms > 40:
-                                session._barge_energy_count += 1
-                            else:
-                                session._barge_energy_count = max(0, session._barge_energy_count - 1)
-                            # 8 frames above threshold in recent window = barge-in (~160ms)
-                            if session._barge_energy_count >= 8:
-                                vad_triggered = True
-
-                    if vad_triggered:
+                    # Trigger: energy > 2x baseline AND above absolute minimum
+                    if _brms > max(_baseline * 2.0, 800) and len(session._echo_samples) > 10:
                         session.interrupted = True
                         session.assistant_speaking = False
-                        session._barge_energy_count = 0
+                        session._echo_samples = []
                         vad.reset()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
-                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN", flush=True)
+                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN (rms={_brms:.0f}, baseline={_baseline:.0f})", flush=True)
                         await broadcast_sip_event({
                             "type": "sip.barge_in",
                             "call_id": session_id,
