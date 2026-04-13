@@ -186,6 +186,11 @@ else
     info "Application exists: $APP_SID (webhooks updated)"
 fi
 
+# 8b2. Link application to account for device calling (required for SIP phone routing)
+$COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -e "UPDATE accounts SET device_calling_application_sid='$APP_SID' WHERE account_sid='$ACCOUNT_SID'" 2>/dev/null
+info "Account linked to voice-bot application"
+
 # 8c. Create or update SIP client (stored in MySQL `clients` table)
 # Jambonz stores passwords encrypted with ENCRYPTION_SECRET (AES-256-CBC, JSON format)
 ENV_FILE="$APP_DIR/.env"
@@ -198,42 +203,64 @@ else
     info "SIP password: generated new"
 fi
 
-# Encrypt password using the SAME key derivation as @jambonz/digest-utils:
-# key = sha256(ENCRYPTION_SECRET).digest('base64').substring(0, 32)
-ENCRYPTED_PASS=$($COMPOSE_CMD exec -T api-server node -e "
+# Encrypt password and write to MySQL directly via Node.js inside the sbc-sip-sidecar
+# container. This ensures the SAME crypto code that decrypts also encrypts,
+# and avoids shell escaping issues with the encrypted JSON.
+UPSERT_RESULT=$($COMPOSE_CMD exec -T sbc-sip-sidecar node -e "
 const crypto = require('crypto');
-const secretKey = crypto.createHash('sha256')
-  .update(process.env.ENCRYPTION_SECRET)
-  .digest('base64')
-  .substring(0, 32);
-const iv = crypto.randomBytes(16);
-const cipher = crypto.createCipheriv('aes-256-cbc', secretKey, iv);
-let enc = cipher.update('$SIP_PASSWORD', 'utf8', 'hex');
-enc += cipher.final('hex');
-console.log(JSON.stringify({iv: iv.toString('hex'), content: enc}));
+const mysql = require('mysql2/promise');
+async function main() {
+  const secretKey = crypto.createHash('sha256')
+    .update(process.env.ENCRYPTION_SECRET)
+    .digest('base64')
+    .substring(0, 32);
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', secretKey, iv);
+  let enc = cipher.update('$SIP_PASSWORD', 'utf8', 'hex');
+  enc += cipher.final('hex');
+  const encrypted = JSON.stringify({iv: iv.toString('hex'), content: enc});
+  const conn = await mysql.createConnection({
+    host: process.env.JAMBONES_MYSQL_HOST,
+    user: process.env.JAMBONES_MYSQL_USER,
+    password: process.env.JAMBONES_MYSQL_PASSWORD,
+    database: process.env.JAMBONES_MYSQL_DATABASE
+  });
+  const [rows] = await conn.execute(
+    'SELECT client_sid FROM clients WHERE account_sid = ? AND username = ?',
+    ['$ACCOUNT_SID', '$SIP_USER']
+  );
+  if (rows.length > 0) {
+    await conn.execute('UPDATE clients SET password = ? WHERE client_sid = ?', [encrypted, rows[0].client_sid]);
+    console.log('updated');
+  } else {
+    const sid = crypto.randomUUID();
+    await conn.execute(
+      'INSERT INTO clients (client_sid, account_sid, username, password) VALUES (?, ?, ?, ?)',
+      [sid, '$ACCOUNT_SID', '$SIP_USER', encrypted]
+    );
+    console.log('created');
+  }
+  await conn.end();
+}
+main().catch(e => { console.error(e.message); process.exit(1); });
 " 2>/dev/null | tr -d '[:space:]')
 
-if [ -z "$ENCRYPTED_PASS" ]; then
-    fail "Could not encrypt SIP password. Check api-server container is running."
-fi
-
-# Escape single quotes in encrypted JSON for MySQL
-ENCRYPTED_ESCAPED=$(echo "$ENCRYPTED_PASS" | sed "s/'/''/g")
-
-# Check if SIP client already exists in DB
-CLIENT_EXISTS=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
-    -N -e "SELECT client_sid FROM clients WHERE account_sid='$ACCOUNT_SID' AND username='$SIP_USER' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
-
-if [ -n "$CLIENT_EXISTS" ]; then
-    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
-        -e "UPDATE clients SET password='$ENCRYPTED_ESCAPED' WHERE client_sid='$CLIENT_EXISTS'" 2>/dev/null
+if [ "$UPSERT_RESULT" = "created" ]; then
+    info "SIP client created: $SIP_USER (encrypted)"
+elif [ "$UPSERT_RESULT" = "updated" ]; then
     info "SIP client updated: $SIP_USER (encrypted)"
 else
-    CLIENT_SID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
-    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
-        -e "INSERT INTO clients (client_sid, account_sid, username, password) VALUES ('$CLIENT_SID', '$ACCOUNT_SID', '$SIP_USER', '$ENCRYPTED_ESCAPED')" 2>/dev/null
-    info "SIP client created: $SIP_USER (encrypted)"
+    fail "Could not create SIP client. Check sbc-sip-sidecar container."
 fi
+
+# 8d. Flush Redis and restart SBC services to pick up DB changes
+# SBC services cache account/realm lookups at startup. If they started before
+# the deploy script populated the DB, they have stale null entries.
+info "Flushing Redis cache and restarting SBC services..."
+$COMPOSE_CMD exec -T redis redis-cli FLUSHALL >/dev/null 2>&1
+$COMPOSE_CMD restart sbc-sip-sidecar sbc-registrar >/dev/null 2>&1
+sleep 5
+info "SBC services restarted with fresh DB state"
 
 # ── 9. Update backend .env ──
 sed -i '/^SIP_ENABLED=/d; /^AUDIOSOCKET_/d; /^AMI_/d; /^JAMBONZ_/d; /^PUBLIC_IP=/d' "$ENV_FILE" 2>/dev/null || true
