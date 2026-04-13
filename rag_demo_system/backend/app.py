@@ -1827,15 +1827,25 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
 
 @app.websocket("/ws/jambonz-audio")
 async def jambonz_audio_ws(websocket: WebSocket) -> None:
-    """Jambonz bidirectional audio WebSocket (subprotocol: audio.jambonz.org)."""
-    await websocket.accept(subprotocol="audio.jambonz.org")
+    """Jambonz bidirectional audio WebSocket."""
+    await websocket.accept()
     session_id = ""
     session: VoiceSession | None = None
     _frame_count = 0
 
     try:
-        # 1. First frame: JSON metadata
-        raw_meta = await websocket.receive_text()
+        # 1. First frame: JSON metadata (or binary if mod_audio_fork skips metadata)
+        print("[Jambonz] Audio WS accepted, waiting for first frame...", flush=True)
+        first_msg = await websocket.receive()
+        if "text" in first_msg and first_msg["text"]:
+            raw_meta = first_msg["text"]
+        elif "bytes" in first_msg and first_msg["bytes"]:
+            # mod_audio_fork might send binary first without metadata
+            print(f"[Jambonz] Audio WS got binary first frame ({len(first_msg['bytes'])} bytes), using defaults", flush=True)
+            raw_meta = json.dumps({"callSid": "", "sampleRate": 16000, "metadata": {}})
+        else:
+            print(f"[Jambonz] Audio WS unexpected first frame: {first_msg}", flush=True)
+            return
         meta = json.loads(raw_meta)
         call_sid = meta.get("callSid", "")
         sample_rate = meta.get("sampleRate", 16000)
