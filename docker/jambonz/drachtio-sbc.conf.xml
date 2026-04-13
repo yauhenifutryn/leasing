@@ -2,7 +2,6 @@
     <admin port="9022" secret="cymru">0.0.0.0</admin>
 
     <request-handler sip-method="INVITE" http-method="POST">http://sbc-call-router:3000</request-handler>
-    <request-handler sip-method="REGISTER" http-method="POST">http://sbc-call-router:3000</request-handler>
 
     <sip>
         <contacts>
