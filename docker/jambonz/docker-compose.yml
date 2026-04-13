@@ -1,43 +1,47 @@
+# Based on t0mll/jambonz-infrastructure reference docker-compose (the only tested community compose)
+# Adapted for v10 images + sbc-sip-sidecar (replaces legacy sbc-registrar)
+
 x-common-env: &common-env
-  JAMBONES_MYSQL_HOST: mysql
+  JAMBONES_MYSQL_HOST: 172.10.0.2
   JAMBONES_MYSQL_USER: jambones
   JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
   JAMBONES_MYSQL_DATABASE: jambones
-  JAMBONES_REDIS_HOST: redis
+  JAMBONES_REDIS_HOST: 172.10.0.3
   JAMBONES_REDIS_PORT: 6379
-  JAMBONES_TIME_SERIES_HOST: influxdb
+  JAMBONES_TIME_SERIES_HOST: 172.10.0.61
   JAMBONES_LOGLEVEL: info
   JWT_SECRET: ${JWT_SECRET:-jambonz-voice-pipeline-jwt-2026}
   ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-voicepipeline2026jambonz}
   JAMBONES_CLUSTER_ID: jb
   NODE_ENV: production
-
-x-sbc-env: &sbc-env
-  <<: *common-env
-  DRACHTIO_HOST: drachtio-sbc
   DRACHTIO_PORT: 9022
   DRACHTIO_SECRET: cymru
-  JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
-  JAMBONES_RTPENGINE_HOST: rtpengine
-  JAMBONES_RTPENGINE_PORT: 22222
+  ENABLE_METRICS: 0
+
+networks:
+  jambonz:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.10.0.0/16
 
 services:
   mysql:
     image: mysql:5.7
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-JambonzRoot2026!}
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: jambones
       MYSQL_USER: jambones
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
     volumes:
       - jambonz-mysql:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--protocol", "tcp"]
       timeout: 5s
       retries: 10
     networks:
       jambonz:
+        ipv4_address: 172.10.0.2
     restart: unless-stopped
 
   redis:
@@ -49,6 +53,7 @@ services:
       retries: 5
     networks:
       jambonz:
+        ipv4_address: 172.10.0.3
     restart: unless-stopped
 
   influxdb:
@@ -59,38 +64,64 @@ services:
       - jambonz-influxdb:/var/lib/influxdb
     networks:
       jambonz:
+        ipv4_address: 172.10.0.61
     restart: unless-stopped
 
-  # SBC drachtio: handles external SIP (Zoiper, carriers)
-  # Config routes INVITE/REGISTER to sbc-call-router for proper inbound/outbound routing
+  db-create:
+    image: jambonz/db-create:latest
+    environment:
+      JAMBONES_MYSQL_HOST: 172.10.0.2
+      JAMBONES_MYSQL_USER: jambones
+      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
+      JAMBONES_MYSQL_DATABASE: jambones
+      MYSQL_ROOT_PASSWORD: ""
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      jambonz:
+    restart: "no"
+
+  # SBC drachtio: external SIP, routes INVITE to call-router via config file
   drachtio-sbc:
     image: drachtio/drachtio-server:latest
     command: >
-      drachtio --contact "sip:*;transport=udp"
-      --contact "sip:*;transport=tcp"
+      drachtio --contact "sip:172.10.0.10;transport=udp,tcp"
       --external-ip ${PUBLIC_IP:-0.0.0.0}
-      --http-handler http://sbc-call-router:3000
-      --http-method POST
-      --loglevel info
-      --sofia-loglevel 3
+      --address 0.0.0.0 --port 9022
+    volumes:
+      - ./drachtio-sbc.conf.xml:/etc/drachtio.conf.xml:ro
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
-    depends_on:
-      - sbc-call-router
     networks:
       jambonz:
+        ipv4_address: 172.10.0.10
     restart: unless-stopped
 
-  # Feature-server drachtio: handles internal SIP (to/from FreeSWITCH)
+  rtpengine:
+    image: jambonz/rtpengine:latest
+    command: >
+      rtpengine --interface private/172.10.0.11
+      --interface public/172.10.0.11!${PUBLIC_IP:-0.0.0.0}
+      --log-level 5
+    ports:
+      - "40000-40100:40000-40100/udp"
+    networks:
+      jambonz:
+        ipv4_address: 172.10.0.11
+    restart: unless-stopped
+
+  # Feature-server drachtio: internal SIP to/from FreeSWITCH
   drachtio-fs:
     image: drachtio/drachtio-server:latest
     command: >
       drachtio --contact "sip:*;transport=udp"
-      --loglevel info
-      --sofia-loglevel 3
+      --contact "sip:*;transport=tcp"
+      --address 0.0.0.0 --port 9022
     networks:
       jambonz:
+        ipv4_address: 172.10.0.50
     restart: unless-stopped
 
   freeswitch:
@@ -103,33 +134,8 @@ services:
         hard: 65536
     networks:
       jambonz:
+        ipv4_address: 172.10.0.51
     restart: unless-stopped
-
-  rtpengine:
-    image: jambonz/rtpengine:latest
-    ports:
-      - "40000-40100:40000-40100/udp"
-    environment:
-      CLOUD: none
-      OPTIONS: "--interface=private/0.0.0.0 --interface=public/0.0.0.0!${PUBLIC_IP:-0.0.0.0} --port-min=40000 --port-max=40100 --log-level=4"
-    networks:
-      jambonz:
-    restart: unless-stopped
-
-  db-create:
-    image: jambonz/db-create:latest
-    environment:
-      JAMBONES_MYSQL_HOST: mysql
-      JAMBONES_MYSQL_USER: jambones
-      JAMBONES_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-JambonzDB2026!}
-      JAMBONES_MYSQL_DATABASE: jambones
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-JambonzRoot2026!}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    networks:
-      jambonz:
-    restart: "no"
 
   api-server:
     image: jambonz/api-server:latest
@@ -148,6 +154,7 @@ services:
         condition: service_healthy
     networks:
       jambonz:
+        ipv4_address: 172.10.0.30
     restart: unless-stopped
 
   webapp:
@@ -160,21 +167,89 @@ services:
       - api-server
     networks:
       jambonz:
+        ipv4_address: 172.10.0.31
+    restart: unless-stopped
+
+  sbc-call-router:
+    image: jambonz/sbc-call-router:latest
+    environment:
+      <<: *common-env
+      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
+      HTTP_PORT: 4000
+      JAMBONES_INBOUND_ROUTE: "127.0.0.1:4002"
+      JAMBONES_OUTBOUND_ROUTE: "127.0.0.1:4003"
+    depends_on:
+      db-create:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      jambonz:
+        ipv4_address: 172.10.0.33
+    restart: unless-stopped
+
+  sbc-inbound:
+    image: jambonz/sbc-inbound:latest
+    environment:
+      <<: *common-env
+      DRACHTIO_HOST: 172.10.0.10
+      JAMBONES_RTPENGINES: "172.10.0.11:22222"
+      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
+      JAMBONES_FEATURE_SERVERS: "172.10.0.50:5060"
+    depends_on:
+      db-create:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      jambonz:
+        ipv4_address: 172.10.0.34
+    restart: unless-stopped
+
+  sbc-outbound:
+    image: jambonz/sbc-outbound:latest
+    environment:
+      <<: *common-env
+      DRACHTIO_HOST: 172.10.0.10
+      JAMBONES_RTPENGINES: "172.10.0.11:22222"
+      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
+    depends_on:
+      db-create:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      jambonz:
+        ipv4_address: 172.10.0.35
+    restart: unless-stopped
+
+  sbc-sip-sidecar:
+    image: jambonz/sbc-sip-sidecar:latest
+    environment:
+      <<: *common-env
+      DRACHTIO_HOST: 172.10.0.10
+      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
+    depends_on:
+      db-create:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      jambonz:
+        ipv4_address: 172.10.0.36
     restart: unless-stopped
 
   feature-server:
     image: jambonz/feature-server:latest
     environment:
       <<: *common-env
-      DRACHTIO_HOST: drachtio-fs
-      DRACHTIO_PORT: 9022
-      DRACHTIO_SECRET: cymru
-      JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
-      JAMBONES_RTPENGINE_HOST: rtpengine
-      JAMBONES_RTPENGINE_PORT: 22222
-      JAMBONES_FREESWITCH: "freeswitch:8021:JambonzR0ck$$"
-      ENABLE_METRICS: 0
+      DRACHTIO_HOST: 172.10.0.50
+      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
+      JAMBONES_RTPENGINES: "172.10.0.11:22222"
       HTTP_PORT: 3000
+      JAMBONES_SBCS: "172.10.0.10"
+      JAMBONES_FEATURE_SERVERS: "172.10.0.50:9022:cymru"
+      JAMBONES_FREESWITCH: "172.10.0.51:8021:JambonzR0ck$$"
       JAMBONES_OTEL_ENABLED: 0
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -183,85 +258,10 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      drachtio-fs:
-        condition: service_started
-      freeswitch:
-        condition: service_started
     networks:
       jambonz:
+        ipv4_address: 172.10.0.60
     restart: unless-stopped
-
-  sbc-inbound:
-    image: jambonz/sbc-inbound:latest
-    environment:
-      <<: *sbc-env
-      K8S_FEATURE_SERVER_SERVICE_NAME: feature-server
-      K8S_FEATURE_SERVER_SERVICE_PORT: 3000
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      drachtio-sbc:
-        condition: service_started
-    networks:
-      jambonz:
-    restart: unless-stopped
-
-  sbc-outbound:
-    image: jambonz/sbc-outbound:latest
-    environment:
-      <<: *sbc-env
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      drachtio-sbc:
-        condition: service_started
-    networks:
-      jambonz:
-    restart: unless-stopped
-
-  sbc-call-router:
-    image: jambonz/sbc-call-router:latest
-    environment:
-      <<: *common-env
-      JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
-      HTTP_PORT: 3000
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-    networks:
-      jambonz:
-    restart: unless-stopped
-
-  # sbc-registrar REMOVED: legacy component superseded by sbc-sip-sidecar.
-  # Official Helm charts do not include it. Having both causes REGISTER race conditions.
-
-  sbc-sip-sidecar:
-    image: jambonz/sbc-sip-sidecar:latest
-    environment:
-      <<: *sbc-env
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      drachtio-sbc:
-        condition: service_started
-    networks:
-      jambonz:
-    restart: unless-stopped
-
-networks:
-  jambonz:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.29.0.0/16
 
 volumes:
   jambonz-mysql:
