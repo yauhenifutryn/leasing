@@ -1030,6 +1030,7 @@ async def _stream_voice_response(
 
     session.assistant_speaking = True
     session.interrupted = False
+    session._tts_start_time = 0  # reset for new TTS warmup
     producer_task = asyncio.create_task(llm_producer())
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
@@ -1959,11 +1960,12 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                 # Barge-in on mixed audio (caller + bot TTS combined)
                 # Same approach as Asterisk: rolling energy baseline + threshold
                 if session.assistant_speaking:
-                    # Skip first 1.5s of TTS (baseline needs time to stabilize)
+                    # Skip first 3s of TTS (mixed audio baseline needs time to stabilize)
                     if not hasattr(session, '_tts_start_time') or session._tts_start_time == 0:
                         session._tts_start_time = asyncio.get_event_loop().time()
+                        session._echo_samples = []  # reset baseline on new TTS
                     _tts_elapsed = asyncio.get_event_loop().time() - session._tts_start_time
-                    if _tts_elapsed < 1.5:
+                    if _tts_elapsed < 3.0:
                         continue
 
                     import struct as _bst
@@ -1979,7 +1981,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     if not hasattr(session, '_echo_samples'):
                         session._echo_samples = []
                     session._echo_samples.append(_brms)
-                    if len(session._echo_samples) > 25:
+                    if len(session._echo_samples) > 50:
                         session._echo_samples.pop(0)
                     _baseline = sum(session._echo_samples) / len(session._echo_samples) if session._echo_samples else 500
 
