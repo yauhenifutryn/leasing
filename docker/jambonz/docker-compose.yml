@@ -103,6 +103,7 @@ services:
     command: >
       rtpengine --interface private/172.10.0.11
       --interface public/172.10.0.11!${PUBLIC_IP:-0.0.0.0}
+      --port-min 40000 --port-max 40100
       --log-level 5
     ports:
       - "40000-40100:40000-40100/udp"
