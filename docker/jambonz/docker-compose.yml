@@ -65,9 +65,7 @@ services:
   # Config routes INVITE/REGISTER to sbc-call-router for proper inbound/outbound routing
   drachtio-sbc:
     image: drachtio/drachtio-server:latest
-    command: >
-      drachtio --conf /etc/drachtio.conf.xml
-      --external-ip ${PUBLIC_IP:-0.0.0.0}
+    command: drachtio --external-ip ${PUBLIC_IP:-0.0.0.0}
     volumes:
       - ./drachtio-sbc.conf.xml:/etc/drachtio.conf.xml:ro
     ports:
