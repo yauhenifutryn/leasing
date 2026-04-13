@@ -127,6 +127,8 @@ services:
     image: drachtio/drachtio-freeswitch-mrf:latest
     volumes:
       - /tmp/freeswitch-recordings:/tmp/recordings
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ulimits:
       nofile:
         soft: 65536
