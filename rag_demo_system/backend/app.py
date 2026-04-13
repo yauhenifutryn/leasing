@@ -1802,16 +1802,37 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
             if msg_type == "session:new":
                 call_sid = msg.get("callSid", "")
                 msgid = msg.get("msgid", "")
-                caller_phone = msg.get("from", "")
-                caller_name = msg.get("callerName", "")
-                # Extract phone from callerName if "from" is a SIP username
-                # Zoiper puts phone in display name: "+375296838707" <sip:test@...>
+                # Log all fields to find caller info
+                print(f"[Jambonz] session:new keys={list(msg.keys())}", flush=True)
+                # Try multiple field names for caller phone
+                caller_phone = (
+                    msg.get("from", "")
+                    or msg.get("callingNumber", "")
+                    or msg.get("caller_id", "")
+                    or ""
+                )
+                caller_name = (
+                    msg.get("callerName", "")
+                    or msg.get("caller_name", "")
+                    or msg.get("display_name", "")
+                    or ""
+                )
+                # Extract phone from callerName if caller_phone is just a SIP username
                 import re as _re
                 if not caller_phone or not _re.search(r'\d{7,}', caller_phone):
-                    # Try callerName which may contain the phone number
                     _match = _re.search(r'\+?(\d{7,15})', caller_name or "")
                     if _match:
                         caller_phone = _match.group(0)
+                # Last resort: check SIP headers if available
+                if not caller_phone or not _re.search(r'\d{7,}', caller_phone):
+                    _sip = msg.get("sip", {})
+                    if isinstance(_sip, dict):
+                        for _val in _sip.values():
+                            if isinstance(_val, str):
+                                _m = _re.search(r'\+?(\d{7,15})', _val)
+                                if _m:
+                                    caller_phone = _m.group(0)
+                                    break
                 print(
                     f"[Jambonz:{call_sid[:8]}] session:new from={caller_phone} name={caller_name}",
                     flush=True,
