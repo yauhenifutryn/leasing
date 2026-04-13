@@ -161,8 +161,7 @@ else
     info "Application exists: $APP_SID (webhooks updated)"
 fi
 
-# 8c. Create or update SIP credentials
-# Generate password only if not already in backend .env
+# 8c. Create or update SIP client (stored in MySQL `clients` table)
 ENV_FILE="$APP_DIR/.env"
 EXISTING_PASS=$(grep '^JAMBONZ_SIP_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'" || echo "")
 if [ -n "$EXISTING_PASS" ]; then
@@ -173,39 +172,21 @@ else
     info "SIP password: generated new"
 fi
 
-# Check if SIP user exists
-SIP_CRED_SID=$(acurl "$API/Accounts/$ACCOUNT_SID/SipCredentials" | python3 -c "
-import sys, json
-creds = json.load(sys.stdin)
-for c in creds:
-    if c.get('username') == '$SIP_USER':
-        print(c.get('sip_credential_sid', ''))
-        sys.exit(0)
-print('')
-" 2>/dev/null || echo "")
+# Check if SIP client already exists in DB
+CLIENT_EXISTS=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT client_sid FROM clients WHERE account_sid='$ACCOUNT_SID' AND username='$SIP_USER' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
 
-if [ -n "$SIP_CRED_SID" ]; then
-    # Update existing password
-    acurl -X PUT "$API/SipCredentials/$SIP_CRED_SID" \
-        -d "{\"password\": \"$SIP_PASSWORD\"}" >/dev/null 2>&1
-    info "SIP user updated: $SIP_USER"
+if [ -n "$CLIENT_EXISTS" ]; then
+    # Update password
+    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+        -e "UPDATE clients SET password='$SIP_PASSWORD' WHERE client_sid='$CLIENT_EXISTS'" 2>/dev/null
+    info "SIP client updated: $SIP_USER"
 else
-    # Create new - try top-level endpoint first, fallback to nested
-    CRED_RESP=$(acurl -X POST "$API/SipCredentials" \
-        -d "{\"account_sid\": \"$ACCOUNT_SID\", \"username\": \"$SIP_USER\", \"password\": \"$SIP_PASSWORD\"}")
-    CRED_SID=$(echo "$CRED_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
-    if [ -z "$CRED_SID" ]; then
-        # Fallback: nested endpoint
-        CRED_RESP=$(acurl -X POST "$API/Accounts/$ACCOUNT_SID/SipCredentials" \
-            -d "{\"username\": \"$SIP_USER\", \"password\": \"$SIP_PASSWORD\"}")
-        CRED_SID=$(echo "$CRED_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sid',''))" 2>/dev/null || echo "")
-    fi
-    if [ -z "$CRED_SID" ]; then
-        warn "SIP credential creation response: $CRED_RESP"
-        warn "SIP user creation failed. Create manually via web portal: http://$PUBLIC_IP:3001"
-    else
-        info "SIP user created: $SIP_USER (sid: $CRED_SID)"
-    fi
+    # Create new
+    CLIENT_SID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
+    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+        -e "INSERT INTO clients (client_sid, account_sid, username, password) VALUES ('$CLIENT_SID', '$ACCOUNT_SID', '$SIP_USER', '$SIP_PASSWORD')" 2>/dev/null
+    info "SIP client created: $SIP_USER"
 fi
 
 # ── 9. Update backend .env ──
