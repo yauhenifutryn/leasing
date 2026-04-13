@@ -1773,6 +1773,7 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
 
             if msg_type == "session:new":
                 call_sid = msg.get("callSid", "")
+                msgid = msg.get("msgid", "")
                 caller_phone = msg.get("from", "")
                 caller_name = msg.get("callerName", "")
                 print(
@@ -1783,21 +1784,24 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                 audio_ws_url = "ws://host.docker.internal:8000/ws/jambonz-audio"
                 ack = {
                     "type": "ack",
-                    "data": {
-                        "verb": "listen",
-                        "url": audio_ws_url,
-                        "sampleRate": 16000,
-                        "passDtmf": True,
-                        "bidirectionalAudio": {
-                            "enabled": True,
-                            "streaming": True,
-                            "sampleRate": 24000,
-                        },
-                        "metadata": {
-                            "from": caller_phone,
-                            "callSid": call_sid,
-                        },
-                    },
+                    "msgid": msgid,
+                    "data": [
+                        {
+                            "verb": "listen",
+                            "url": audio_ws_url,
+                            "sampleRate": 16000,
+                            "passDtmf": True,
+                            "bidirectionalAudio": {
+                                "enabled": True,
+                                "streaming": True,
+                                "sampleRate": 24000,
+                            },
+                            "metadata": {
+                                "from": caller_phone,
+                                "callSid": call_sid,
+                            },
+                        }
+                    ],
                 }
                 await websocket.send_text(json.dumps(ack))
 
