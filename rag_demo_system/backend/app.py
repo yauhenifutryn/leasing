@@ -67,6 +67,7 @@ class _JambonzWebSocketShim:
     def __init__(self, ws: WebSocket, session_id: str) -> None:
         self._ws = ws
         self._session_id = session_id
+        self.audio_bytes_sent = 0
 
     async def send_json(self, data: dict[str, Any]) -> None:
         event_type = data.get("type", "")
@@ -76,7 +77,11 @@ class _JambonzWebSocketShim:
             audio_b64 = data.get("delta", "")
             if audio_b64:
                 pcm_raw = _b64.b64decode(audio_b64)
-                await self._ws.send_bytes(pcm_raw)
+                # Send in chunks to prevent overwhelming mod_audio_fork
+                _chunk = 1920
+                for _i in range(0, len(pcm_raw), _chunk):
+                    await self._ws.send_bytes(pcm_raw[_i : _i + _chunk])
+                self.audio_bytes_sent += len(pcm_raw)
             return
 
         if event_type == "response.output_text.delta":
@@ -1028,6 +1033,15 @@ async def _stream_voice_response(
     producer_task = asyncio.create_task(llm_producer())
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
+    # Wait for FreeSWITCH to finish playing buffered audio
+    # Jambonz shim tracks bytes sent; 24kHz * 2 = 48000 bytes/sec
+    if hasattr(websocket, 'audio_bytes_sent') and websocket.audio_bytes_sent > 0 and not session.interrupted:
+        _play_dur = websocket.audio_bytes_sent / 48000.0
+        _wait_start = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - _wait_start < _play_dur:
+            if session.interrupted:
+                break
+            await asyncio.sleep(0.1)
     session.assistant_speaking = False
     if rtc_handler is not None:
         rtc_handler.tts_track.flush()
@@ -1701,7 +1715,16 @@ async def _jambonz_send_tts(
             for i in range(0, len(pcm_24k), chunk_size):
                 chunk = pcm_24k[i : i + chunk_size]
                 await ws.send_bytes(chunk)
-            print(f"[Jambonz:{session_id[:8]}] TTS sent {len(pcm_24k)} bytes PCM 24kHz ({len(pcm_24k) // chunk_size} chunks)", flush=True)
+            # Wait for FreeSWITCH to finish playing (audio duration)
+            # 24kHz * 2 bytes = 48000 bytes/sec
+            audio_duration = len(pcm_24k) / 48000.0
+            print(f"[Jambonz:{session_id[:8]}] TTS sent {len(pcm_24k)} bytes PCM 24kHz ({len(pcm_24k) // chunk_size} chunks, {audio_duration:.1f}s)", flush=True)
+            # Wait for playback, but stop early if interrupted
+            _wait_start = asyncio.get_event_loop().time()
+            while asyncio.get_event_loop().time() - _wait_start < audio_duration:
+                if session.interrupted:
+                    break
+                await asyncio.sleep(0.1)
         else:
             print(f"[Jambonz:{session_id[:8]}] TTS returned empty audio", flush=True)
     except Exception as exc:  # noqa: BLE001
