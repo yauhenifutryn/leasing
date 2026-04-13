@@ -1902,6 +1902,8 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                 _frame_count += 1
                 if _frame_count == 1:
                     print(f"[Jambonz:{session_id[:8]}] First audio frame ({len(pcm_16k)} bytes)", flush=True)
+                if _frame_count % 250 == 0:
+                    print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking}", flush=True)
 
                 # Barge-in: clean VAD on caller-only audio
                 if session.assistant_speaking:
