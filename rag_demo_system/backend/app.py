@@ -2017,9 +2017,10 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session._echo_samples.pop(0)
                     _baseline = sum(session._echo_samples) / len(session._echo_samples) if session._echo_samples else 500
 
-                    # Trigger: energy > 2.5x baseline AND above absolute minimum
-                    # Higher threshold prevents false triggers on speaker mode
-                    if _brms > max(_baseline * 2.5, 1500) and len(session._echo_samples) > 10:
+                    # Trigger: energy > 3x baseline AND above absolute minimum
+                    # High threshold prevents false triggers on speaker mode
+                    # (speaker leaks bot voice into mic, doubling the mixed energy)
+                    if _brms > max(_baseline * 3.0, 2000) and len(session._echo_samples) > 15:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._echo_samples = []
