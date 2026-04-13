@@ -112,7 +112,7 @@ info "Admin token: ${ADMIN_TOKEN:0:8}..."
 acurl() { curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" "$@"; }
 
 # ── 8. Configure via REST API ──
-SIP_REALM="$PUBLIC_IP"
+SIP_REALM="voice.${PUBLIC_IP}.nip.io"
 SIP_USER="${JAMBONZ_SIP_USER:-test}"
 
 # 8a. Get or verify account (db-create makes a default one)
@@ -234,7 +234,7 @@ echo "  API Server:     http://$PUBLIC_IP:3000"
 echo "  Monitor Page:   http://$PUBLIC_IP:8000/sip_monitor.html"
 echo ""
 echo "  ── Zoiper Setup ──"
-echo "  Server:    $PUBLIC_IP"
+echo "  Server:    $SIP_REALM   (NOT the raw IP)"
 echo "  Username:  $SIP_USER"
 echo "  Password:  $SIP_PASSWORD"
 echo "  Transport: UDP"
