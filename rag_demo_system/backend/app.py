@@ -713,6 +713,13 @@ async def _stream_voice_response(
         # If tools were already used, use LLM to classify whether this
         # new message needs a tool or is a general KB question.
         # If tools were never used, also classify to catch first calc request.
+        # Build richer context for classifier: include recent tool calls
+        _tool_context = ""
+        if session.tool_calls_this_turn:
+            _last_tools = [tc.get("tool", "") for tc in session.tool_calls_this_turn[-3:]]
+            _tool_context = f"В этом разговоре уже вызывались инструменты: {', '.join(_last_tools)}. "
+        _dialog_context = memory_block[-400:] if memory_block else "начало разговора"
+
         try:
             classify_resp = await asyncio.to_thread(
                 call_openai_compatible,
@@ -720,13 +727,16 @@ async def _stream_voice_response(
                 model=effective_model,
                 system_prompt=(
                     "Классифицируй сообщение клиента. Ответь ОДНИМ словом:\n"
-                    "TOOL - если клиент просит расчёт, пересчёт, калькуляцию, отправку СМС, "
-                    "или подтверждает отправку/расчёт (да, давай, отправь, пересчитай, хорошо после предложения расчёта)\n"
-                    "RAG - если клиент задаёт вопрос о компании, условиях, документах, адресах, "
-                    "или любой другой информационный вопрос\n"
+                    "TOOL - если клиент:\n"
+                    "  - просит расчёт, пересчёт, калькуляцию лизинга\n"
+                    "  - хочет изменить параметры расчёта (аванс, срок, сумму, валюту)\n"
+                    "  - просит отправить СМС, график платежей\n"
+                    "  - подтверждает действие: да, давай, отправь, хорошо, ладно, согласен\n"
+                    "  - говорит о пересчёте, изменении параметров после предыдущего расчёта\n"
+                    "RAG - если клиент задаёт информационный вопрос о компании, условиях, документах\n"
                     "Ответь ТОЛЬКО одно слово: TOOL или RAG"
                 ),
-                user_prompt=f"Контекст диалога: {memory_block[-200:] if memory_block else 'начало разговора'}\nСообщение: {message}",
+                user_prompt=f"{_tool_context}Контекст: {_dialog_context}\nСообщение: {message}",
                 temperature=0.0,
                 max_tokens=5,
                 timeout_sec=5,
@@ -737,8 +747,14 @@ async def _stream_voice_response(
             # Classification failed, fall back to keyword heuristic
             needs_tool = has_sms_intent or any(
                 t in message.lower() for t in
-                ["рассчит", "расчет", "расчёт", "посчит", "пересчит", "калькул"]
+                ["рассчит", "расчет", "расчёт", "посчит", "пересчит", "калькул",
+                 "аванс", "срок", "измени", "помен", "увелич", "уменьш"]
             )
+            # If tools were already used and user confirms, treat as TOOL
+            if not needs_tool and tools_used_in_session:
+                confirm_words = ["да", "давай", "хорошо", "ладно", "согласен", "отправь", "ок"]
+                if message.strip().lower().rstrip(".!,") in confirm_words:
+                    needs_tool = True
         # Also treat SMS intent as tool
         if has_sms_intent:
             needs_tool = True
