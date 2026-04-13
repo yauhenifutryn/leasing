@@ -1913,13 +1913,37 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         _rms = 0
                     print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking} rms={_rms:.0f} bytes={len(pcm_16k)}", flush=True)
 
-                # Barge-in: clean VAD on caller-only audio
+                # Barge-in: VAD + energy-based detection on caller-only audio
                 if session.assistant_speaking:
                     was_speaking = vad.is_speaking
                     vad.feed(pcm_16k)
-                    if not was_speaking and vad.is_speaking:
+
+                    # Primary: VAD detects speech start
+                    vad_triggered = not was_speaking and vad.is_speaking
+
+                    # Fallback: energy-based detection for when phone AEC
+                    # suppresses mic (rms is low but still above silence)
+                    if not vad_triggered and not hasattr(session, '_barge_energy_count'):
+                        session._barge_energy_count = 0
+                    if not vad_triggered:
+                        import struct as _bst
+                        import math as _bm
+                        _bn = len(pcm_16k) // 2
+                        if _bn > 0:
+                            _bsamps = _bst.unpack(f"<{_bn}h", pcm_16k[:_bn*2])
+                            _brms = _bm.sqrt(sum(s*s for s in _bsamps) / _bn)
+                            if _brms > 200:
+                                session._barge_energy_count += 1
+                            else:
+                                session._barge_energy_count = 0
+                            # 5 consecutive frames above threshold = barge-in (~100ms)
+                            if session._barge_energy_count >= 5:
+                                vad_triggered = True
+
+                    if vad_triggered:
                         session.interrupted = True
                         session.assistant_speaking = False
+                        session._barge_energy_count = 0
                         vad.reset()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
                         print(f"[Jambonz:{session_id[:8]}] BARGE-IN", flush=True)
@@ -1942,7 +1966,8 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     })
 
                 if speech_audio is not None:
-                    if len(speech_audio) < 16000:
+                    # Guard: 0.8s minimum at 16kHz (25600 bytes) to prevent Whisper hallucinations
+                    if len(speech_audio) < 25600:
                         print(
                             f"[Jambonz:{session_id[:8]}] VAD: speech_end SKIPPED "
                             f"(too short: {len(speech_audio)} bytes)",
