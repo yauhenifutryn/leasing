@@ -82,15 +82,14 @@ services:
       jambonz:
     restart: "no"
 
-  # SBC drachtio: external SIP, routes INVITE to call-router via config file
+  # SBC drachtio: external SIP (no http-handler, sbc-inbound handles all INVITEs directly)
   drachtio-sbc:
     image: drachtio/drachtio-server:latest
     command: >
       drachtio --contact "sip:172.10.0.10;transport=udp,tcp"
       --external-ip ${PUBLIC_IP:-0.0.0.0}
       --address 0.0.0.0 --port 9022
-    volumes:
-      - ./drachtio-sbc.conf.xml:/etc/drachtio.conf.xml:ro
+      --loglevel info --sofia-loglevel 3
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
@@ -170,23 +169,8 @@ services:
         ipv4_address: 172.10.0.31
     restart: unless-stopped
 
-  sbc-call-router:
-    image: jambonz/sbc-call-router:latest
-    environment:
-      <<: *common-env
-      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
-      HTTP_PORT: 4000
-      JAMBONES_INBOUND_ROUTE: "127.0.0.1:4002"
-      JAMBONES_OUTBOUND_ROUTE: "127.0.0.1:4003"
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-    networks:
-      jambonz:
-        ipv4_address: 172.10.0.33
-    restart: unless-stopped
+  # sbc-call-router REMOVED: not needed without outbound calls.
+  # sbc-inbound handles all INVITEs directly from drachtio-sbc.
 
   sbc-inbound:
     image: jambonz/sbc-inbound:latest
@@ -206,22 +190,7 @@ services:
         ipv4_address: 172.10.0.34
     restart: unless-stopped
 
-  sbc-outbound:
-    image: jambonz/sbc-outbound:latest
-    environment:
-      <<: *common-env
-      DRACHTIO_HOST: 172.10.0.10
-      JAMBONES_RTPENGINES: "172.10.0.11:22222"
-      JAMBONES_NETWORK_CIDR: "172.10.0.0/16"
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-    networks:
-      jambonz:
-        ipv4_address: 172.10.0.35
-    restart: unless-stopped
+  # sbc-outbound REMOVED: not needed for inbound-only voice bot.
 
   sbc-sip-sidecar:
     image: jambonz/sbc-sip-sidecar:latest
