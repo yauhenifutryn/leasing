@@ -80,6 +80,12 @@ services:
     image: drachtio/drachtio-freeswitch-mrf:latest
     volumes:
       - /tmp/freeswitch-recordings:/tmp/recordings
+    healthcheck:
+      test: ["CMD-SHELL", "fs_cli -x 'status' 2>/dev/null | grep -q 'UP' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     networks:
       jambonz:
     restart: unless-stopped
@@ -159,7 +165,7 @@ services:
       drachtio:
         condition: service_started
       freeswitch:
-        condition: service_started
+        condition: service_healthy
     networks:
       jambonz:
     restart: unless-stopped
