@@ -81,11 +81,11 @@ services:
     volumes:
       - /tmp/freeswitch-recordings:/tmp/recordings
     healthcheck:
-      test: ["CMD-SHELL", "fs_cli -x 'status' 2>/dev/null | grep -q 'UP' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
+      test: ["CMD-SHELL", "cat < /dev/tcp/127.0.0.1/8021 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     networks:
       jambonz:
     restart: unless-stopped
