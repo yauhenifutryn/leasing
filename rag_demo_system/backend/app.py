@@ -1695,8 +1695,13 @@ async def _jambonz_send_tts(
         if audio_b64:
             import base64 as _b64
             pcm_24k = _b64.b64decode(audio_b64)
-            await ws.send_bytes(pcm_24k)
-            print(f"[Jambonz:{session_id[:8]}] TTS sent {len(pcm_24k)} bytes PCM 24kHz", flush=True)
+            # Send in 20ms chunks (960 samples * 2 bytes = 1920 bytes at 24kHz)
+            # Sending all at once overwhelms mod_audio_fork and disconnects
+            chunk_size = 1920
+            for i in range(0, len(pcm_24k), chunk_size):
+                chunk = pcm_24k[i : i + chunk_size]
+                await ws.send_bytes(chunk)
+            print(f"[Jambonz:{session_id[:8]}] TTS sent {len(pcm_24k)} bytes PCM 24kHz ({len(pcm_24k) // chunk_size} chunks)", flush=True)
         else:
             print(f"[Jambonz:{session_id[:8]}] TTS returned empty audio", flush=True)
     except Exception as exc:  # noqa: BLE001
