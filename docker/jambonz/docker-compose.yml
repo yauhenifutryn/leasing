@@ -100,9 +100,16 @@ services:
 
   rtpengine:
     image: jambonz/rtpengine:latest
-    environment:
-      CLOUD: none
-      OPTIONS: "--interface=private/172.10.0.11 --interface=public/172.10.0.11!${PUBLIC_IP:-0.0.0.0} --port-min=40000 --port-max=40100 --log-level=5"
+    entrypoint: ["/usr/local/bin/rtpengine"]
+    command: >
+      --interface=private/172.10.0.11
+      --interface=public/172.10.0.11!${PUBLIC_IP:-0.0.0.0}
+      --port-min=40000 --port-max=40100
+      --listen-ng=22222
+      --log-level=5
+      --log-stderr
+      --foreground
+      --delete-delay=0
     ports:
       - "40000-40100:40000-40100/udp"
     networks:
