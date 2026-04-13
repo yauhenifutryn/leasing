@@ -65,9 +65,14 @@ services:
   # Config routes INVITE/REGISTER to sbc-call-router for proper inbound/outbound routing
   drachtio-sbc:
     image: drachtio/drachtio-server:latest
-    command: drachtio --external-ip ${PUBLIC_IP:-0.0.0.0}
-    volumes:
-      - ./drachtio-sbc.conf.xml:/etc/drachtio.conf.xml:ro
+    command: >
+      drachtio --contact "sip:*;transport=udp"
+      --contact "sip:*;transport=tcp"
+      --external-ip ${PUBLIC_IP:-0.0.0.0}
+      --http-handler http://sbc-call-router:3000
+      --http-method POST
+      --loglevel info
+      --sofia-loglevel 3
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
