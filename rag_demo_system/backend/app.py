@@ -1932,12 +1932,12 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         if _bn > 0:
                             _bsamps = _bst.unpack(f"<{_bn}h", pcm_16k[:_bn*2])
                             _brms = _bm.sqrt(sum(s*s for s in _bsamps) / _bn)
-                            if _brms > 200:
+                            if _brms > 40:
                                 session._barge_energy_count += 1
                             else:
-                                session._barge_energy_count = 0
-                            # 5 consecutive frames above threshold = barge-in (~100ms)
-                            if session._barge_energy_count >= 5:
+                                session._barge_energy_count = max(0, session._barge_energy_count - 1)
+                            # 8 frames above threshold in recent window = barge-in (~160ms)
+                            if session._barge_energy_count >= 8:
                                 vad_triggered = True
 
                     if vad_triggered:
