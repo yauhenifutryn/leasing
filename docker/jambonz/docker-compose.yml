@@ -62,17 +62,19 @@ services:
     restart: unless-stopped
 
   # SBC drachtio: handles external SIP (Zoiper, carriers)
+  # Config routes INVITE/REGISTER to sbc-call-router for proper inbound/outbound routing
   drachtio-sbc:
     image: drachtio/drachtio-server:latest
     command: >
-      drachtio --contact "sip:*;transport=udp"
-      --contact "sip:*;transport=tcp"
+      drachtio --conf /etc/drachtio.conf.xml
       --external-ip ${PUBLIC_IP:-0.0.0.0}
-      --loglevel info
-      --sofia-loglevel 3
+    volumes:
+      - ./drachtio-sbc.conf.xml:/etc/drachtio.conf.xml:ro
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
+    depends_on:
+      - sbc-call-router
     networks:
       jambonz:
     restart: unless-stopped

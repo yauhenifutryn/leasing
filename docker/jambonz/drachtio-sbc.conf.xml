@@ -1,0 +1,22 @@
+<drachtio>
+    <admin port="9022" secret="cymru">0.0.0.0</admin>
+
+    <request-handler sip-method="INVITE" http-method="POST">http://sbc-call-router:3000</request-handler>
+    <request-handler sip-method="REGISTER" http-method="POST">http://sbc-call-router:3000</request-handler>
+
+    <sip>
+        <contacts>
+            <contact>sip:*;transport=udp</contact>
+            <contact>sip:*;transport=tcp</contact>
+        </contacts>
+    </sip>
+
+    <logging>
+        <syslog>
+            <ident>drachtio</ident>
+            <facility>local6</facility>
+        </syslog>
+        <sofia-loglevel>3</sofia-loglevel>
+        <loglevel>info</loglevel>
+    </logging>
+</drachtio>
