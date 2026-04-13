@@ -1983,12 +1983,12 @@ async def jambonz_credentials() -> JSONResponse:
     if not settings.jambonz.enabled:
         return JSONResponse(status_code=200, content={"ok": False, "reason": "jambonz not enabled"})
 
-    server_ip = os.getenv("PUBLIC_IP", os.getenv("HOSTNAME", "localhost"))
+    server = settings.jambonz.sip_realm or f"voice.{os.getenv('PUBLIC_IP', 'localhost')}.nip.io"
     return JSONResponse(
         status_code=200,
         content={
             "ok": True,
-            "server": server_ip,
+            "server": server,
             "username": settings.jambonz.sip_user,
             "password": settings.jambonz.sip_password,
             "transport": "UDP",
