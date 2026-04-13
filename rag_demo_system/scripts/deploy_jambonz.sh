@@ -186,12 +186,16 @@ else
     info "SIP password: generated new"
 fi
 
-# Encrypt password using the api-server container (same ENCRYPTION_SECRET)
+# Encrypt password using the SAME key derivation as @jambonz/digest-utils:
+# key = sha256(ENCRYPTION_SECRET).digest('base64').substring(0, 32)
 ENCRYPTED_PASS=$($COMPOSE_CMD exec -T api-server node -e "
 const crypto = require('crypto');
-const key = crypto.createHash('sha256').update(process.env.ENCRYPTION_SECRET).digest();
+const secretKey = crypto.createHash('sha256')
+  .update(process.env.ENCRYPTION_SECRET)
+  .digest('base64')
+  .substring(0, 32);
 const iv = crypto.randomBytes(16);
-const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+const cipher = crypto.createCipheriv('aes-256-cbc', secretKey, iv);
 let enc = cipher.update('$SIP_PASSWORD', 'utf8', 'hex');
 enc += cipher.final('hex');
 console.log(JSON.stringify({iv: iv.toString('hex'), content: enc}));
