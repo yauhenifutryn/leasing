@@ -122,8 +122,21 @@ if [ -z "$ACCOUNT_SID" ]; then
 fi
 
 # Set SIP realm on the account
-REALM_RESP=$(acurl -X PUT "$API/Accounts/$ACCOUNT_SID" -d "{\"sip_realm\": \"$SIP_REALM\"}" 2>/dev/null)
+acurl -X PUT "$API/Accounts/$ACCOUNT_SID" -d "{\"sip_realm\": \"$SIP_REALM\"}" >/dev/null 2>&1
 info "Account: $ACCOUNT_SID (realm: $SIP_REALM)"
+
+# 8a2. Populate system_information (required for SIP realm routing)
+SYS_INFO_EXISTS=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT COUNT(*) FROM system_information" 2>/dev/null | tr -d '[:space:]')
+if [ "$SYS_INFO_EXISTS" = "0" ] || [ -z "$SYS_INFO_EXISTS" ]; then
+    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+        -e "INSERT INTO system_information (domain_name, sip_domain_name) VALUES ('$SIP_REALM', '$SIP_REALM')" 2>/dev/null
+    info "System information: created (domain: $SIP_REALM)"
+else
+    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+        -e "UPDATE system_information SET domain_name='$SIP_REALM', sip_domain_name='$SIP_REALM'" 2>/dev/null
+    info "System information: updated (domain: $SIP_REALM)"
+fi
 
 # 8b. Create or get application
 APP_SID=$(acurl "$API/Accounts/$ACCOUNT_SID/Applications" | python3 -c "
@@ -162,6 +175,7 @@ else
 fi
 
 # 8c. Create or update SIP client (stored in MySQL `clients` table)
+# Jambonz stores passwords encrypted with ENCRYPTION_SECRET (AES-256-CBC, JSON format)
 ENV_FILE="$APP_DIR/.env"
 EXISTING_PASS=$(grep '^JAMBONZ_SIP_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'" || echo "")
 if [ -n "$EXISTING_PASS" ]; then
@@ -172,21 +186,37 @@ else
     info "SIP password: generated new"
 fi
 
+# Encrypt password using the api-server container (same ENCRYPTION_SECRET)
+ENCRYPTED_PASS=$($COMPOSE_CMD exec -T api-server node -e "
+const crypto = require('crypto');
+const key = crypto.createHash('sha256').update(process.env.ENCRYPTION_SECRET).digest();
+const iv = crypto.randomBytes(16);
+const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+let enc = cipher.update('$SIP_PASSWORD', 'utf8', 'hex');
+enc += cipher.final('hex');
+console.log(JSON.stringify({iv: iv.toString('hex'), content: enc}));
+" 2>/dev/null | tr -d '[:space:]')
+
+if [ -z "$ENCRYPTED_PASS" ]; then
+    fail "Could not encrypt SIP password. Check api-server container is running."
+fi
+
+# Escape single quotes in encrypted JSON for MySQL
+ENCRYPTED_ESCAPED=$(echo "$ENCRYPTED_PASS" | sed "s/'/''/g")
+
 # Check if SIP client already exists in DB
 CLIENT_EXISTS=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
     -N -e "SELECT client_sid FROM clients WHERE account_sid='$ACCOUNT_SID' AND username='$SIP_USER' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
 
 if [ -n "$CLIENT_EXISTS" ]; then
-    # Update password
     $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
-        -e "UPDATE clients SET password='$SIP_PASSWORD' WHERE client_sid='$CLIENT_EXISTS'" 2>/dev/null
-    info "SIP client updated: $SIP_USER"
+        -e "UPDATE clients SET password='$ENCRYPTED_ESCAPED' WHERE client_sid='$CLIENT_EXISTS'" 2>/dev/null
+    info "SIP client updated: $SIP_USER (encrypted)"
 else
-    # Create new
     CLIENT_SID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
     $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
-        -e "INSERT INTO clients (client_sid, account_sid, username, password) VALUES ('$CLIENT_SID', '$ACCOUNT_SID', '$SIP_USER', '$SIP_PASSWORD')" 2>/dev/null
-    info "SIP client created: $SIP_USER"
+        -e "INSERT INTO clients (client_sid, account_sid, username, password) VALUES ('$CLIENT_SID', '$ACCOUNT_SID', '$SIP_USER', '$ENCRYPTED_ESCAPED')" 2>/dev/null
+    info "SIP client created: $SIP_USER (encrypted)"
 fi
 
 # ── 9. Update backend .env ──
