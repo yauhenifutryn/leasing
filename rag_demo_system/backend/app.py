@@ -1800,41 +1800,31 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
             msg_type = msg.get("type", "")
 
             if msg_type == "session:new":
-                call_sid = msg.get("callSid", "")
                 msgid = msg.get("msgid", "")
-                # Log all fields to find caller info
-                print(f"[Jambonz] session:new keys={list(msg.keys())}", flush=True)
-                # Try multiple field names for caller phone
+                call_sid = msg.get("call_sid", "") or msg.get("callSid", "")
+                # Call data is nested under "data"
+                _data = msg.get("data", {}) if isinstance(msg.get("data"), dict) else {}
                 caller_phone = (
-                    msg.get("from", "")
-                    or msg.get("callingNumber", "")
-                    or msg.get("caller_id", "")
+                    _data.get("from", "")
+                    or _data.get("callingNumber", "")
+                    or msg.get("from", "")
                     or ""
                 )
                 caller_name = (
-                    msg.get("callerName", "")
-                    or msg.get("caller_name", "")
-                    or msg.get("display_name", "")
+                    _data.get("callerName", "")
+                    or _data.get("caller_name", "")
+                    or msg.get("callerName", "")
                     or ""
                 )
-                # Extract phone from callerName if caller_phone is just a SIP username
+                # Extract phone from callerName if caller_phone is a SIP username
                 import re as _re
                 if not caller_phone or not _re.search(r'\d{7,}', caller_phone):
                     _match = _re.search(r'\+?(\d{7,15})', caller_name or "")
                     if _match:
                         caller_phone = _match.group(0)
-                # Last resort: check SIP headers if available
-                if not caller_phone or not _re.search(r'\d{7,}', caller_phone):
-                    _sip = msg.get("sip", {})
-                    if isinstance(_sip, dict):
-                        for _val in _sip.values():
-                            if isinstance(_val, str):
-                                _m = _re.search(r'\+?(\d{7,15})', _val)
-                                if _m:
-                                    caller_phone = _m.group(0)
-                                    break
+                # Log full data for debugging
                 print(
-                    f"[Jambonz:{call_sid[:8]}] session:new from={caller_phone} name={caller_name}",
+                    f"[Jambonz:{call_sid[:8]}] session:new from={caller_phone} name={caller_name} data_keys={list(_data.keys()) if _data else 'none'}",
                     flush=True,
                 )
 
@@ -1993,8 +1983,9 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session._echo_samples.pop(0)
                     _baseline = sum(session._echo_samples) / len(session._echo_samples) if session._echo_samples else 500
 
-                    # Trigger: energy > 2x baseline AND above absolute minimum
-                    if _brms > max(_baseline * 2.0, 800) and len(session._echo_samples) > 10:
+                    # Trigger: energy > 2.5x baseline AND above absolute minimum
+                    # Higher threshold prevents false triggers on speaker mode
+                    if _brms > max(_baseline * 2.5, 1500) and len(session._echo_samples) > 10:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._echo_samples = []
