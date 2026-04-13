@@ -151,8 +151,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       drachtio:
@@ -170,8 +170,8 @@ services:
       K8S_FEATURE_SERVER_SERVICE_NAME: feature-server
       K8S_FEATURE_SERVER_SERVICE_PORT: 3000
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       drachtio:
@@ -185,8 +185,8 @@ services:
     environment:
       <<: *sbc-env
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       drachtio:
@@ -202,8 +202,8 @@ services:
       JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
       HTTP_PORT: 3000
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -215,8 +215,8 @@ services:
     environment:
       <<: *sbc-env
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       drachtio:
@@ -230,8 +230,8 @@ services:
     environment:
       <<: *sbc-env
     depends_on:
-      mysql:
-        condition: service_healthy
+      db-create:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       drachtio:

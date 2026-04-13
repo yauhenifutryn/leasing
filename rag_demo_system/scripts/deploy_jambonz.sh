@@ -112,7 +112,7 @@ info "Admin token: ${ADMIN_TOKEN:0:8}..."
 acurl() { curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" "$@"; }
 
 # ── 8. Configure via REST API ──
-SIP_REALM="voice.${PUBLIC_IP}.nip.io"
+SIP_REALM="$PUBLIC_IP"
 SIP_USER="${JAMBONZ_SIP_USER:-test}"
 
 # 8a. Get or verify account (db-create makes a default one)
