@@ -44,6 +44,9 @@ state = StateStore(Path(__file__).resolve().parents[1] / ".state")
 engine = RAGEngine(settings, Path(__file__).resolve().parents[1] / ".state")
 voice_sessions: dict[str, VoiceSession] = {}
 
+# Jambonz: store caller phone from control WS for audio WS to read
+_jambonz_call_phones: dict[str, str] = {}
+
 # SIP monitor: connected WebSocket clients for live event streaming
 _sip_monitor_clients: set[WebSocket] = set()
 
@@ -1829,6 +1832,10 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                     flush=True,
                 )
 
+                # Store phone for audio WS handler to read
+                if call_sid and caller_phone:
+                    _jambonz_call_phones[call_sid] = caller_phone
+
                 audio_ws_url = "ws://host.docker.internal:8000/ws/jambonz-audio"
                 ack = {
                     "type": "ack",
@@ -1900,6 +1907,15 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         sample_rate = meta.get("sampleRate", 16000)
         caller_meta = meta.get("metadata", {})
         caller_phone = caller_meta.get("from", "")
+        # Fallback: read phone from control WS shared dict
+        if not caller_phone and call_sid:
+            caller_phone = _jambonz_call_phones.pop(call_sid, "")
+        elif not caller_phone:
+            # Try any stored phone (single concurrent call)
+            for _csid, _phone in list(_jambonz_call_phones.items()):
+                caller_phone = _phone
+                _jambonz_call_phones.pop(_csid, None)
+                break
         session_id = call_sid or str(uuid.uuid4())
 
         print(
