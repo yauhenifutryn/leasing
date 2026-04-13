@@ -14,7 +14,7 @@ x-common-env: &common-env
 
 x-sbc-env: &sbc-env
   <<: *common-env
-  DRACHTIO_HOST: drachtio
+  DRACHTIO_HOST: drachtio-sbc
   DRACHTIO_PORT: 9022
   DRACHTIO_SECRET: cymru
   JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
@@ -61,7 +61,8 @@ services:
       jambonz:
     restart: unless-stopped
 
-  drachtio:
+  # SBC drachtio: handles external SIP (Zoiper, carriers)
+  drachtio-sbc:
     image: drachtio/drachtio-server:latest
     command: >
       drachtio --contact "sip:*;transport=udp"
@@ -72,6 +73,17 @@ services:
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
+    networks:
+      jambonz:
+    restart: unless-stopped
+
+  # Feature-server drachtio: handles internal SIP (to/from FreeSWITCH)
+  drachtio-fs:
+    image: drachtio/drachtio-server:latest
+    command: >
+      drachtio --contact "sip:*;transport=udp"
+      --loglevel info
+      --sofia-loglevel 3
     networks:
       jambonz:
     restart: unless-stopped
@@ -148,7 +160,13 @@ services:
   feature-server:
     image: jambonz/feature-server:latest
     environment:
-      <<: *sbc-env
+      <<: *common-env
+      DRACHTIO_HOST: drachtio-fs
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_NETWORK_CIDR: "172.29.0.0/16"
+      JAMBONES_RTPENGINE_HOST: rtpengine
+      JAMBONES_RTPENGINE_PORT: 22222
       JAMBONES_FREESWITCH: "freeswitch:8021:JambonzR0ck$$"
       ENABLE_METRICS: 0
       HTTP_PORT: 3000
@@ -160,7 +178,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      drachtio:
+      drachtio-fs:
         condition: service_started
       freeswitch:
         condition: service_started
@@ -179,7 +197,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      drachtio:
+      drachtio-sbc:
         condition: service_started
     networks:
       jambonz:
@@ -194,7 +212,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      drachtio:
+      drachtio-sbc:
         condition: service_started
     networks:
       jambonz:
@@ -224,7 +242,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      drachtio:
+      drachtio-sbc:
         condition: service_started
     networks:
       jambonz:
@@ -239,7 +257,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      drachtio:
+      drachtio-sbc:
         condition: service_started
     networks:
       jambonz:
