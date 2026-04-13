@@ -138,6 +138,18 @@ else
     info "System information: updated (domain: $SIP_REALM)"
 fi
 
+# 8a3. Populate sbc_addresses (required for SIP routing)
+SBC_EXISTS=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT COUNT(*) FROM sbc_addresses" 2>/dev/null | tr -d '[:space:]')
+if [ "$SBC_EXISTS" = "0" ] || [ -z "$SBC_EXISTS" ]; then
+    SBC_SID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
+    $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+        -e "INSERT INTO sbc_addresses (sbc_address_sid, ipv4, port, service_provider_sid) SELECT '$SBC_SID', '$PUBLIC_IP', 5060, service_provider_sid FROM service_providers LIMIT 1" 2>/dev/null
+    info "SBC address: $PUBLIC_IP:5060"
+else
+    info "SBC address: already configured"
+fi
+
 # 8b. Create or get application
 APP_SID=$(acurl "$API/Accounts/$ACCOUNT_SID/Applications" | python3 -c "
 import sys, json
