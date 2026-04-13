@@ -149,7 +149,7 @@ services:
     image: jambonz/feature-server:latest
     environment:
       <<: *sbc-env
-      JAMBONES_FREESWITCH: freeswitch:8021:ClueCon
+      JAMBONES_FREESWITCH: "freeswitch:8021:JambonzR0ck$$"
       ENABLE_METRICS: 0
       HTTP_PORT: 3000
       JAMBONES_OTEL_ENABLED: 0
