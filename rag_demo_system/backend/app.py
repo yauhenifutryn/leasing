@@ -1804,6 +1804,14 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                 msgid = msg.get("msgid", "")
                 caller_phone = msg.get("from", "")
                 caller_name = msg.get("callerName", "")
+                # Extract phone from callerName if "from" is a SIP username
+                # Zoiper puts phone in display name: "+375296838707" <sip:test@...>
+                import re as _re
+                if not caller_phone or not _re.search(r'\d{7,}', caller_phone):
+                    # Try callerName which may contain the phone number
+                    _match = _re.search(r'\+?(\d{7,15})', caller_name or "")
+                    if _match:
+                        caller_phone = _match.group(0)
                 print(
                     f"[Jambonz:{call_sid[:8]}] session:new from={caller_phone} name={caller_name}",
                     flush=True,
@@ -1940,6 +1948,13 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                 # Barge-in on mixed audio (caller + bot TTS combined)
                 # Same approach as Asterisk: rolling energy baseline + threshold
                 if session.assistant_speaking:
+                    # Skip first 1.5s of TTS (baseline needs time to stabilize)
+                    if not hasattr(session, '_tts_start_time') or session._tts_start_time == 0:
+                        session._tts_start_time = asyncio.get_event_loop().time()
+                    _tts_elapsed = asyncio.get_event_loop().time() - session._tts_start_time
+                    if _tts_elapsed < 1.5:
+                        continue
+
                     import struct as _bst
                     import math as _bm
                     _bn = len(pcm_16k) // 2
@@ -1962,6 +1977,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._echo_samples = []
+                        session._tts_start_time = 0
                         vad.reset()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
                         print(f"[Jambonz:{session_id[:8]}] BARGE-IN (rms={_brms:.0f}, baseline={_baseline:.0f})", flush=True)
