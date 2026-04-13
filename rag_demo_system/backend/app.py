@@ -1903,7 +1903,15 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                 if _frame_count == 1:
                     print(f"[Jambonz:{session_id[:8]}] First audio frame ({len(pcm_16k)} bytes)", flush=True)
                 if _frame_count % 250 == 0:
-                    print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking}", flush=True)
+                    import struct as _st
+                    import math as _math
+                    _n = len(pcm_16k) // 2
+                    if _n > 0:
+                        _samps = _st.unpack(f"<{_n}h", pcm_16k[:_n*2])
+                        _rms = _math.sqrt(sum(s*s for s in _samps) / _n)
+                    else:
+                        _rms = 0
+                    print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking} rms={_rms:.0f} bytes={len(pcm_16k)}", flush=True)
 
                 # Barge-in: clean VAD on caller-only audio
                 if session.assistant_speaking:
