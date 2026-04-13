@@ -1981,6 +1981,12 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         print(f"[Jambonz:{session_id[:8]}] Cleaned up", flush=True)
 
 
+@app.post("/api/jambonz/call-status")
+async def jambonz_call_status(request: Any = None) -> JSONResponse:
+    """Receive call status updates from Jambonz feature-server."""
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
 @app.get("/api/jambonz/credentials")
 async def jambonz_credentials() -> JSONResponse:
     """Return SIP credentials for Zoiper setup (shown on monitor page)."""
