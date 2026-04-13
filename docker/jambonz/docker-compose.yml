@@ -233,20 +233,8 @@ services:
       jambonz:
     restart: unless-stopped
 
-  sbc-registrar:
-    image: jambonz/sbc-registrar:latest
-    environment:
-      <<: *sbc-env
-    depends_on:
-      db-create:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      drachtio-sbc:
-        condition: service_started
-    networks:
-      jambonz:
-    restart: unless-stopped
+  # sbc-registrar REMOVED: legacy component superseded by sbc-sip-sidecar.
+  # Official Helm charts do not include it. Having both causes REGISTER race conditions.
 
   sbc-sip-sidecar:
     image: jambonz/sbc-sip-sidecar:latest

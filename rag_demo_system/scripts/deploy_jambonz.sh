@@ -258,8 +258,8 @@ fi
 # the deploy script populated the DB, they have stale null entries.
 info "Flushing Redis cache and restarting SBC services..."
 $COMPOSE_CMD exec -T redis redis-cli FLUSHALL >/dev/null 2>&1
-$COMPOSE_CMD restart sbc-sip-sidecar sbc-registrar >/dev/null 2>&1
-sleep 5
+$COMPOSE_CMD restart sbc-sip-sidecar sbc-inbound >/dev/null 2>&1
+sleep 10
 info "SBC services restarted with fresh DB state"
 
 # ── 9. Update backend .env ──
@@ -313,3 +313,62 @@ echo "  Password:  $SIP_PASSWORD"
 echo "  Transport: UDP"
 echo ""
 echo "════════════════════════════════════════════════════════════"
+
+# ── 12. Health check ──
+echo ""
+info "Running health checks..."
+HEALTH_OK=true
+
+# Check feature-server connected to FreeSWITCH
+FS_CONNECTED=$($COMPOSE_CMD logs feature-server 2>&1 | grep -c "connected to freeswitch" || echo 0)
+if [ "$FS_CONNECTED" -gt 0 ]; then
+    info "  Feature-server -> FreeSWITCH: connected (OK)"
+else
+    warn "  Feature-server -> FreeSWITCH: NOT connected"
+    HEALTH_OK=false
+fi
+
+# Check feature-server connected to drachtio
+DR_CONNECTED=$($COMPOSE_CMD logs feature-server 2>&1 | grep -c "connected to drachtio" || echo 0)
+if [ "$DR_CONNECTED" -gt 0 ]; then
+    info "  Feature-server -> drachtio-fs: connected (OK)"
+else
+    warn "  Feature-server -> drachtio-fs: NOT connected"
+    HEALTH_OK=false
+fi
+
+# Check system_information populated
+SYS_DOMAIN=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT sip_domain_name FROM system_information LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$SYS_DOMAIN" ]; then
+    info "  System domain: $SYS_DOMAIN (OK)"
+else
+    warn "  System domain: NOT SET"
+    HEALTH_OK=false
+fi
+
+# Check account has app linked
+APP_LINKED=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT device_calling_application_sid FROM accounts WHERE sip_realm='$SIP_REALM' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$APP_LINKED" ] && [ "$APP_LINKED" != "NULL" ]; then
+    info "  Account -> Application: linked (OK)"
+else
+    warn "  Account -> Application: NOT linked"
+    HEALTH_OK=false
+fi
+
+# Check SIP client exists
+CLIENT_CHECK=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -N -e "SELECT username FROM clients LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$CLIENT_CHECK" ]; then
+    info "  SIP client: $CLIENT_CHECK (OK)"
+else
+    warn "  SIP client: NOT found"
+    HEALTH_OK=false
+fi
+
+if [ "$HEALTH_OK" = true ]; then
+    info "All health checks passed"
+else
+    warn "Some checks failed. Debug: cd $COMPOSE_DIR && docker compose logs"
+fi
