@@ -1898,6 +1898,8 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                     or msg.get("callerName", "")
                     or ""
                 )
+                # SIP username (e.g. "sergey", "ilya") for monitor filtering
+                sip_user = caller_phone.split("@")[0] if "@" in caller_phone else caller_phone
                 # Extract phone from callerName if caller_phone is a SIP username
                 import re as _re
                 if not caller_phone or not _re.search(r'\d{7,}', caller_phone):
@@ -1915,6 +1917,7 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                     "type": "sip.call.start",
                     "call_id": call_sid,
                     "phone": caller_phone or "unknown",
+                    "sip_user": sip_user,
                 })
 
                 # Pass phone in the audio WS URL (guaranteed delivery, no shared state needed)
@@ -2184,14 +2187,19 @@ async def jambonz_credentials() -> JSONResponse:
         return JSONResponse(status_code=200, content={"ok": False, "reason": "jambonz not enabled"})
 
     server = settings.jambonz.sip_realm or f"voice.{os.getenv('PUBLIC_IP', 'localhost')}.nip.io"
+    accounts = settings.jambonz.sip_accounts
+    if not accounts:
+        accounts = {settings.jambonz.sip_user: settings.jambonz.sip_password}
     return JSONResponse(
         status_code=200,
         content={
             "ok": True,
             "server": server,
+            "transport": "UDP",
+            "accounts": [{"username": u, "password": p} for u, p in accounts.items()],
+            # Backward compat
             "username": settings.jambonz.sip_user,
             "password": settings.jambonz.sip_password,
-            "transport": "UDP",
         },
     )
 

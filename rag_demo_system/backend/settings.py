@@ -114,6 +114,7 @@ class JambonzConfig:
     sip_realm: str
     sip_user: str
     sip_password: str
+    sip_accounts: dict[str, str]  # username -> password for all SIP accounts
 
 
 @dataclass
@@ -160,6 +161,22 @@ def _load_env_file(path: Path) -> None:
             value = value[1:-1]
         if key and key not in os.environ:
             os.environ[key] = value
+
+
+def _build_sip_accounts() -> dict[str, str]:
+    """Build username->password map from JAMBONZ_SIP_USERS + per-user password env vars."""
+    users_str = os.getenv("JAMBONZ_SIP_USERS", "")
+    if not users_str:
+        # Fallback: single account from legacy env vars
+        user = os.getenv("JAMBONZ_SIP_USER", "test")
+        pw = os.getenv("JAMBONZ_SIP_PASSWORD", "")
+        return {user: pw} if pw else {}
+    accounts: dict[str, str] = {}
+    for u in users_str.split():
+        pw = os.getenv(f"JAMBONZ_SIP_PASSWORD_{u.upper()}", "")
+        if pw:
+            accounts[u] = pw
+    return accounts
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -266,5 +283,6 @@ def load_settings(path: Path | None = None) -> Settings:
             sip_realm=os.getenv("JAMBONZ_SIP_REALM", jambonz_cfg.get("sip_realm", "")),
             sip_user=os.getenv("JAMBONZ_SIP_USER", jambonz_cfg.get("sip_user", "test")),
             sip_password=os.getenv("JAMBONZ_SIP_PASSWORD", jambonz_cfg.get("sip_password", "")),
+            sip_accounts=_build_sip_accounts(),
         ),
     )

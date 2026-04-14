@@ -191,22 +191,26 @@ $COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
     -e "UPDATE accounts SET device_calling_application_sid='$APP_SID' WHERE account_sid='$ACCOUNT_SID'" 2>/dev/null
 info "Account linked to voice-bot application"
 
-# 8c. Create or update SIP client (stored in MySQL `clients` table)
+# 8c. Create or update SIP clients (stored in MySQL `clients` table)
 # Jambonz stores passwords encrypted with ENCRYPTION_SECRET (AES-256-CBC, JSON format)
 ENV_FILE="$APP_DIR/.env"
-EXISTING_PASS=$(grep '^JAMBONZ_SIP_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'" || echo "")
-if [ -n "$EXISTING_PASS" ]; then
-    SIP_PASSWORD="$EXISTING_PASS"
-    info "SIP password: reusing existing from .env"
-else
-    SIP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
-    info "SIP password: generated new"
-fi
 
-# Encrypt password and write to MySQL directly via Node.js inside the sbc-sip-sidecar
-# container. This ensures the SAME crypto code that decrypts also encrypts,
-# and avoids shell escaping issues with the encrypted JSON.
-UPSERT_RESULT=$($COMPOSE_CMD exec -T sbc-sip-sidecar node -e "
+# Multiple SIP accounts: test (dev), sergey, ilya
+SIP_USERS="${JAMBONZ_SIP_USERS:-test sergey ilya}"
+declare -A SIP_PASSWORDS
+
+for _SIP_U in $SIP_USERS; do
+    _ENV_KEY="JAMBONZ_SIP_PASSWORD_${_SIP_U^^}"
+    _EXISTING=$(grep "^${_ENV_KEY}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'" || echo "")
+    if [ -n "$_EXISTING" ]; then
+        SIP_PASSWORDS[$_SIP_U]="$_EXISTING"
+    else
+        SIP_PASSWORDS[$_SIP_U]=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))")
+    fi
+    _PASS="${SIP_PASSWORDS[$_SIP_U]}"
+
+    # Encrypt password and write to MySQL directly via Node.js inside the sbc-sip-sidecar
+    UPSERT_RESULT=$($COMPOSE_CMD exec -T sbc-sip-sidecar node -e "
 const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 async function main() {
@@ -216,7 +220,7 @@ async function main() {
     .substring(0, 32);
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-cbc', secretKey, iv);
-  let enc = cipher.update('$SIP_PASSWORD', 'utf8', 'hex');
+  let enc = cipher.update('$_PASS', 'utf8', 'hex');
   enc += cipher.final('hex');
   const encrypted = JSON.stringify({iv: iv.toString('hex'), content: enc});
   const conn = await mysql.createConnection({
@@ -227,7 +231,7 @@ async function main() {
   });
   const [rows] = await conn.execute(
     'SELECT client_sid FROM clients WHERE account_sid = ? AND username = ?',
-    ['$ACCOUNT_SID', '$SIP_USER']
+    ['$ACCOUNT_SID', '$_SIP_U']
   );
   if (rows.length > 0) {
     await conn.execute('UPDATE clients SET password = ? WHERE client_sid = ?', [encrypted, rows[0].client_sid]);
@@ -236,7 +240,7 @@ async function main() {
     const sid = crypto.randomUUID();
     await conn.execute(
       'INSERT INTO clients (client_sid, account_sid, username, password) VALUES (?, ?, ?, ?)',
-      [sid, '$ACCOUNT_SID', '$SIP_USER', encrypted]
+      [sid, '$ACCOUNT_SID', '$_SIP_U', encrypted]
     );
     console.log('created');
   }
@@ -245,13 +249,18 @@ async function main() {
 main().catch(e => { console.error(e.message); process.exit(1); });
 " 2>/dev/null | tr -d '[:space:]')
 
-if [ "$UPSERT_RESULT" = "created" ]; then
-    info "SIP client created: $SIP_USER (encrypted)"
-elif [ "$UPSERT_RESULT" = "updated" ]; then
-    info "SIP client updated: $SIP_USER (encrypted)"
-else
-    fail "Could not create SIP client. Check sbc-sip-sidecar container."
-fi
+    if [ "$UPSERT_RESULT" = "created" ]; then
+        info "SIP client created: $_SIP_U (encrypted)"
+    elif [ "$UPSERT_RESULT" = "updated" ]; then
+        info "SIP client updated: $_SIP_U (encrypted)"
+    else
+        fail "Could not create SIP client '$_SIP_U'. Check sbc-sip-sidecar container."
+    fi
+done
+
+# Keep backward compat: SIP_USER/SIP_PASSWORD point to first account
+SIP_USER=$(echo $SIP_USERS | awk '{print $1}')
+SIP_PASSWORD="${SIP_PASSWORDS[$SIP_USER]}"
 
 # 8d. Flush Redis and restart SBC services to pick up DB changes
 # SBC services cache account/realm lookups at startup. If they started before
@@ -265,18 +274,22 @@ info "SBC services restarted with fresh DB state"
 # ── 9. Update backend .env ──
 sed -i '/^SIP_ENABLED=/d; /^AUDIOSOCKET_/d; /^AMI_/d; /^JAMBONZ_/d; /^PUBLIC_IP=/d' "$ENV_FILE" 2>/dev/null || true
 
-cat >> "$ENV_FILE" <<EOF
-
-# ── Jambonz SIP Telephony (auto-configured by deploy_jambonz.sh) ──
-JAMBONZ_ENABLED=true
-JAMBONZ_API_BASE_URL=http://127.0.0.1:3000
-JAMBONZ_ACCOUNT_SID=$ACCOUNT_SID
-JAMBONZ_APP_SID=$APP_SID
-JAMBONZ_SIP_REALM=$SIP_REALM
-JAMBONZ_SIP_USER=$SIP_USER
-JAMBONZ_SIP_PASSWORD=$SIP_PASSWORD
-PUBLIC_IP=$PUBLIC_IP
-EOF
+{
+echo ""
+echo "# ── Jambonz SIP Telephony (auto-configured by deploy_jambonz.sh) ──"
+echo "JAMBONZ_ENABLED=true"
+echo "JAMBONZ_API_BASE_URL=http://127.0.0.1:3000"
+echo "JAMBONZ_ACCOUNT_SID=$ACCOUNT_SID"
+echo "JAMBONZ_APP_SID=$APP_SID"
+echo "JAMBONZ_SIP_REALM=$SIP_REALM"
+echo "JAMBONZ_SIP_USER=$SIP_USER"
+echo "JAMBONZ_SIP_PASSWORD=$SIP_PASSWORD"
+echo "JAMBONZ_SIP_USERS=$SIP_USERS"
+for _SIP_U in $SIP_USERS; do
+    echo "JAMBONZ_SIP_PASSWORD_${_SIP_U^^}=${SIP_PASSWORDS[$_SIP_U]}"
+done
+echo "PUBLIC_IP=$PUBLIC_IP"
+} >> "$ENV_FILE"
 info "Updated $ENV_FILE with Jambonz config"
 
 # ── 10. Restart backend (unless --skip-restart) ──
@@ -304,14 +317,19 @@ echo ""
 echo "  SIP Port 5060:  $([ "$SIP_OK" = true ] && echo "OK" || echo "CHECKING...")"
 echo "  Web Portal:     http://$PUBLIC_IP:3001"
 echo "  API Server:     http://$PUBLIC_IP:3000"
-echo "  Monitor Page:   http://$PUBLIC_IP:8000/sip_monitor.html"
+echo "  Monitor (all):  http://$PUBLIC_IP:8000/sip_monitor.html"
 echo ""
-echo "  ── Zoiper Setup ──"
+echo "  ── Zoiper Accounts ──"
 echo "  Server:    $SIP_REALM   (NOT the raw IP)"
-echo "  Username:  $SIP_USER"
-echo "  Password:  $SIP_PASSWORD"
 echo "  Transport: UDP"
 echo ""
+for _SIP_U in $SIP_USERS; do
+    echo "  [$_SIP_U]"
+    echo "    Username:  $_SIP_U"
+    echo "    Password:  ${SIP_PASSWORDS[$_SIP_U]}"
+    echo "    Monitor:   http://$PUBLIC_IP:8000/sip_monitor.html?user=$_SIP_U"
+    echo ""
+done
 echo "════════════════════════════════════════════════════════════"
 
 # ── 12. Health check ──

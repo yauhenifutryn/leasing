@@ -31,20 +31,25 @@
 </style>
 </head>
 <body>
-<h1><span class="status disconnected" id="statusDot"></span>SIP Monitor</h1>
+<h1><span class="status disconnected" id="statusDot"></span>SIP Monitor<span id="filterLabel"></span></h1>
 <div class="controls">
   <button id="btnCopy">Copy All</button>
   <button id="btnClear">Clear</button>
 </div>
 <div class="setup" id="setupCard" style="background:#f8f9fa; border:1px solid #dee2e6; padding:12px; margin-bottom:16px; border-radius:4px; display:none;">
   <h3 style="font-size:14px; margin-bottom:8px;">Zoiper Setup</h3>
+  <div style="font-size:13px; margin-bottom:8px;">
+    <span style="color:#999;">Server:</span> <span id="sipServer" style="font-weight:bold;"></span>
+    <span style="color:#999; margin-left:16px;">Transport:</span> UDP
+  </div>
   <table style="font-size:13px; border-collapse:collapse;">
-    <tr><td style="padding:2px 8px 2px 0; color:#999;">Server:</td><td id="sipServer" style="font-weight:bold;"></td></tr>
-    <tr><td style="padding:2px 8px 2px 0; color:#999;">Username:</td><td id="sipUser" style="font-weight:bold;"></td></tr>
-    <tr><td style="padding:2px 8px 2px 0; color:#999;">Password:</td><td id="sipPass" style="font-weight:bold;"></td></tr>
-    <tr><td style="padding:2px 8px 2px 0; color:#999;">Transport:</td><td>UDP</td></tr>
+    <thead><tr>
+      <th style="padding:2px 12px 2px 0; text-align:left; color:#999;">Username</th>
+      <th style="padding:2px 12px 2px 0; text-align:left; color:#999;">Password</th>
+      <th style="padding:2px 0; text-align:left; color:#999;"></th>
+    </tr></thead>
+    <tbody id="sipAccounts"></tbody>
   </table>
-  <button id="btnCopyCreds" style="margin-top:8px; background:#f0f0f0; color:#333; border:1px solid #ccc; padding:4px 10px; cursor:pointer; font-family:monospace; border-radius:3px; font-size:12px;">Copy Credentials</button>
 </div>
 <div class="calls" id="activeCalls"></div>
 <div class="log" id="log"></div>
@@ -57,8 +62,15 @@
   var ws = null;
   var autoScroll = true;
   var activeCalls = {};
+  // URL filter: sip_monitor.html?user=sergey shows only Sergey's calls
+  var filterUser = new URLSearchParams(location.search).get('user');
+  var callToUser = {};  // call_id -> username mapping
 
   var pingInterval = null;
+
+  if (filterUser) {
+    document.getElementById('filterLabel').textContent = ' — ' + filterUser;
+  }
 
   function connect() {
     // Clean up old connection before creating new one
@@ -103,10 +115,22 @@
     var cid = (msg.call_id || '').substring(0, 8);
     var t = msg.type || '';
 
+    // Track call_id -> sip_user mapping from call start event
+    if (t === 'sip.call.start' && msg.sip_user) {
+      callToUser[cid] = msg.sip_user;
+    }
+
+    // Filter: if ?user=sergey, only show events from Sergey's calls
+    if (filterUser && cid && callToUser[cid] && callToUser[cid] !== filterUser) {
+      if (t === 'sip.call.end') delete callToUser[cid];
+      return;
+    }
+
     if (t === 'sip.call.start') {
-      activeCalls[cid] = { phone: msg.phone, start: Date.now() };
+      activeCalls[cid] = { phone: msg.phone, user: msg.sip_user || '', start: Date.now() };
       updateCallBadges();
-      addLog('system', cid, 'Call started: ' + msg.phone);
+      var label = msg.sip_user ? msg.sip_user + ' (' + msg.phone + ')' : msg.phone;
+      addLog('system', cid, 'Call started: ' + label);
     } else if (t === 'sip.call.end') {
       var dur = activeCalls[cid] ? formatDuration(Date.now() - activeCalls[cid].start) : '?';
       delete activeCalls[cid];
@@ -170,7 +194,7 @@
 
       var phoneSpan = document.createElement('span');
       phoneSpan.className = 'phone';
-      phoneSpan.textContent = info.phone;
+      phoneSpan.textContent = info.user ? info.user + ' (' + info.phone + ')' : info.phone;
       badge.appendChild(phoneSpan);
 
       var durSpan = document.createElement('span');
@@ -238,24 +262,34 @@
     .then(function(data) {
       if (data.ok) {
         document.getElementById('sipServer').textContent = data.server;
-        document.getElementById('sipUser').textContent = data.username;
-        document.getElementById('sipPass').textContent = data.password;
+        var accts = data.accounts || [{ username: data.username, password: data.password }];
+        var tbody = document.getElementById('sipAccounts');
+        for (var i = 0; i < accts.length; i++) {
+          var tr = document.createElement('tr');
+          var tdU = document.createElement('td');
+          tdU.style.cssText = 'padding:2px 12px 2px 0; font-weight:bold;';
+          tdU.textContent = accts[i].username;
+          var tdP = document.createElement('td');
+          tdP.style.cssText = 'padding:2px 12px 2px 0; font-family:monospace;';
+          tdP.textContent = accts[i].password;
+          var tdM = document.createElement('td');
+          tdM.style.cssText = 'padding:2px 0;';
+          var a = document.createElement('a');
+          a.href = 'sip_monitor.html?user=' + accts[i].username;
+          a.textContent = 'monitor';
+          a.style.cssText = 'color:#2980b9; font-size:12px;';
+          tdM.appendChild(a);
+          tr.appendChild(tdU);
+          tr.appendChild(tdP);
+          tr.appendChild(tdM);
+          tbody.appendChild(tr);
+        }
         document.getElementById('setupCard').style.display = 'block';
       }
     })
     .catch(function() {});
 
-  document.getElementById('btnCopyCreds').addEventListener('click', function() {
-    var s = document.getElementById('sipServer').textContent;
-    var u = document.getElementById('sipUser').textContent;
-    var p = document.getElementById('sipPass').textContent;
-    var text = 'Server: ' + s + '\nUsername: ' + u + '\nPassword: ' + p + '\nTransport: UDP';
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).catch(function() { fallbackCopy(text); });
-    } else {
-      fallbackCopy(text);
-    }
-  });
+  // Copy credentials removed (multiple accounts now shown in table with individual monitor links)
 
   connect();
 })();
