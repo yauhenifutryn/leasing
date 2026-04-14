@@ -1,6 +1,7 @@
 # Based on t0mll/jambonz-infrastructure reference docker-compose (the only tested community compose)
 # Adapted for v10 images + sbc-sip-sidecar (replaces legacy sbc-registrar)
-# Images pinned to digest hashes from 2026-04-14 deployment to prevent breaking changes
+# Jambonz images pinned to 0.9.6 (last stable release with working audio WebSocket).
+# Do NOT change to :latest without testing — v10+ broke audio WS on 2026-04-14.
 
 x-common-env: &common-env
   JAMBONES_MYSQL_HOST: 172.10.0.2
@@ -69,7 +70,7 @@ services:
     restart: unless-stopped
 
   db-create:
-    image: jambonz/db-create:latest
+    image: jambonz/db-create:0.9.6
     environment:
       JAMBONES_MYSQL_HOST: 172.10.0.2
       JAMBONES_MYSQL_USER: jambones
@@ -146,7 +147,7 @@ services:
     restart: unless-stopped
 
   api-server:
-    image: jambonz/api-server:latest
+    image: jambonz/api-server:0.9.6
     environment:
       <<: *common-env
       HTTP_PORT: 3000
@@ -166,7 +167,7 @@ services:
     restart: unless-stopped
 
   webapp:
-    image: jambonz/webapp:latest
+    image: jambonz/webapp:0.9.6
     environment:
       API_BASE_URL: http://api-server:3000/v1
     ports:
@@ -182,7 +183,7 @@ services:
   # sbc-inbound handles all INVITEs directly from drachtio-sbc.
 
   sbc-inbound:
-    image: jambonz/sbc-inbound:latest
+    image: jambonz/sbc-inbound:0.9.6
     environment:
       <<: *common-env
       DRACHTIO_HOST: 172.10.0.10
@@ -202,7 +203,7 @@ services:
   # sbc-outbound REMOVED: not needed for inbound-only voice bot.
 
   sbc-sip-sidecar:
-    image: jambonz/sbc-sip-sidecar:latest
+    image: jambonz/sbc-sip-sidecar:0.9.6
     environment:
       <<: *common-env
       DRACHTIO_HOST: 172.10.0.10
@@ -218,7 +219,7 @@ services:
     restart: unless-stopped
 
   feature-server:
-    image: jambonz/feature-server:latest
+    image: jambonz/feature-server:0.9.6
     environment:
       <<: *common-env
       DRACHTIO_HOST: 172.10.0.50
