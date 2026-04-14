@@ -2332,11 +2332,15 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session._tts_start_time = 0
                         session._barge_vad_count = 0
                         session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
-                        # Pre-roll: feed buffered audio to VAD so speech onset is captured
+                        # Pre-roll: save buffered audio to prepend to next speech segment.
+                        # This captures the speech onset that triggered barge-in.
+                        vad.reset()
                         if _preroll_buf:
-                            vad.reset()
-                            vad.feed(bytes(_preroll_buf))
-                            print(f"[Jambonz:{session_id[:8]}] Pre-roll: {len(_preroll_buf)} bytes fed to VAD", flush=True)
+                            # Inject pre-roll directly into VAD speech buffer so it
+                            # becomes part of the next captured utterance
+                            vad._speech_buffer = bytes(_preroll_buf)
+                            vad._is_speaking = True
+                            print(f"[Jambonz:{session_id[:8]}] Pre-roll: {len(_preroll_buf)} bytes injected into speech buffer", flush=True)
                         _preroll_buf.clear()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
                         print(f"[Jambonz:{session_id[:8]}] BARGE-IN (vad_prob={_prob:.2f})", flush=True)

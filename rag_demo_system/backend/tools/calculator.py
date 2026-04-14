@@ -97,7 +97,21 @@ class CalculatorTool(ToolDefinition):
     # Execute (synchronous, called via asyncio.to_thread)
     # ------------------------------------------------------------------
 
+    # Canonical subject names (API requires exact casing)
+    _SUBJECT_MAP = {
+        "легковой автомобиль": "Легковой автомобиль",
+        "грузовой автомобиль": "Грузовой автомобиль",
+        "спецтехника": "Спецтехника",
+        "оборудование": "Оборудование",
+        "недвижимость": "Недвижимость",
+        "прочий транспорт": "Прочий транспорт",
+    }
+
     def execute(self, params: dict[str, Any], session_context: dict[str, Any]) -> dict[str, Any]:
+        # Normalize subject casing (classifier may return lowercase)
+        _subj = params.get("subject", "")
+        _normalized = self._SUBJECT_MAP.get(_subj.lower().strip(), _subj)
+        params["subject"] = _normalized
         filled, defaulted = self.fill_defaults(params)
 
         # Validate: used item requires age
