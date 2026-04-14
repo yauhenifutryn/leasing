@@ -399,37 +399,59 @@ def _load_stress_dict() -> list[tuple[re.Pattern, str]]:
     return _STRESS_DICT
 
 
-# Phone with + prefix and optional grouping: +375 222 71 76 76
+# Phone with + prefix and optional grouping: +375 222 71 76 76 or +375296838707
 _RE_PHONE = re.compile(r"\+\d{1,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}")
 # Bare 12-digit Belarus phone number without +: 375291224557
 _RE_BARE_PHONE = re.compile(r"\b(375\d{9})\b")
+
+_DIGIT_WORDS_RU = {
+    "0": "ноль", "1": "один", "2": "два", "3": "три", "4": "четыре",
+    "5": "пять", "6": "шесть", "7": "семь", "8": "восемь", "9": "девять",
+}
+
+
+def _digits_to_speech(digits: str) -> str:
+    """Convert a group of digits to speech: group as country(3)+operator(2)+3+2+2."""
+    if len(digits) >= 10:
+        return (
+            f"{digits[:3]}, {digits[3:5]}, "
+            f"{_digit_group(digits[5:8])}, {_digit_group(digits[8:10])}, {_digit_group(digits[10:12])}"
+        )
+    return _digit_group(digits)
+
+
+def _digit_group(s: str) -> str:
+    """Pronounce a group of digits, spelling out zeros: '07' -> 'ноль семь'."""
+    if "0" not in s:
+        return s
+    return " ".join(_DIGIT_WORDS_RU.get(c, c) for c in s)
 
 
 def _format_phone_for_tts(m: re.Match) -> str:
     """Format phone number as comma-separated groups for natural TTS pacing.
 
     +375 222 71 76 76 -> "плюс 375, 222, 71, 76, 76"
-    Commas create natural pauses in Silero TTS.
+    +375296838707     -> "плюс 375, 29, 683, 87, ноль семь"
     """
     raw = m.group(0).strip()
-    # Split on existing spaces/dashes, preserving the original grouping
     parts = re.split(r"[\s\-]+", raw)
+    # If phone has no natural grouping (e.g. +375296838707 -> ["+375296838707"])
+    if len(parts) == 1:
+        digits = re.sub(r"[^\d]", "", raw)
+        return "плюс " + _digits_to_speech(digits)
     result = []
     for p in parts:
         if p.startswith("+"):
             result.append("плюс " + p[1:])
-        elif p == "00":
-            result.append("ноль ноль")
         else:
-            result.append(p)
+            result.append(_digit_group(p))
     return ", ".join(result)
 
 
 def _format_bare_phone_for_tts(m: re.Match) -> str:
     """Format bare 12-digit phone: 375291224557 -> 'плюс 375, 29, 122, 45, 57'."""
     digits = m.group(1)
-    # Group as: country(3) + operator(2) + 3 + 2 + 2
-    return f"плюс {digits[:3]}, {digits[3:5]}, {digits[5:8]}, {digits[8:10]}, {digits[10:12]}"
+    return "плюс " + _digits_to_speech(digits)
 
 
 def format_phones_for_tts(text: str) -> str:

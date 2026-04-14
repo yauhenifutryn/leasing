@@ -1837,6 +1837,17 @@ async def _jambonz_process_utterance(
         session.assistant_speaking = False
         return
 
+    # Filter known Whisper hallucinations (YouTube training data artifacts)
+    _WHISPER_HALLUCINATIONS = [
+        "субтитры", "подписывайтесь", "канал", "спасибо за просмотр",
+        "dimator", "продолжение следует", "редактор субтитров",
+    ]
+    _text_lower = text.lower()
+    if any(h in _text_lower for h in _WHISPER_HALLUCINATIONS):
+        print(f"[Jambonz:{session_id[:8]}] STT: hallucination filtered: {text}", flush=True)
+        session.assistant_speaking = False
+        return
+
     print(f"[Jambonz:{session_id[:8]}] STT: {text}", flush=True)
     await broadcast_sip_event({
         "type": "sip.stt.result",
