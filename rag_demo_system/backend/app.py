@@ -773,7 +773,7 @@ async def _stream_voice_response(
                 sms_params = {"phone": session.client_phone, "message": sms_body}
                 await websocket.send_json({"type": "tool_call.start", "tool": "send_sms", "params": sms_params})
                 try:
-                    sms_result = await asyncio.to_thread(sms_tool.execute, **sms_params)
+                    sms_result = await asyncio.to_thread(sms_tool.execute, sms_params, {})
                     session.tool_calls_this_turn.append({"tool": "send_sms", "params": sms_params, "result": sms_result})
                     await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": sms_result.get("ok", False)})
                     # TTS confirmation
@@ -1885,6 +1885,13 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                     f"[Jambonz:{call_sid[:8]}] session:new from={caller_phone} name={caller_name} data_keys={list(_data.keys()) if _data else 'none'}",
                     flush=True,
                 )
+
+                # Broadcast call start to monitor (from control WS for reliability)
+                await broadcast_sip_event({
+                    "type": "sip.call.start",
+                    "call_id": call_sid,
+                    "phone": caller_phone or "unknown",
+                })
 
                 # Pass phone in the audio WS URL (guaranteed delivery, no shared state needed)
                 import urllib.parse as _urlparse
