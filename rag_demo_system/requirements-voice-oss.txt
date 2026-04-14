@@ -10,9 +10,9 @@ pydantic==2.10.2
 # CPU Whisper (int8, large-v3) runs at ~2-3s per utterance on Xeon, acceptable
 # for voice assistant use. GPU Whisper requires driver 570+ or building CTranslate2
 # from source with CUDA 12.4 targeting sm_90.
-faster-whisper>=1.0.0
+faster-whisper==1.2.1
 nvidia-cublas-cu12
 nvidia-cudnn-cu12
-requests
-silero>=0.5.0
-scipy
+requests==2.33.1
+silero==0.5.5
+scipy==1.15.3

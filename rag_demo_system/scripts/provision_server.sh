@@ -417,7 +417,7 @@ install_all_venvs() {
   # Then install only the small backend-specific packages that vLLM does not
   # already provide. This avoids installing torch/transformers twice.
   log "  Installing vLLM + supervisor + hf_transfer + ninja (big install, includes torch)"
-  "$APP_DIR/.venv/bin/pip" install vllm supervisor hf_transfer ninja
+  "$APP_DIR/.venv/bin/pip" install vllm==0.19.0 supervisor hf_transfer ninja
   log "  Installing backend-only packages (small, no duplicates)"
   "$APP_DIR/.venv/bin/pip" install \
     uvicorn \

@@ -11,4 +11,4 @@ pytest==8.3.4
 huggingface-hub==0.24.5
 num2words==0.5.14
 pymorphy3==2.0.6
-aiortc>=1.9.0
+aiortc==1.14.0
