@@ -793,6 +793,9 @@ async def _stream_voice_response(
                     needs_tool = True
         if has_sms_intent:
             needs_tool = True
+        # Override: if classifier extracted a tool action, force TOOL regardless of intent field
+        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm"):
+            needs_tool = True
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
