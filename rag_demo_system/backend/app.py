@@ -1927,6 +1927,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         # Fallback: read phone from control WS
         if not caller_phone:
             caller_phone = _jambonz_last_caller_phone
+            print(f"[Jambonz] Phone fallback: '{caller_phone}' (from global)", flush=True)
         session_id = call_sid or str(uuid.uuid4())
 
         print(
