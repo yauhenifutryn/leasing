@@ -1961,6 +1961,7 @@ async def _jambonz_send_tts(
         print(f"[Jambonz:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
 
     session.assistant_speaking = False
+    session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
     await broadcast_sip_event({
         "type": "sip.tts.start",
         "call_id": session_id,
@@ -2269,6 +2270,14 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         )
         asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, intro_text))
 
+        # Pre-roll buffer: keeps last 300ms of audio during TTS playback.
+        # On barge-in, this audio is prepended to STT so the speech onset isn't lost.
+        # 300ms at 16kHz, 16-bit mono = 9600 bytes
+        _PREROLL_BYTES = 9600
+        _preroll_buf = bytearray()
+        # Post-TTS cooldown: skip VAD for 200ms after TTS ends to avoid echo triggers
+        _COOLDOWN_SEC = 0.2
+
         # 5. Audio loop
         while True:
             msg = await websocket.receive()
@@ -2291,7 +2300,6 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking} rms={_rms:.0f} bytes={len(pcm_16k)}", flush=True)
 
                 # Barge-in on clean caller audio (mono mode, separated tracks)
-                # Industry-grade: VAD with lower threshold on clean channel
                 if session.assistant_speaking:
                     # Skip first 1.5s of TTS (VAD model needs warmup)
                     if not hasattr(session, '_tts_start_time') or session._tts_start_time == 0:
@@ -2301,12 +2309,14 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     if _tts_elapsed < 1.5:
                         continue
 
-                    # Feed audio to VAD (updates last_probability)
+                    # Maintain pre-roll buffer (rolling 300ms of audio during TTS)
+                    _preroll_buf.extend(pcm_16k)
+                    if len(_preroll_buf) > _PREROLL_BYTES:
+                        _preroll_buf = _preroll_buf[-_PREROLL_BYTES:]
+
+                    # Feed audio to VAD
                     vad.feed(pcm_16k)
 
-                    # Use lower threshold (0.35) for barge-in than normal speech (0.5)
-                    # Phone AEC suppresses mic during TTS, making caller audio quiet
-                    # but Silero VAD can still detect speech patterns at low energy
                     _prob = vad.last_probability
                     if _prob >= 0.40:
                         if not hasattr(session, '_barge_vad_count'):
@@ -2321,7 +2331,13 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session.assistant_speaking = False
                         session._tts_start_time = 0
                         session._barge_vad_count = 0
-                        vad.reset()
+                        session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
+                        # Pre-roll: feed buffered audio to VAD so speech onset is captured
+                        if _preroll_buf:
+                            vad.reset()
+                            vad.feed(bytes(_preroll_buf))
+                            print(f"[Jambonz:{session_id[:8]}] Pre-roll: {len(_preroll_buf)} bytes fed to VAD", flush=True)
+                        _preroll_buf.clear()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
                         print(f"[Jambonz:{session_id[:8]}] BARGE-IN (vad_prob={_prob:.2f})", flush=True)
                         await broadcast_sip_event({
@@ -2329,6 +2345,14 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                             "call_id": session_id,
                         })
                     continue
+
+                # Post-TTS cooldown: skip VAD for 200ms after TTS ends
+                # Prevents echo/reverb from speaker mode triggering false speech
+                _tts_fin = getattr(session, '_tts_finished_at', 0.0)
+                if _tts_fin > 0:
+                    if asyncio.get_event_loop().time() - _tts_fin < _COOLDOWN_SEC:
+                        continue
+                    session._tts_finished_at = 0.0  # type: ignore[attr-defined]
 
                 # Normal listening: feed VAD
                 was_speaking = vad.is_speaking
