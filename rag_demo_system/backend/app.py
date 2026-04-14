@@ -850,40 +850,113 @@ async def _stream_voice_response(
             calc_tool = get_tool("calculator")
             sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
 
-    if needs_tool:
-        # TOOL path: clean message, no RAG (tool calling works reliably)
-        # Include previous calc params so model can recalculate with changes
+    # ── Deterministic Tool Orchestration ──
+    # When classifier extracts enough data, call tools from code directly.
+    # LLM only presents the result. This bypasses unreliable LLM tool calling.
+    _direct_tool_result = None
+    if needs_tool and _extracted_hints.get("subject") and _extracted_hints.get("cost"):
+        _action = _extracted_hints.get("action", "calculate")
+        calc_tool = get_tool("calculator")
+        import json as _json_direct
+
+        # Build params: start with extracted hints
+        _direct_params: dict[str, Any] = {
+            "subject": _extracted_hints["subject"],
+            "cost": _extracted_hints["cost"],
+        }
+        if _extracted_hints.get("currency"):
+            _direct_params["currency"] = _extracted_hints["currency"]
+
+        # For recalculation/param change: merge with previous calc params
+        if _action in ("recalculate", "change_param") and session.tool_calls_this_turn:
+            _prev = next((tc for tc in reversed(session.tool_calls_this_turn) if tc.get("tool") == "calculator"), None)
+            if _prev and _prev.get("params"):
+                _merged = dict(_prev["params"])
+                # Override only what the classifier extracted
+                for _k, _v in _extracted_hints.items():
+                    if _k in ("subject", "cost", "currency", "prepaid", "term", "client_type", "condition_new", "type_schedule") and _v is not None:
+                        _merged[_k] = _v
+                _direct_params = _merged
+
+        print(f"[DirectTool] calculator({_json_direct.dumps(_direct_params, ensure_ascii=False)})", flush=True)
+        try:
+            _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
+            _tool_ok = _direct_tool_result.get("ok", False)
+            print(f"[DirectTool] result: ok={_tool_ok}", flush=True)
+            # Track the tool call in session
+            session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
+            session.tool_calls_this_turn.append({
+                "tool": "calculator",
+                "params": _direct_tool_result.get("params", _direct_params),
+                "result": _direct_tool_result,
+                "ok": _tool_ok,
+            })
+        except Exception as _texc:
+            print(f"[DirectTool] ERROR: {_texc}", flush=True)
+            _direct_tool_result = None
+
+    if _direct_tool_result and _direct_tool_result.get("ok"):
+        # Tool executed successfully: LLM only presents the result
+        import json as _json_present
+        _result_summary = (
+            f"Аванс: {_direct_tool_result.get('advance_sum', '?')} {_direct_tool_result.get('params', {}).get('currency', 'BYN')}, "
+            f"ежемесячный платёж: {_direct_tool_result.get('monthly_payment', '?')} {_direct_tool_result.get('params', {}).get('currency', 'BYN')}, "
+            f"выкупной: {_direct_tool_result.get('buyout_sum', '?')}, "
+            f"общая сумма: {_direct_tool_result.get('total_sum', '?')}, "
+            f"удорожание: {_direct_tool_result.get('increase_percent', '?')}%"
+        )
+        _params_used = _direct_tool_result.get("params", {})
+        _defaults_info = (
+            f"Параметры: {_params_used.get('subject', '?')}, "
+            f"{_params_used.get('cost', '?')} {_params_used.get('currency', 'BYN')}, "
+            f"аванс {_params_used.get('prepaid', '?')}%, "
+            f"срок {_params_used.get('term', '?')} мес."
+        )
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Результат расчёта калькулятора:\n{_result_summary}\n{_defaults_info}\n\n"
+                f"Сообщение клиента: {message}\n\n"
+                "Представь результат кратко (2 предложения). "
+                "Спроси, хочет ли изменить аванс, срок или тип платежей, или отправить график по СМС."
+            )},
+        ]
+        tool_schemas = []  # No function calling needed, just present result
+    elif _direct_tool_result and not _direct_tool_result.get("ok"):
+        # Tool failed: present error naturally
+        _err = _direct_tool_result.get("error", "Неизвестная ошибка")
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Калькулятор вернул ошибку: {_err}\n"
+                f"Сообщение клиента: {message}\n\n"
+                "Объясни кратко что пошло не так. Предложи изменить валюту (BYN) или другие параметры."
+            )},
+        ]
+        tool_schemas = []
+    elif needs_tool:
+        # TOOL path: classifier detected tool intent but insufficient data for direct execution.
+        # Fall back to LLM function calling.
         prev_calc_context = ""
         if session.tool_calls_this_turn:
             last_calc = next(
                 (tc for tc in reversed(session.tool_calls_this_turn)
                  if tc.get("tool") == "calculator"), None)
             if last_calc:
-                import json as _json
+                import json as _json_prev
                 prev_params = last_calc.get("params", {})
                 prev_calc_context = (
-                    f"Предыдущий расчёт: {_json.dumps(prev_params, ensure_ascii=False)}. "
+                    f"Предыдущий расчёт: {_json_prev.dumps(prev_params, ensure_ascii=False)}. "
                     f"Клиент хочет изменить параметры. Вызови calculator с обновлёнными значениями.\n\n"
                 )
         _tool_instruction = (
-            "ОБЯЗАТЕЛЬНО вызови инструмент для выполнения запроса клиента. "
-            "Правила:\n"
-            "- Новый расчёт: ВЫЗОВИ calculator с параметрами.\n"
-            "- Изменение параметра (аванс, срок, валюта, тип платежей): ВЫЗОВИ calculator "
-            "с ОБНОВЛЁННЫМИ параметрами из предыдущего расчёта.\n"
-            "- Отправка СМС: ВЫЗОВИ send_sms.\n"
-            "- Подтверждение ('да', 'давай', 'отправь'): выполни последнее предложение бота.\n"
-            "НИКОГДА не говори 'пересчитаю' или 'рассчитываю' без вызова инструмента. "
-            "Если клиент просит изменить параметр, бери ВСЕ параметры из предыдущего расчёта "
-            "и меняй ТОЛЬКО указанный.\n\n"
+            "ОБЯЗАТЕЛЬНО вызови инструмент. НЕ отвечай текстом о расчёте без вызова calculator.\n\n"
         )
-        # Inject extracted hints from classifier so LLM has structured data
         _hints_text = ""
         if _extracted_hints:
             import json as _json_hints
             _hints_text = (
-                f"Классификатор извлёк из диалога: {_json_hints.dumps(_extracted_hints, ensure_ascii=False)}. "
-                "Используй эти данные для вызова инструмента.\n\n"
+                f"Извлечённые данные: {_json_hints.dumps(_extracted_hints, ensure_ascii=False)}.\n\n"
             )
         llm_messages = [
             {"role": "system", "content": system_prompt},
