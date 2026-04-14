@@ -855,6 +855,15 @@ async def _stream_voice_response(
     # When classifier extracts enough data, call tools from code directly.
     # LLM only presents the result. This bypasses unreliable LLM tool calling.
     _direct_tool_result = None
+    # If classifier detected tool intent but no cost, check if asking about previous result
+    if needs_tool and _extracted_hints.get("subject") and not _extracted_hints.get("cost"):
+        _prev_calc = next((tc for tc in reversed(getattr(session, 'tool_calls_this_turn', []))
+                          if tc.get("tool") == "calculator" and tc.get("ok")), None)
+        if _prev_calc and _prev_calc.get("result"):
+            # Re-present the previous result
+            _direct_tool_result = _prev_calc["result"]
+            print(f"[DirectTool] re-presenting previous result", flush=True)
+
     if needs_tool and _extracted_hints.get("subject") and _extracted_hints.get("cost"):
         _action = _extracted_hints.get("action", "calculate")
         calc_tool = get_tool("calculator")
@@ -898,28 +907,24 @@ async def _stream_voice_response(
 
     if _direct_tool_result and _direct_tool_result.get("ok"):
         # Tool executed successfully: LLM only presents the result
-        import json as _json_present
+        _p = _direct_tool_result.get("params", {})
+        _cur = _p.get("currency", "BYN")
         _result_summary = (
-            f"Аванс: {_direct_tool_result.get('advance_sum', '?')} {_direct_tool_result.get('params', {}).get('currency', 'BYN')}, "
-            f"ежемесячный платёж: {_direct_tool_result.get('monthly_payment', '?')} {_direct_tool_result.get('params', {}).get('currency', 'BYN')}, "
-            f"выкупной: {_direct_tool_result.get('buyout_sum', '?')}, "
-            f"общая сумма: {_direct_tool_result.get('total_sum', '?')}, "
-            f"удорожание: {_direct_tool_result.get('increase_percent', '?')}%"
+            f"Аванс {_p.get('prepaid', 30)}%: {_direct_tool_result.get('advance_sum', '?')} {_cur}. "
+            f"Ежемесячный платёж: {_direct_tool_result.get('payment_min', '?')} {_cur}. "
+            f"Выкупной: {_direct_tool_result.get('buyout_sum', '?')} {_cur}. "
+            f"Общая сумма: {_direct_tool_result.get('total', '?')} {_cur}. "
+            f"Удорожание: {_direct_tool_result.get('increase_percent', '?')}%. "
+            f"Срок: {_direct_tool_result.get('num_payments', '?')} мес."
         )
-        _params_used = _direct_tool_result.get("params", {})
-        _defaults_info = (
-            f"Параметры: {_params_used.get('subject', '?')}, "
-            f"{_params_used.get('cost', '?')} {_params_used.get('currency', 'BYN')}, "
-            f"аванс {_params_used.get('prepaid', '?')}%, "
-            f"срок {_params_used.get('term', '?')} мес."
-        )
+        print(f"[DirectTool] presenting: {_result_summary[:100]}", flush=True)
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
-                f"Результат расчёта калькулятора:\n{_result_summary}\n{_defaults_info}\n\n"
+                f"Результат расчёта калькулятора:\n{_result_summary}\n\n"
                 f"Сообщение клиента: {message}\n\n"
-                "Представь результат кратко (2 предложения). "
-                "Спроси, хочет ли изменить аванс, срок или тип платежей, или отправить график по СМС."
+                "Назови аванс, ежемесячный платёж и общую сумму. "
+                "Спроси: хотите изменить аванс, срок или тип платежей, или отправить график по СМС?"
             )},
         ]
         tool_schemas = []  # No function calling needed, just present result
