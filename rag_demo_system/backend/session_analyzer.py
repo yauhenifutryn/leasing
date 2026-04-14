@@ -97,3 +97,26 @@ def save_report(report: dict[str, Any], state_dir: Path) -> Path:
         f.write(json.dumps(report, ensure_ascii=False))
         f.write("\n")
     return log_path
+
+
+def save_transcript(
+    session_id: str,
+    transcript: list[dict[str, str]],
+    state_dir: Path,
+    transport: str = "browser",
+    phone: str = "",
+) -> Path:
+    """Save individual session transcript as a separate JSON file."""
+    transcripts_dir = state_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    out_path = transcripts_dir / f"{session_id}.json"
+    record = {
+        "session_id": session_id,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "transport": transport,
+        "phone": phone,
+        "turn_count": len(transcript),
+        "transcript": transcript,
+    }
+    out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path

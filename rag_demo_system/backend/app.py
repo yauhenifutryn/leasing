@@ -1716,9 +1716,13 @@ async def voice_ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        # Post-session quality analysis (async, non-blocking)
+        # Post-session: save transcript + quality analysis
+        _state_dir = Path(__file__).resolve().parents[1] / ".state"
         try:
             chat_session = state.get(session_id)
+            if chat_session and chat_session.transcript:
+                from .session_analyzer import save_transcript
+                save_transcript(session_id, chat_session.transcript, _state_dir, transport="browser")
             if chat_session and len(chat_session.transcript) >= 4:
                 from .session_analyzer import analyze_session, save_report
                 from .llm import call_openai_compatible
@@ -1730,10 +1734,11 @@ async def voice_ws(websocket: WebSocket) -> None:
                     settings.llm.model,
                 )
                 report["session_id"] = session_id
-                save_report(report, Path(__file__).resolve().parents[1] / ".state")
+                report["transport"] = "browser"
+                save_report(report, _state_dir)
                 state.log({"event": "session_analysis", "session_id": session_id, "overall_score": report.get("overall_score")})
         except Exception:  # noqa: BLE001
-            pass  # Analysis failure should never break the session cleanup
+            pass
         if rtc_handler is not None:
             await rtc_handler.close()
         voice_sessions.pop(session_id, None)
@@ -2245,10 +2250,16 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         import traceback
         print(f"[Jambonz:{session_id[:8]}] Audio WS error: {exc}\n{traceback.format_exc()}", flush=True)
     finally:
-        # Post-session quality analysis (same as browser handler)
+        # Post-session: save transcript + quality analysis
         if session is not None:
+            _state_dir = Path(__file__).resolve().parents[1] / ".state"
             try:
                 chat_session = state.get(session_id)
+                if chat_session and chat_session.transcript:
+                    from .session_analyzer import save_transcript
+                    save_transcript(session_id, chat_session.transcript, _state_dir,
+                                    transport="jambonz", phone=session.client_phone or "")
+                    print(f"[Jambonz:{session_id[:8]}] Transcript saved ({len(chat_session.transcript)} turns)", flush=True)
                 if chat_session and len(chat_session.transcript) >= 4:
                     from .session_analyzer import analyze_session, save_report
                     from .llm import call_openai_compatible
@@ -2262,7 +2273,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     report["session_id"] = session_id
                     report["transport"] = "jambonz"
                     report["phone"] = session.client_phone or "unknown"
-                    save_report(report, Path(__file__).resolve().parents[1] / ".state")
+                    save_report(report, _state_dir)
                     print(f"[Jambonz:{session_id[:8]}] Session analysis: score={report.get('overall_score', '?')}", flush=True)
             except Exception:
                 pass
