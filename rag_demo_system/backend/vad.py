@@ -72,6 +72,11 @@ class SileroVAD:
     def is_speaking(self) -> bool:
         return self._is_speaking
 
+    @property
+    def last_probability(self) -> float:
+        """Last VAD probability from feed(). 0.0-1.0."""
+        return getattr(self, '_last_prob', 0.0)
+
     def feed(self, pcm16_bytes: bytes) -> bytes | None:
         """Feed a PCM16 audio chunk.
 
@@ -108,6 +113,7 @@ class SileroVAD:
             vad_tensor = tensor
 
         prob = self._model(vad_tensor, self._VAD_RATE).item()
+        self._last_prob = prob
 
         if prob >= self.SPEECH_THRESHOLD:
             if not self._is_speaking:

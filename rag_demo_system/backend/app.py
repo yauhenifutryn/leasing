@@ -1861,7 +1861,7 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                             "verb": "listen",
                             "url": audio_ws_url,
                             "sampleRate": 16000,
-                            "mixType": "mixed",
+                            "mixType": "mono",
                             "passDtmf": True,
                             "bidirectionalAudio": {
                                 "enabled": True,
@@ -1989,45 +1989,40 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         _rms = 0
                     print(f"[Jambonz:{session_id[:8]}] frames={_frame_count} speaking={session.assistant_speaking} vad={vad.is_speaking} rms={_rms:.0f} bytes={len(pcm_16k)}", flush=True)
 
-                # Barge-in on mixed audio (caller + bot TTS combined)
-                # Same approach as Asterisk: rolling energy baseline + threshold
+                # Barge-in on clean caller audio (mono mode, separated tracks)
+                # Industry-grade: VAD with lower threshold on clean channel
                 if session.assistant_speaking:
-                    # Skip first 3s of TTS (mixed audio baseline needs time to stabilize)
+                    # Skip first 1.5s of TTS (VAD model needs warmup)
                     if not hasattr(session, '_tts_start_time') or session._tts_start_time == 0:
                         session._tts_start_time = asyncio.get_event_loop().time()
-                        session._echo_samples = []  # reset baseline on new TTS
+                        session._barge_vad_count = 0
                     _tts_elapsed = asyncio.get_event_loop().time() - session._tts_start_time
-                    if _tts_elapsed < 3.0:
+                    if _tts_elapsed < 1.5:
                         continue
 
-                    import struct as _bst
-                    import math as _bm
-                    _bn = len(pcm_16k) // 2
-                    if _bn > 0:
-                        _bsamps = _bst.unpack(f"<{_bn}h", pcm_16k[:_bn*2])
-                        _brms = _bm.sqrt(sum(s*s for s in _bsamps) / _bn)
+                    # Feed audio to VAD (updates last_probability)
+                    vad.feed(pcm_16k)
+
+                    # Use lower threshold (0.25) for barge-in than normal speech (0.5)
+                    # Phone AEC suppresses mic during TTS, making caller audio quiet
+                    # but Silero VAD can still detect speech patterns at low energy
+                    _prob = vad.last_probability
+                    if _prob >= 0.25:
+                        if not hasattr(session, '_barge_vad_count'):
+                            session._barge_vad_count = 0
+                        session._barge_vad_count += 1
                     else:
-                        _brms = 0
+                        session._barge_vad_count = max(0, getattr(session, '_barge_vad_count', 0) - 1)
 
-                    # Track echo baseline (rolling average of TTS energy)
-                    if not hasattr(session, '_echo_samples'):
-                        session._echo_samples = []
-                    session._echo_samples.append(_brms)
-                    if len(session._echo_samples) > 50:
-                        session._echo_samples.pop(0)
-                    _baseline = sum(session._echo_samples) / len(session._echo_samples) if session._echo_samples else 500
-
-                    # Trigger: energy > 3x baseline AND above absolute minimum
-                    # High threshold prevents false triggers on speaker mode
-                    # (speaker leaks bot voice into mic, doubling the mixed energy)
-                    if _brms > max(_baseline * 3.0, 2000) and len(session._echo_samples) > 15:
+                    # 3 consecutive VAD detections (~96ms) = confirmed speech
+                    if getattr(session, '_barge_vad_count', 0) >= 3:
                         session.interrupted = True
                         session.assistant_speaking = False
-                        session._echo_samples = []
                         session._tts_start_time = 0
+                        session._barge_vad_count = 0
                         vad.reset()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
-                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN (rms={_brms:.0f}, baseline={_baseline:.0f})", flush=True)
+                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN (vad_prob={_prob:.2f})", flush=True)
                         await broadcast_sip_event({
                             "type": "sip.barge_in",
                             "call_id": session_id,
