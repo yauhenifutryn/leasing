@@ -822,9 +822,14 @@ async def _stream_voice_response(
                     f"Предыдущий расчёт: {_json.dumps(prev_params, ensure_ascii=False)}. "
                     f"Клиент хочет изменить параметры. Вызови calculator с обновлёнными значениями.\n\n"
                 )
+        _tool_instruction = (
+            "ОБЯЗАТЕЛЬНО вызови инструмент (calculator или send_sms) для выполнения запроса. "
+            "НЕ отвечай текстом о расчёте — ВЫЗОВИ calculator. "
+            "НЕ говори 'отправляю СМС' — ВЫЗОВИ send_sms.\n\n"
+        )
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{sms_context}{prev_calc_context}{message}"},
+            {"role": "user", "content": f"{_tool_instruction}{sms_context}{prev_calc_context}{message}"},
         ]
     else:
         # RAG path: full context for KB questions
