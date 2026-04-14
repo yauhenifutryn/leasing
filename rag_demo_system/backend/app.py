@@ -715,6 +715,7 @@ async def _stream_voice_response(
     # structured data (subject, cost, currency) for immediate tool calling.
     needs_tool = False
     _extracted_hints: dict[str, Any] = {}
+    print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}", flush=True)
     if tool_schemas:
         # Build conversation context: last 7 turns (not just 400 chars)
         _recent_turns = chat_session.transcript[-14:] if chat_session.transcript else []  # 7 pairs
@@ -777,7 +778,8 @@ async def _stream_voice_response(
                     _extracted_hints["action"] = _parsed["action"]
             else:
                 needs_tool = "TOOL" in _raw.upper()
-        except Exception:
+        except Exception as _classify_exc:
+            print(f"[Classifier] ERROR: {_classify_exc}", flush=True)
             # Fallback to keyword heuristic
             needs_tool = has_sms_intent or any(
                 t in message.lower() for t in
@@ -791,8 +793,7 @@ async def _stream_voice_response(
                     needs_tool = True
         if has_sms_intent:
             needs_tool = True
-        if _extracted_hints:
-            print(f"[Classifier] intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
+        print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
     sms_context = ""
