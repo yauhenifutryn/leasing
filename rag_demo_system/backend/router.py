@@ -26,9 +26,12 @@ def _parse_json(text: str) -> dict[str, Any] | None:
 
 def _classify_with_llm(message: str, base_url: str, model: str) -> str | None:
     system_prompt = (
-        "Ты классификатор сообщений в чате поддержки. "
+        "Ты классификатор сообщений в чате поддержки компании «Микро Лизинг». "
         "Верни строго JSON с полем intent из списка: "
         "greeting, meta, off_topic, identity, question, unclear. "
+        "identity = клиент спрашивает кто ТЫ (бот/помощник). "
+        "question = любой вопрос о компании, её услугах, руководстве, владельце, офисах, условиях. "
+        "Если сомневаешься между identity и question, выбирай question. "
         "Никаких пояснений."
     )
     user_prompt = f"Сообщение клиента: {message}\nВерни JSON."
