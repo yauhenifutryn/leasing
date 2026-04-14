@@ -890,34 +890,50 @@ async def _stream_voice_response(
                         _merged[_k] = _v
                 _direct_params = _merged
 
-        print(f"[DirectTool] calculator({_json_direct.dumps(_direct_params, ensure_ascii=False)})", flush=True)
-        await broadcast_sip_event({
-            "type": "sip.tool.start",
-            "call_id": session_id,
-            "tool": "calculator",
-            "params": _direct_params,
-        })
-        try:
-            _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
-            _tool_ok = _direct_tool_result.get("ok", False)
-            print(f"[DirectTool] result: ok={_tool_ok}", flush=True)
+        # Check subject restrictions for individuals before calling API
+        _subj_lower = _direct_params.get("subject", "").lower()
+        _client = _direct_params.get("client_type", "Физическое лицо")
+        _individual_subjects = {"легковой автомобиль", "прочий транспорт"}
+        if "Физическое" in str(_client) and _subj_lower not in _individual_subjects and _subj_lower:
+            _direct_tool_result = {
+                "ok": False,
+                "error": f"Для физических лиц доступен лизинг только легковых автомобилей и прочего транспорта. "
+                         f"{_direct_params['subject']} доступен для юридических лиц и ИП.",
+                "params": _direct_params,
+                "defaulted": [],
+            }
+            print(f"[DirectTool] BLOCKED: {_direct_params['subject']} not available for individuals", flush=True)
+        else:
+            pass  # proceed to calculator call below
+
+        if _direct_tool_result is None:  # not blocked by restriction check
+            print(f"[DirectTool] calculator({_json_direct.dumps(_direct_params, ensure_ascii=False)})", flush=True)
             await broadcast_sip_event({
-                "type": "sip.tool.result",
+                "type": "sip.tool.start",
                 "call_id": session_id,
                 "tool": "calculator",
-                "ok": _tool_ok,
+                "params": _direct_params,
             })
-            # Track the tool call in session
-            session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
-            session.tool_calls_this_turn.append({
-                "tool": "calculator",
-                "params": _direct_tool_result.get("params", _direct_params),
-                "result": _direct_tool_result,
-                "ok": _tool_ok,
-            })
-        except Exception as _texc:
-            print(f"[DirectTool] ERROR: {_texc}", flush=True)
-            _direct_tool_result = None
+            try:
+                _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
+                _tool_ok = _direct_tool_result.get("ok", False)
+                print(f"[DirectTool] result: ok={_tool_ok}", flush=True)
+                await broadcast_sip_event({
+                    "type": "sip.tool.result",
+                    "call_id": session_id,
+                    "tool": "calculator",
+                    "ok": _tool_ok,
+                })
+                session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
+                session.tool_calls_this_turn.append({
+                    "tool": "calculator",
+                    "params": _direct_tool_result.get("params", _direct_params),
+                    "result": _direct_tool_result,
+                    "ok": _tool_ok,
+                })
+            except Exception as _texc:
+                print(f"[DirectTool] ERROR: {_texc}", flush=True)
+                _direct_tool_result = None
 
     if _direct_tool_result and _direct_tool_result.get("ok"):
         # Tool executed successfully: LLM only presents the result
