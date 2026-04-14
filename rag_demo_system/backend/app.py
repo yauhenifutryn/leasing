@@ -1848,12 +1848,10 @@ async def jambonz_control_ws(websocket: WebSocket) -> None:
                     flush=True,
                 )
 
-                # Store phone for audio WS handler to read
-                global _jambonz_last_caller_phone
-                if caller_phone:
-                    _jambonz_last_caller_phone = caller_phone
-
-                audio_ws_url = "ws://host.docker.internal:8000/ws/jambonz-audio"
+                # Pass phone in the audio WS URL (guaranteed delivery, no shared state needed)
+                import urllib.parse as _urlparse
+                _phone_param = _urlparse.quote(caller_phone) if caller_phone else ""
+                audio_ws_url = f"ws://host.docker.internal:8000/ws/jambonz-audio?phone={_phone_param}"
                 ack = {
                     "type": "ack",
                     "msgid": msgid,
@@ -1924,10 +1922,11 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         sample_rate = meta.get("sampleRate", 16000)
         caller_meta = meta.get("metadata", {})
         caller_phone = caller_meta.get("from", "")
-        # Fallback: read phone from control WS
+        # Fallback: read phone from URL query parameter
         if not caller_phone:
-            caller_phone = _jambonz_last_caller_phone
-            print(f"[Jambonz] Phone fallback: '{caller_phone}' (from global)", flush=True)
+            import urllib.parse as _urlparse
+            _qs = _urlparse.parse_qs(_urlparse.urlparse(str(websocket.url)).query)
+            caller_phone = _qs.get("phone", [""])[0]
         session_id = call_sid or str(uuid.uuid4())
 
         print(
