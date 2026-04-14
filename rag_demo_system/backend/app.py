@@ -889,10 +889,22 @@ async def _stream_voice_response(
                 _direct_params = _merged
 
         print(f"[DirectTool] calculator({_json_direct.dumps(_direct_params, ensure_ascii=False)})", flush=True)
+        await broadcast_sip_event({
+            "type": "sip.tool.start",
+            "call_id": session_id,
+            "tool": "calculator",
+            "params": _direct_params,
+        })
         try:
             _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
             _tool_ok = _direct_tool_result.get("ok", False)
             print(f"[DirectTool] result: ok={_tool_ok}", flush=True)
+            await broadcast_sip_event({
+                "type": "sip.tool.result",
+                "call_id": session_id,
+                "tool": "calculator",
+                "ok": _tool_ok,
+            })
             # Track the tool call in session
             session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
             session.tool_calls_this_turn.append({
