@@ -2040,22 +2040,21 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
 
         consent_text = (
             "Здравствуйте! Вас приветствует компания Микро Лизинг. "
-            "Для продолжения разговора нам необходимо ваше согласие на обработку "
-            "и трансграничную передачу персональных данных. "
+            "Для продолжения разговора нам необходимо ваше согласие "
+            "на обработку персональных данных. "
             "Нажмите 1 для согласия или 2 для отказа."
         )
         session.assistant_speaking = True
-        await _jambonz_send_tts(websocket, session, session_id, consent_text)
-        session.assistant_speaking = False
+        # Play TTS as background task so DTMF can interrupt it
+        asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, consent_text))
 
-        # Wait for DTMF (up to 15 seconds)
+        # Listen for DTMF while TTS plays (barge-in with keypad)
         consent_granted = False
         for _attempt in range(2):  # allow one repeat
             _dtmf_event.clear()
             _dtmf_digit.clear()
             try:
-                # Drain audio frames while waiting, forward DTMF events
-                _consent_deadline = asyncio.get_event_loop().time() + 15.0
+                _consent_deadline = asyncio.get_event_loop().time() + 20.0
                 while not _dtmf_event.is_set():
                     _remaining = _consent_deadline - asyncio.get_event_loop().time()
                     if _remaining <= 0:
@@ -2070,26 +2069,29 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                             _d = _ctrl.get("dtmf", "")
                             print(f"[Jambonz:{session_id[:8]}] Consent DTMF: {_d}", flush=True)
                             _on_dtmf(_d)
-                    elif "text" in _cmsg and not _cmsg.get("text"):
-                        pass  # empty text frame
                     # Ignore audio frames during consent
             except Exception:
                 break
 
             if _dtmf_digit and _dtmf_digit[0] == "1":
                 consent_granted = True
+                # Stop consent TTS immediately
+                await websocket.send_text(json.dumps({"type": "killAudio"}))
+                session.assistant_speaking = False
                 print(f"[Jambonz:{session_id[:8]}] Consent GRANTED via DTMF", flush=True)
                 break
             elif _dtmf_digit and _dtmf_digit[0] == "2":
+                await websocket.send_text(json.dumps({"type": "killAudio"}))
+                session.assistant_speaking = False
                 print(f"[Jambonz:{session_id[:8]}] Consent DENIED via DTMF", flush=True)
                 break
             else:
+                session.assistant_speaking = False
                 if _attempt == 0:
-                    # No input: repeat once
                     repeat_text = "Нажмите 1 для согласия или 2 для отказа."
                     session.assistant_speaking = True
-                    await _jambonz_send_tts(websocket, session, session_id, repeat_text)
-                    session.assistant_speaking = False
+                    asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, repeat_text))
+                    # Continue loop to wait for DTMF again
 
         session._consent_dtmf_callback = None  # type: ignore[attr-defined]
 
