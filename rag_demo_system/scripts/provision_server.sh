@@ -443,6 +443,7 @@ install_all_venvs() {
 download_models() {
   export HF_HOME="$MODELS_DIR"
   export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+  export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
   export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
 
   # Prefer new 'hf' CLI; fall back to deprecated 'huggingface-cli'
