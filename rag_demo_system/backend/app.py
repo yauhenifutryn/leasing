@@ -1998,11 +1998,11 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     # Feed audio to VAD (updates last_probability)
                     vad.feed(pcm_16k)
 
-                    # Use lower threshold (0.25) for barge-in than normal speech (0.5)
+                    # Use lower threshold (0.35) for barge-in than normal speech (0.5)
                     # Phone AEC suppresses mic during TTS, making caller audio quiet
                     # but Silero VAD can still detect speech patterns at low energy
                     _prob = vad.last_probability
-                    if _prob >= 0.25:
+                    if _prob >= 0.35:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
