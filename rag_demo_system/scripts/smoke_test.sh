@@ -370,3 +370,7 @@ else
   info "  ngrok config add-authtoken YOUR_TOKEN"
   info "  ngrok http 8000"
 fi
+
+info ""
+info "To enable SIP telephony:"
+info "  bash scripts/deploy_jambonz.sh"

@@ -858,10 +858,16 @@ main() {
   start_stack                # Step 10: launch supervisor stack
 
   log "=== Provisioning complete ==="
-  log "Next: bash $APP_DIR/scripts/smoke_test.sh"
-
   echo ""
-  echo "[INFO] To enable SIP telephony, run: bash scripts/deploy_jambonz.sh"
+  echo "════════════════════════════════════════════════════════════"
+  echo "  Next steps (run in order):"
+  echo ""
+  echo "  1. bash scripts/smoke_test.sh"
+  echo "     Waits for vLLM/Whisper/TTS, indexes KB, verifies chat"
+  echo ""
+  echo "  2. bash scripts/deploy_jambonz.sh"
+  echo "     Deploys SIP telephony, creates accounts, restarts backend"
+  echo "════════════════════════════════════════════════════════════"
   echo ""
 }
 
