@@ -99,6 +99,21 @@ info "Jambonz API server ready (HTTP $HTTP_CODE)"
 
 API="http://localhost:3000/v1"
 
+# ── 6b. Ensure schema has llm_credentials table (added in Jambonz v10+) ──
+$COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \
+    -e "CREATE TABLE IF NOT EXISTS llm_credentials (
+        llm_credential_sid CHAR(36) NOT NULL PRIMARY KEY,
+        account_sid CHAR(36),
+        service_provider_sid CHAR(36),
+        vendor VARCHAR(64),
+        api_key VARCHAR(1024),
+        model VARCHAR(256),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_account (account_sid),
+        INDEX idx_sp (service_provider_sid)
+    )" 2>/dev/null
+info "Database schema verified (llm_credentials table)"
+
 # ── 7. Get admin API token from database ──
 info "Reading admin API token from database..."
 ADMIN_TOKEN=$($COMPOSE_CMD exec -T mysql mysql -ujambones -p"JambonzDB2026!" jambones \

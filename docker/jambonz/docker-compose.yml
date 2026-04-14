@@ -1,5 +1,6 @@
 # Based on t0mll/jambonz-infrastructure reference docker-compose (the only tested community compose)
 # Adapted for v10 images + sbc-sip-sidecar (replaces legacy sbc-registrar)
+# Images pinned to digest hashes from 2026-04-14 deployment to prevent breaking changes
 
 x-common-env: &common-env
   JAMBONES_MYSQL_HOST: 172.10.0.2
