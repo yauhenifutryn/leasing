@@ -24,6 +24,7 @@ def test_effective_retrieval_defaults():
         voice_bm25_top_k=1,
         voice_final_top_n=2,
         voice_context_max_tokens=500,
+        dedup_similarity_threshold=0.85,
     )
 
     regular = effective_retrieval(cfg, fast=False)
@@ -49,6 +50,7 @@ def test_effective_retrieval_fast():
         voice_bm25_top_k=1,
         voice_final_top_n=2,
         voice_context_max_tokens=500,
+        dedup_similarity_threshold=0.85,
     )
 
     fast = effective_retrieval(cfg, fast=True)
@@ -74,6 +76,7 @@ def test_effective_retrieval_voice_fast():
         voice_bm25_top_k=1,
         voice_final_top_n=2,
         voice_context_max_tokens=500,
+        dedup_similarity_threshold=0.85,
     )
 
     voice = effective_retrieval(cfg, fast=False, voice_fast=True)

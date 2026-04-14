@@ -13,7 +13,7 @@ from .ingest import Chunk, build_chunks
 from .query import load_abbreviations, normalize_query, expand_synonyms, llm_expand_query
 from .rag import ensure_collection, search, upsert_chunks
 from .rerank import Reranker
-from .retrieval_utils import filter_vector_hits
+from .retrieval_utils import filter_vector_hits, dedup_chunks
 from .settings import Settings, RetrievalConfig, RerankerConfig
 
 logger = logging.getLogger("rag_demo")
@@ -250,6 +250,12 @@ class RAGEngine:
 
         candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
         top_rerank_score = candidates[0].get("rerank_score", 0.0) if candidates else 0.0
+
+        pre_dedup = len(candidates)
+        dedup_threshold = getattr(self.settings.retrieval, "dedup_similarity_threshold", 0.85)
+        candidates = dedup_chunks(candidates, threshold=dedup_threshold)
+        if len(candidates) < pre_dedup:
+            logger.info("Dedup: %d -> %d candidates (threshold=%.2f)", pre_dedup, len(candidates), dedup_threshold)
 
         filtered = [
             c

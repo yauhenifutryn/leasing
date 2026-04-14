@@ -50,6 +50,7 @@ class RetrievalConfig:
     voice_bm25_top_k: int
     voice_final_top_n: int
     voice_context_max_tokens: int
+    dedup_similarity_threshold: float
 
 
 @dataclass
@@ -213,6 +214,7 @@ def load_settings(path: Path | None = None) -> Settings:
             voice_bm25_top_k=int(retrieval.get("voice_bm25_top_k", 1)),
             voice_final_top_n=int(retrieval.get("voice_final_top_n", 2)),
             voice_context_max_tokens=int(retrieval.get("voice_context_max_tokens", 500)),
+            dedup_similarity_threshold=float(retrieval.get("dedup_similarity_threshold", 0.85)),
         ),
         llm=LLMConfig(
             provider=llm.get("provider", "openai_compatible"),

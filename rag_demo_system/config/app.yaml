@@ -33,6 +33,7 @@ retrieval:
   voice_bm25_top_k: 10
   voice_final_top_n: 5
   voice_context_max_tokens: 1200
+  dedup_similarity_threshold: 0.85
 
 llm:
   provider: "openai_compatible"
