@@ -58,18 +58,41 @@
   var autoScroll = true;
   var activeCalls = {};
 
+  var pingInterval = null;
+
   function connect() {
+    // Clean up old connection before creating new one
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+      ws = null;
+    }
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+
     ws = new WebSocket(WS_BASE + location.host + '/ws/sip-monitor');
     ws.onopen = function() {
       statusDot.className = 'status connected';
       addLog('system', '', 'Monitor connected');
+      // Heartbeat: send ping every 15s to detect dead connections early
+      pingInterval = setInterval(function() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send('ping');
+        }
+      }, 15000);
     };
     ws.onclose = function() {
       statusDot.className = 'status disconnected';
-      addLog('system', '', 'Monitor disconnected, reconnecting...');
-      setTimeout(connect, 2000);
+      if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+      setTimeout(connect, 1500);
     };
-    ws.onerror = function() { ws.close(); };
+    ws.onerror = function() {
+      if (ws) ws.close();
+    };
     ws.onmessage = function(e) {
       var msg = JSON.parse(e.data);
       handleEvent(msg);

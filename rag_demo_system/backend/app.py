@@ -774,9 +774,15 @@ async def _stream_voice_response(
                 await websocket.send_json({"type": "tool_call.start", "tool": "send_sms", "params": sms_params})
                 try:
                     sms_result = await asyncio.to_thread(sms_tool.execute, sms_params, {})
+                    sms_ok = sms_result.get("ok", False)
                     session.tool_calls_this_turn.append({"tool": "send_sms", "params": sms_params, "result": sms_result})
-                    await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": sms_result.get("ok", False)})
-                    # TTS confirmation
+                    await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": sms_ok})
+                    print(f"[Jambonz:{session_id[:8]}] SMS sent directly to {session.client_phone} ok={sms_ok}", flush=True)
+                except Exception as _sms_exc:
+                    print(f"[Jambonz:{session_id[:8]}] SMS direct send error: {_sms_exc}", flush=True)
+                    await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": False})
+                # TTS confirmation (separate from SMS so TTS failure doesn't mask SMS success)
+                try:
                     _confirm = f"Отправила график платежей по СМС на номер {session.client_phone}."
                     audio_resp = await asyncio.to_thread(synthesize_audio, _confirm, session_id)
                     _ab64 = audio_resp.get("audio_b64", "")
@@ -792,10 +798,8 @@ async def _stream_voice_response(
                             if session.interrupted:
                                 break
                             await asyncio.sleep(0.1)
-                    print(f"[Jambonz:{session_id[:8]}] SMS sent directly to {session.client_phone}", flush=True)
-                except Exception as _sms_exc:
-                    print(f"[Jambonz:{session_id[:8]}] SMS direct send error: {_sms_exc}", flush=True)
-                    await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": False})
+                except Exception as _tts_exc:
+                    print(f"[Jambonz:{session_id[:8]}] SMS TTS confirmation error: {_tts_exc}", flush=True)
                 session.assistant_speaking = False
                 return
             sms_context = f"Текст для СМС:\n{sms_body}\n\n"
