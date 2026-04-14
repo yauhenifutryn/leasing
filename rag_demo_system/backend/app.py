@@ -72,6 +72,10 @@ class _JambonzWebSocketShim:
         self._session_id = session_id
         self.audio_bytes_sent = 0
 
+    async def send_bytes(self, data: bytes) -> None:
+        """Forward raw PCM bytes to the underlying Jambonz audio WebSocket."""
+        await self._ws.send_bytes(data)
+
     async def send_json(self, data: dict[str, Any]) -> None:
         event_type = data.get("type", "")
 
