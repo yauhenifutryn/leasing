@@ -687,13 +687,14 @@ async def _stream_voice_response(
         "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
         "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
     ) if weak_context else ""
-    # Get tool schemas early
+    # Get tool schemas early (only calculator; SMS is handled deterministically from code)
     tool_schemas = []
-    for _tool in get_all_tools().values():
+    _calc_tool = get_all_tools().get("calculator")
+    if _calc_tool:
         try:
-            tool_schemas.append(_tool.schema(session_phone=session.client_phone))
+            tool_schemas.append(_calc_tool.schema(session_phone=session.client_phone))
         except TypeError:
-            tool_schemas.append(_tool.schema())
+            tool_schemas.append(_calc_tool.schema())
 
     effective_model = brain_model or settings.llm.fast_model or settings.llm.model
     effective_base_url = settings.llm.fast_base_url or settings.llm.base_url
