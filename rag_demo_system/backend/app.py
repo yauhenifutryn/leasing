@@ -2027,10 +2027,84 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
         vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
 
-        # 4. Send welcome TTS
+        # 4. Consent collection via DTMF (press 1 to accept, 2 to decline)
+        _dtmf_event: asyncio.Event = asyncio.Event()
+        _dtmf_digit: list[str] = []  # mutable container for the collected digit
+
+        def _on_dtmf(digit: str) -> None:
+            if digit in ("1", "2"):
+                _dtmf_digit.append(digit)
+                _dtmf_event.set()
+
+        session._consent_dtmf_callback = _on_dtmf  # type: ignore[attr-defined]
+
+        consent_text = (
+            "Здравствуйте! Вас приветствует компания Микро Лизинг. "
+            "Для продолжения разговора нам необходимо ваше согласие на обработку "
+            "и трансграничную передачу персональных данных. "
+            "Нажмите 1 для согласия или 2 для отказа."
+        )
+        session.assistant_speaking = True
+        await _jambonz_send_tts(websocket, session, session_id, consent_text)
+        session.assistant_speaking = False
+
+        # Wait for DTMF (up to 15 seconds)
+        consent_granted = False
+        for _attempt in range(2):  # allow one repeat
+            _dtmf_event.clear()
+            _dtmf_digit.clear()
+            try:
+                # Drain audio frames while waiting, forward DTMF events
+                _consent_deadline = asyncio.get_event_loop().time() + 15.0
+                while not _dtmf_event.is_set():
+                    _remaining = _consent_deadline - asyncio.get_event_loop().time()
+                    if _remaining <= 0:
+                        break
+                    try:
+                        _cmsg = await asyncio.wait_for(websocket.receive(), timeout=min(_remaining, 1.0))
+                    except asyncio.TimeoutError:
+                        continue
+                    if "text" in _cmsg and _cmsg["text"]:
+                        _ctrl = json.loads(_cmsg["text"])
+                        if _ctrl.get("event", _ctrl.get("type", "")) == "dtmf":
+                            _d = _ctrl.get("dtmf", "")
+                            print(f"[Jambonz:{session_id[:8]}] Consent DTMF: {_d}", flush=True)
+                            _on_dtmf(_d)
+                    elif "text" in _cmsg and not _cmsg.get("text"):
+                        pass  # empty text frame
+                    # Ignore audio frames during consent
+            except Exception:
+                break
+
+            if _dtmf_digit and _dtmf_digit[0] == "1":
+                consent_granted = True
+                print(f"[Jambonz:{session_id[:8]}] Consent GRANTED via DTMF", flush=True)
+                break
+            elif _dtmf_digit and _dtmf_digit[0] == "2":
+                print(f"[Jambonz:{session_id[:8]}] Consent DENIED via DTMF", flush=True)
+                break
+            else:
+                if _attempt == 0:
+                    # No input: repeat once
+                    repeat_text = "Нажмите 1 для согласия или 2 для отказа."
+                    session.assistant_speaking = True
+                    await _jambonz_send_tts(websocket, session, session_id, repeat_text)
+                    session.assistant_speaking = False
+
+        session._consent_dtmf_callback = None  # type: ignore[attr-defined]
+
+        if not consent_granted:
+            denied_text = consent_denied_response()
+            session.assistant_speaking = True
+            await _jambonz_send_tts(websocket, session, session_id, denied_text)
+            await asyncio.sleep(2)
+            await websocket.send_text(json.dumps({"type": "disconnect"}))
+            return
+
+        # 5. Send welcome TTS (consent passed)
         session.assistant_speaking = True
         intro_text = (
-            "Здравствуйте! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
+            "Спасибо за согласие! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
             "Как я могу к вам обращаться?"
         )
         asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, intro_text))
@@ -2149,6 +2223,10 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                 if event_type == "dtmf":
                     digit = ctrl.get("dtmf", "")
                     print(f"[Jambonz:{session_id[:8]}] DTMF: {digit}", flush=True)
+                    # Forward to consent callback if active
+                    _cb = getattr(session, '_consent_dtmf_callback', None) if session else None
+                    if _cb:
+                        _cb(digit)
                     await broadcast_sip_event({
                         "type": "sip.dtmf",
                         "call_id": session_id,
@@ -2165,7 +2243,27 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         import traceback
         print(f"[Jambonz:{session_id[:8]}] Audio WS error: {exc}\n{traceback.format_exc()}", flush=True)
     finally:
+        # Post-session quality analysis (same as browser handler)
         if session is not None:
+            try:
+                chat_session = state.get(session_id)
+                if chat_session and len(chat_session.transcript) >= 4:
+                    from .session_analyzer import analyze_session, save_report
+                    from .llm import call_openai_compatible
+                    report = await asyncio.to_thread(
+                        analyze_session,
+                        chat_session.transcript,
+                        call_openai_compatible,
+                        settings.llm.base_url,
+                        settings.llm.model,
+                    )
+                    report["session_id"] = session_id
+                    report["transport"] = "jambonz"
+                    report["phone"] = session.client_phone or "unknown"
+                    save_report(report, Path(__file__).resolve().parents[1] / ".state")
+                    print(f"[Jambonz:{session_id[:8]}] Session analysis: score={report.get('overall_score', '?')}", flush=True)
+            except Exception:
+                pass
             voice_sessions.pop(session_id, None)
         await broadcast_sip_event({
             "type": "sip.call.end",
