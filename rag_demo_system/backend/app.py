@@ -941,14 +941,23 @@ async def _stream_voice_response(
         ]
         tool_schemas = []  # No function calling needed, just present result
     elif _direct_tool_result and not _direct_tool_result.get("ok"):
-        # Tool failed: present error naturally
-        _err = _direct_tool_result.get("error", "Неизвестная ошибка")
+        # Tool failed: build specific error explanation
+        _err_params = _direct_tool_result.get("params", {})
+        _err_currency = _err_params.get("currency", "BYN")
+        _err_client = _err_params.get("client_type", "Физическое лицо")
+        if _err_currency != "BYN" and "Физическое" in str(_err_client):
+            _err_explanation = (
+                f"Для физических лиц лизинг доступен только в белорусских рублях (BYN). "
+                f"Расчёт в {_err_currency} возможен для юридических лиц и ИП."
+            )
+        else:
+            _err_explanation = _direct_tool_result.get("error", "По заданным параметрам условия не найдены.")
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
-                f"Калькулятор вернул ошибку: {_err}\n"
+                f"Калькулятор вернул ошибку: {_err_explanation}\n"
                 f"Сообщение клиента: {message}\n\n"
-                "Объясни кратко что пошло не так. Предложи изменить валюту (BYN) или другие параметры."
+                "Объясни кратко (1-2 предложения). Предложи пересчитать в BYN."
             )},
         ]
         tool_schemas = []
