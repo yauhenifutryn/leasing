@@ -443,16 +443,20 @@ install_all_venvs() {
 download_models() {
   export HF_HOME="$MODELS_DIR"
   export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+  export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
 
-  local hf_cli="$APP_DIR/.venv/bin/huggingface-cli"
+  # Prefer new 'hf' CLI; fall back to deprecated 'huggingface-cli'
+  local hf_cli="$APP_DIR/.venv/bin/hf"
+  if [ ! -x "$hf_cli" ]; then
+    hf_cli="$APP_DIR/.venv/bin/huggingface-cli"
+  fi
   mkdir -p "$MODELS_DIR"
 
   log "=== Downloading HuggingFace models to HF_HOME=$HF_HOME ==="
 
   log "  Qwen3.5-35B-A3B-FP8 (brain, half VRAM)"
   "$hf_cli" download Qwen/Qwen3.5-35B-A3B-FP8 \
-    --token "$HF_TOKEN" \
-    --local-dir-use-symlinks False
+    --token "$HF_TOKEN"
 
   log "  Embedding model (intfloat/multilingual-e5-large)"
   "$APP_DIR/.venv/bin/python" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
