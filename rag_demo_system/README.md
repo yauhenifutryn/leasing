@@ -4,15 +4,16 @@ Voice assistant for Micro Leasing. One browser UI, one FastAPI backend, Russian 
 
 ## Current Stack
 
-| Component | Choice | Port |
-|-----------|--------|------|
-| Brain LLM | Qwen3.5-35B-A3B-FP8 (vLLM) | 8787 |
-| RAG | our_rag (Qdrant + e5-large + mmarco reranker) | - |
-| STT | Whisper (faster-whisper, large-v3, GPU) | 50002 |
-| TTS | Silero v5_4_ru, speaker "xenia" (CPU) | 50006 |
-| Vector DB | Qdrant | 6333 |
-| Backend/UI | FastAPI | 8000 |
-| Persona | Ксения (female voice assistant) | - |
+| Component | Choice | Version | Port |
+|-----------|--------|---------|------|
+| Brain LLM | Qwen3.5-35B-A3B-FP8 (vLLM) | 0.19.0 | 8787 |
+| RAG | our_rag (Qdrant + e5-large + mmarco reranker + dedup) | - | - |
+| STT | Whisper (faster-whisper, large-v3, GPU) | 1.2.1 | 50002 |
+| TTS | Silero v5_4_ru, speaker "xenia" (CPU) | 0.5.5 | 50006 |
+| SIP | Jambonz (FreeSWITCH + drachtio) | 0.9.6 | 5060 |
+| Vector DB | Qdrant | latest | 6333 |
+| Backend/UI | FastAPI | 0.115.6 | 8000 |
+| Persona | Ксения (female voice assistant) | - | - |
 
 ## Quick Start (Any GPU Server)
 
@@ -20,12 +21,15 @@ Voice assistant for Micro Leasing. One browser UI, one FastAPI backend, Russian 
 # Clone and provision (one command, any platform)
 git clone --branch feature/voice-pipeline https://github.com/yauhenifutryn/leasing.git
 cd leasing/rag_demo_system
-HF_TOKEN=hf_YOUR_TOKEN NGROK_AUTHTOKEN=YOUR_NGROK_TOKEN bash scripts/provision_server.sh
+HF_TOKEN=hf_YOUR_TOKEN bash scripts/provision_server.sh
 
-# Wait ~2 min for vLLM to load, then verify
+# Verify services, index KB
 bash scripts/smoke_test.sh
 
-# Expose to the internet
+# Deploy SIP telephony (optional, creates 3 accounts)
+bash scripts/deploy_jambonz.sh
+
+# Expose to the internet (browser UI)
 ngrok http 8000
 ```
 
@@ -60,24 +64,31 @@ rag_demo_system/
 | Script | Purpose |
 |--------|---------|
 | `provision_server.sh` | Full server setup (apt, venvs, models, stack) |
-| `smoke_test.sh` | Verify all services are healthy |
+| `smoke_test.sh` | Verify all services, index KB if needed |
+| `deploy_jambonz.sh` | SIP telephony (Jambonz stack, accounts, monitor) |
+| `restart_all.sh` | Full restart after instance reboot or code change |
 | `doctor.sh` | Diagnose and auto-fix issues |
 | `fix_cuda_and_verify.sh` | CUDA diagnostic for KVM/VM instances |
 | `system_snapshot.sh` | Capture system info before/after install |
 | `stack.sh` | Stack control (up/down/status/smoke) |
-| `restart_all.sh` | Full restart after instance reboot |
 
 ## API Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/demo.html` | GET | Voice assistant UI |
+| `/demo.html` | GET | Browser voice assistant UI |
+| `/sip_monitor.html` | GET | SIP call monitor (add `?user=X` to filter) |
 | `/api/health` | GET | Backend health check |
 | `/api/backends` | GET | Available RAG backends |
 | `/api/voice/status` | GET | Voice services status |
 | `/api/index` | POST | Index knowledge base |
+| `/api/retrieve` | POST | RAG retrieval (debug) |
 | `/api/chat` | POST | Text chat |
-| `/ws/voice` | WS | Voice WebSocket |
+| `/api/jambonz/credentials` | GET | SIP account credentials |
+| `/ws/voice` | WS | Browser voice WebSocket |
+| `/ws/jambonz` | WS | Jambonz control WebSocket |
+| `/ws/jambonz-audio` | WS | Jambonz audio WebSocket |
+| `/ws/sip-monitor` | WS | SIP monitor event stream |
 
 ## Environment Variables
 

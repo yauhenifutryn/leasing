@@ -59,55 +59,71 @@ Also includes a Streamlit review UI (`scripts/review_app.py`) for human validati
 
 ### feature/voice-pipeline: Production Voice Assistant
 
-Browser-based Russian-language voice assistant built on top of the knowledge base. This is the production system, tested with the client.
+Russian-language voice assistant with SIP telephony, tool use, and RAG. This is the production system deployed for the client.
 
-**Stack:** Whisper STT, Silero TTS (v4_ru), Qwen3.5-35B-A3B-FP8 via vLLM, Qdrant vector search, BM25 + reranker hybrid retrieval.
+**Stack:** Whisper STT (1.2.1), Silero TTS (v5_4_ru), Qwen3.5-35B-A3B-FP8 via vLLM (0.19.0), Qdrant vector search, BM25 + cross-encoder reranker, Jambonz SIP (0.9.6).
 
 **Capabilities:**
 
-- WebSocket streaming audio (push-to-talk and continuous modes)
-- Silero VAD for voice activity detection in continuous conversation
-- Sentence-boundary detection for streaming TTS (speak as tokens arrive)
+- SIP telephony via Jambonz (separated audio tracks, no echo)
+- Multi-account SIP (3 concurrent users with per-user monitoring)
+- WebSocket streaming audio (browser push-to-talk and continuous modes)
+- Silero VAD for voice activity detection (mono mode, 0.35 threshold)
 - Barge-in support (interrupt the bot mid-response)
+- Tool calling: leasing calculator (1C API), SMS sender (sms-assistent.by)
+- RAG with chunk deduplication (overlapping chunk removal at retrieval time)
+- LLM intent routing (greeting, company questions, off-topic, tools)
 - Conversation memory across turns
-- Intent routing (greeting, off-topic, meta-questions)
 - Stress dictionary for proper name pronunciation
-- Latin-to-Cyrillic transliteration for brand names
+- Whisper hallucination filtering
+- Phone number TTS pronunciation fix
 
 ```
 rag_demo_system/
 ├── backend/
-│   ├── app.py                  # FastAPI, WebSocket voice handler
-│   ├── engine.py               # RAG: embedding + BM25 + reranking
+│   ├── app.py                  # FastAPI, WebSocket + Jambonz SIP handlers
+│   ├── engine.py               # RAG: embedding + BM25 + reranking + dedup
+│   ├── retrieval_utils.py      # Vector filtering, chunk deduplication
 │   ├── llm.py                  # vLLM streaming (OpenAI-compatible)
 │   ├── voice_adapters.py       # Whisper STT + Silero TTS
 │   ├── voice_session.py        # Session state, barge-in tracking
 │   ├── sentence_detector.py    # Streaming sentence boundaries
 │   ├── vad.py                  # Silero VAD wrapper
-│   ├── audio_input.py          # Transport adapter (WebSocket, future SIP)
-│   ├── router.py               # Intent classification
+│   ├── audio_input.py          # Transport adapter (WebSocket, SIP)
+│   ├── router.py               # Intent classification (LLM-based)
 │   ├── memory.py               # Turn history
 │   ├── text_utils.py           # Answer cleaning, address validation
 │   ├── state.py                # Session store, event logging
-│   └── settings.py             # Config loading (app.yaml + .env)
+│   ├── settings.py             # Config loading (app.yaml + .env)
+│   └── tools/                  # Calculator, SMS sender, filler phrases
 ├── config/
-│   ├── app.yaml                # All config: LLM, RAG, embedding, reranker
+│   ├── app.yaml                # All config: LLM, RAG, embedding, reranker, dedup
 │   ├── system_prompt_ru_v2.txt # System prompt (Russian)
 │   ├── stress_dictionary.yaml  # TTS stress marks for proper names
 │   └── transliteration.yaml    # Brand name transliteration
+├── docker/jambonz/             # Jambonz SIP stack (all images pinned)
 ├── frontend/
-│   └── demo.html               # Browser UI
+│   ├── demo.html               # Browser voice UI
+│   └── sip_monitor.html        # SIP call monitor (per-user filtering)
 ├── services/
 │   ├── whisper_server.py       # STT microservice
 │   └── silero_tts_server.py    # TTS microservice
 ├── scripts/
 │   ├── provision_server.sh     # One-command GPU server setup
-│   ├── restart_all.sh          # Restart all services
+│   ├── smoke_test.sh           # Service verification + KB indexing
+│   ├── deploy_jambonz.sh       # SIP telephony deployment
+│   ├── restart_all.sh          # Full stack restart
 │   └── doctor.sh               # Health check
 └── tests/                      # Unit and integration tests
 ```
 
-**Deployment:** Single GPU server (H100 or equivalent). One-command provisioning via `provision_server.sh`. See [deployment playbook](docs/server_deployment_playbook.md).
+**Deployment flow (in order):**
+
+1. `provision_server.sh` -- installs everything, starts stack
+2. `smoke_test.sh` -- waits for services, indexes KB, verifies chat
+3. `deploy_jambonz.sh` -- deploys SIP telephony, creates accounts
+
+**All dependencies pinned:** Docker images (Jambonz 0.9.6, drachtio, rtpengine), Python packages (vLLM 0.19.0, faster-whisper 1.2.1, silero 0.5.5). No `:latest` tags or `>=` ranges.
 
 ### feature/tool-use: Tool Use Layer
 
@@ -170,6 +186,8 @@ git clone --branch feature/voice-pipeline git@github.com:yauhenifutryn/leasing.g
 cd leasing/rag_demo_system
 cp .env.example .env   # fill in all credentials
 HF_TOKEN=hf_... bash scripts/provision_server.sh
+bash scripts/smoke_test.sh      # indexes KB, verifies all services
+bash scripts/deploy_jambonz.sh  # SIP telephony (optional)
 ```
 
 After provisioning, add tool credentials to `.env`:
@@ -183,11 +201,12 @@ The server IP must be whitelisted by the client before external API calls will w
 
 ## GPU Server Notes
 
-- Recommended: **A100 40 GB** (~$0.6/hr on vast.ai) or **H100**
-- Alternative: **4090** (cheaper, less stable under sustained load)
+- Recommended: **H100 80GB** (Sesterce/ShadeCloud, tested)
+- Alternative: **A100 80GB** (Jarvis Labs, tested)
 - Avoid **5090/Blackwell**: requires bleeding-edge drivers, often breaks
-- On the server, use only `conda` environment (`lease`); do not mix with `.venv`
 - Use tmux for long-running processes to survive SSH disconnects
+- After instance reboot: `bash scripts/restart_all.sh`
+- NVIDIA driver 570+ required for GPU Whisper; 550 falls back to CPU (acceptable)
 
 ## License
 
