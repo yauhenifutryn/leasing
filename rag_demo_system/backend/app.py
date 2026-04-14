@@ -759,9 +759,47 @@ async def _stream_voice_response(
         if has_sms_intent:
             needs_tool = True
 
-    # SMS context for send_sms
+    # SMS: direct execution (bypass LLM) when we have calculator data + phone
     sms_context = ""
-    if has_sms_intent and session.tool_calls_this_turn:
+    if has_sms_intent and session.tool_calls_this_turn and session.client_phone:
+        last_calc = next(
+            (tc for tc in reversed(session.tool_calls_this_turn)
+             if tc.get("tool") == "calculator"), None)
+        if last_calc and last_calc.get("result", {}).get("ok"):
+            calc_tool = get_tool("calculator")
+            sms_body = calc_tool.format_sms_body(last_calc["result"])
+            sms_tool = get_tool("send_sms")
+            if sms_tool and sms_body:
+                sms_params = {"phone": session.client_phone, "message": sms_body}
+                await websocket.send_json({"type": "tool_call.start", "tool": "send_sms", "params": sms_params})
+                try:
+                    sms_result = await asyncio.to_thread(sms_tool.execute, **sms_params)
+                    session.tool_calls_this_turn.append({"tool": "send_sms", "params": sms_params, "result": sms_result})
+                    await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": sms_result.get("ok", False)})
+                    # TTS confirmation
+                    _confirm = f"Отправила график платежей по СМС на номер {session.client_phone}."
+                    audio_resp = await asyncio.to_thread(synthesize_audio, _confirm, session_id)
+                    _ab64 = audio_resp.get("audio_b64", "")
+                    if _ab64:
+                        import base64 as _sms_b64
+                        _pcm = _sms_b64.b64decode(_ab64)
+                        _chunk = 1920
+                        for _i in range(0, len(_pcm), _chunk):
+                            await websocket.send_bytes(_pcm[_i : _i + _chunk])
+                        _dur = len(_pcm) / 48000.0
+                        _ws = asyncio.get_event_loop().time()
+                        while asyncio.get_event_loop().time() - _ws < _dur:
+                            if session.interrupted:
+                                break
+                            await asyncio.sleep(0.1)
+                    print(f"[Jambonz:{session_id[:8]}] SMS sent directly to {session.client_phone}", flush=True)
+                except Exception as _sms_exc:
+                    print(f"[Jambonz:{session_id[:8]}] SMS direct send error: {_sms_exc}", flush=True)
+                    await websocket.send_json({"type": "tool_call.done", "tool": "send_sms", "ok": False})
+                session.assistant_speaking = False
+                return
+            sms_context = f"Текст для СМС:\n{sms_body}\n\n"
+    elif has_sms_intent and session.tool_calls_this_turn:
         last_calc = next(
             (tc for tc in reversed(session.tool_calls_this_turn)
              if tc.get("tool") == "calculator"), None)
