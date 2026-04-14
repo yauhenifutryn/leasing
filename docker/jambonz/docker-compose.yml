@@ -86,7 +86,7 @@ services:
 
   # SBC drachtio: external SIP (no http-handler, sbc-inbound handles all INVITEs directly)
   drachtio-sbc:
-    image: drachtio/drachtio-server:latest
+    image: drachtio/drachtio-server:0.9.6
     command: >
       drachtio --contact "sip:172.10.0.10;transport=udp,tcp"
       --external-ip ${PUBLIC_IP:-0.0.0.0}
@@ -101,7 +101,7 @@ services:
     restart: unless-stopped
 
   rtpengine:
-    image: jambonz/rtpengine:latest
+    image: jambonz/rtpengine:12.5.1.48
     entrypoint: ["/usr/local/bin/rtpengine"]
     command: >
       --interface=private/172.10.0.11
@@ -121,7 +121,7 @@ services:
 
   # Feature-server drachtio: internal SIP to/from FreeSWITCH
   drachtio-fs:
-    image: drachtio/drachtio-server:latest
+    image: drachtio/drachtio-server:0.9.6
     command: >
       drachtio --contact "sip:*;transport=udp"
       --contact "sip:*;transport=tcp"
@@ -132,7 +132,7 @@ services:
     restart: unless-stopped
 
   freeswitch:
-    image: drachtio/drachtio-freeswitch-mrf:latest
+    image: drachtio/drachtio-freeswitch-mrf:0.9.5-11
     volumes:
       - /tmp/freeswitch-recordings:/tmp/recordings
     extra_hosts:
