@@ -800,8 +800,10 @@ async def _stream_voice_response(
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
+    # Trigger on: explicit SMS keywords OR classifier detected sms action
+    _sms_from_classifier = _extracted_hints.get("action") == "sms" and session.tool_calls_this_turn
     sms_context = ""
-    if has_sms_intent and session.tool_calls_this_turn and session.client_phone:
+    if (has_sms_intent or _sms_from_classifier) and session.tool_calls_this_turn and session.client_phone:
         last_calc = next(
             (tc for tc in reversed(session.tool_calls_this_turn)
              if tc.get("tool") == "calculator"), None)
