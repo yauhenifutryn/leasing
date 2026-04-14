@@ -33,6 +33,9 @@
 <body>
 <h1><span class="status disconnected" id="statusDot"></span>SIP Monitor<span id="filterLabel"></span></h1>
 <div class="controls">
+  <select id="userFilter" style="font-family:monospace; padding:5px 8px; border:1px solid #ccc; border-radius:3px; margin-right:8px; background:#fff;">
+    <option value="">All accounts</option>
+  </select>
   <button id="btnCopy">Copy All</button>
   <button id="btnClear">Clear</button>
 </div>
@@ -68,9 +71,17 @@
 
   var pingInterval = null;
 
+  var filterSelect = document.getElementById('userFilter');
+
   if (filterUser) {
     document.getElementById('filterLabel').textContent = ' — ' + filterUser;
   }
+
+  // Dropdown changes filter without page reload
+  filterSelect.addEventListener('change', function() {
+    filterUser = this.value || null;
+    document.getElementById('filterLabel').textContent = filterUser ? ' — ' + filterUser : '';
+  });
 
   function connect() {
     // Clean up old connection before creating new one
@@ -285,6 +296,14 @@
           tbody.appendChild(tr);
         }
         document.getElementById('setupCard').style.display = 'block';
+        // Populate filter dropdown from accounts
+        for (var j = 0; j < accts.length; j++) {
+          var opt = document.createElement('option');
+          opt.value = accts[j].username;
+          opt.textContent = accts[j].username;
+          if (filterUser === accts[j].username) opt.selected = true;
+          filterSelect.appendChild(opt);
+        }
       }
     })
     .catch(function() {});
