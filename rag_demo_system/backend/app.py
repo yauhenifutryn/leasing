@@ -2023,6 +2023,20 @@ async def _jambonz_process_utterance(
         session.assistant_speaking = False
         return
 
+    # Echo detection: if STT output is a fragment of recent bot speech, discard.
+    # Catches speaker-mode echo where phone mic picks up bot's own TTS.
+    _chat_sess = state.get(session_id)
+    if _chat_sess and _chat_sess.transcript:
+        _recent_bot = " ".join(
+            t.get("text", "") for t in _chat_sess.transcript[-4:]
+            if t.get("role") == "assistant"
+        ).upper()
+        _text_up = text.upper().strip()
+        if len(_text_up) >= 3 and _recent_bot and _text_up in _recent_bot:
+            print(f"[Jambonz:{session_id[:8]}] Echo filtered: '{text}' (fragment of bot speech)", flush=True)
+            session.assistant_speaking = False
+            return
+
     print(f"[Jambonz:{session_id[:8]}] STT: {text}", flush=True)
     await broadcast_sip_event({
         "type": "sip.stt.result",
