@@ -19,6 +19,48 @@ _BANNED_PATTERNS = [
 ]
 
 
+# Emoji regex: covers all Unicode emoji blocks
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F1E0-\U0001F1FF"  # flags
+    "\U0001F900-\U0001F9FF"  # supplemental symbols
+    "\U0001FA00-\U0001FA6F"  # chess symbols
+    "\U0001FA70-\U0001FAFF"  # symbols extended
+    "\U00002702-\U000027B0"  # dingbats
+    "\U0000FE00-\U0000FE0F"  # variation selectors
+    "\U0000200D"             # zero width joiner
+    "\U00002600-\U000026FF"  # misc symbols
+    "\U0000231A-\U0000231B"  # watch/hourglass
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def clean_voice_output(text: str) -> str:
+    """Clean LLM output for voice TTS: strip emoji, lists, markdown."""
+    if not text:
+        return text
+    # Strip emoji
+    text = _EMOJI_RE.sub("", text)
+    # Strip markdown bold/italic
+    text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text)
+    # Strip markdown headers
+    text = re.sub(r"^#{1,4}\s*", "", text, flags=re.MULTILINE)
+    # Convert numbered lists "1. item 2. item" to comma-separated
+    text = re.sub(r"\n?\s*\d+\.\s+", ", ", text)
+    # Convert dash/asterisk bullet lists to comma-separated
+    text = re.sub(r"\n\s*[-*]\s+", ", ", text)
+    # Clean up leading comma from list conversion
+    text = re.sub(r"^,\s*", "", text)
+    text = re.sub(r":\s*,\s*", ": ", text)
+    # Collapse multiple spaces and newlines
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def clean_answer(text: str) -> str:
     cleaned = text.strip()
     cleaned = re.sub(r"(?is)<think>.*?</think>", "", cleaned)

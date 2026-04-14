@@ -10,6 +10,28 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# Domain vocabulary for Whisper: biases transcription towards car brands,
+# leasing terms, and financial amounts common in Belarus leasing calls.
+_DEFAULT_INITIAL_PROMPT = (
+    "Клиент звонит в компанию Микро Лизинг по вопросам лизинга автомобилей "
+    "и грузового транспорта в Беларуси. "
+    "Марки: Volkswagen Фольксваген, Toyota Тойота, BMW бэха, "
+    "Mercedes-Benz мерс, Audi аудюха, Hyundai Хёндай, Kia Киа, "
+    "Skoda Шкода, Renault Рено, Nissan Ниссан, Mazda Мазда, Ford Форд, "
+    "Opel Опель, Honda Хонда, Subaru Субару, Mitsubishi Мицубиши, "
+    "Chevrolet Шевроле, Lexus Лексус, Peugeot Пежо, Citroen Ситроен, "
+    "Volvo Вольво, Land Rover Ленд Ровер, Porsche Порше. "
+    "Китайские: Geely Джили, Chery Чери, Haval Хавал, Exeed Эксид, "
+    "Changan Чанган, JAC Джак, BYD, Jetour Джетур, Omoda Омода. "
+    "Отечественные: Lada Лада ВАЗ, ГАЗ ГАЗель, МАЗ. "
+    "Термины: аванс, ежемесячный платёж, выкупной платёж, график платежей, "
+    "удорожание, лизингодатель, лизингополучатель, юрлицо, физлицо, ИП, "
+    "договор лизинга, VIN, УНП, НДС, КАСКО, ОСАГО, б/у, рассрочка, "
+    "рефинансирование, реструктуризация, тягач, полуприцеп, спецтехника. "
+    "Суммы: десять тысяч, двадцать тысяч, пятьдесят тысяч, сто тысяч "
+    "белорусских рублей, долларов, евро, полтора миллиона."
+)
+
 
 class TranscribeRequest(BaseModel):
     audio_b64: str
@@ -38,7 +60,12 @@ class FasterWhisperTranscriber:
                 wav_file.setsampwidth(2)
                 wav_file.setframerate(sample_rate_hz)
                 wav_file.writeframes(audio_bytes)
-            segments, _info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
+            segments, _info = self._model.transcribe(
+                str(wav_path),
+                language=language,
+                vad_filter=True,
+                initial_prompt=os.getenv("WHISPER_INITIAL_PROMPT", _DEFAULT_INITIAL_PROMPT),
+            )
             return " ".join(segment.text.strip() for segment in segments if segment.text).strip()
         finally:
             wav_path.unlink(missing_ok=True)

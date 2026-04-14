@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .citations import attach_citations
-from .text_utils import clean_answer, iter_final_text
+from .text_utils import clean_answer, clean_voice_output, iter_final_text
 from .memory import build_memory_block
 from .consent import (
     consent_denied_response,
@@ -1282,6 +1282,9 @@ async def voice_ws(websocket: WebSocket) -> None:
     # Helper: send text + TTS audio to client (for hardcoded messages)
     # ------------------------------------------------------------------
     async def _send_tts_message(text: str) -> None:
+        text = clean_voice_output(text)
+        if not text:
+            return
         await websocket.send_json({
             "type": "response.output_text.delta",
             "session_id": session_id,
@@ -1453,64 +1456,59 @@ async def voice_ws(websocket: WebSocket) -> None:
     )
     client_name_raw = await _wait_for_speech()
 
-    # Fast check: if input looks like a question, skip name extraction
-    _raw_lower = client_name_raw.strip().lower()
-    # Topic words that indicate a business question, not a name introduction.
-    # "привет" and "здравствуйте" are NOT here because "Привет, я Евгений" is a name.
-    _QUESTION_TOPICS = {"какой", "какая", "какие", "где", "когда", "сколько",
-                        "можно", "расскажи", "подскажи", "объясни",
-                        "адрес", "документы", "условия", "ставка", "аванс",
-                        "офис", "процент", "ставку", "погода", "директор"}
-    _words_in_input = set(_raw_lower.replace(",", " ").replace(".", " ").replace("?", " ").split())
-    # It's a question if it contains topic words AND doesn't look like a name intro
-    _has_name_intro = any(w in _raw_lower for w in ("меня зовут", "я ", "мне имя", "зовите"))
-    _is_question = "?" in client_name_raw or (bool(_words_in_input & _QUESTION_TOPICS) and not _has_name_intro)
-
+    # LLM-based first utterance classifier: handles names in any grammatical case,
+    # questions, and combined name+question inputs without hardcoded patterns.
     from .llm import call_openai_compatible
-    if _is_question:
-        client_name = "друг"
-    else:
-        try:
-            name_resp = await asyncio.to_thread(
-                call_openai_compatible,
-                base_url=settings.llm.fast_base_url or settings.llm.base_url,
-                model=settings.llm.fast_model or settings.llm.model,
-                system_prompt="Извлеки имя человека из текста. Верни ТОЛЬКО имя, одно слово, без пояснений. Если имя не найдено, верни слово 'друг'.",
-                user_prompt=client_name_raw,
-                temperature=0.0,
-                max_tokens=10,
-                timeout_sec=5,
-            )
-            client_name = name_resp.text.strip().strip('"').strip("'").strip(".").title()
-        except Exception:  # noqa: BLE001
-            client_name = client_name_raw.strip().split()[0].title()
-        if not client_name or len(client_name) > 20 or len(client_name) < 2:
-            client_name = "друг"
-        else:
-            # Verify it's actually a name using pymorphy3, normalize to nominative
-            try:
-                import pymorphy3
-                _morph_name = pymorphy3.MorphAnalyzer()
-                parsed = _morph_name.parse(client_name)[0]
-                if "Name" in parsed.tag:
-                    client_name = parsed.normal_form.title()
-                else:
-                    client_name = "друг"
-            except Exception:  # noqa: BLE001
-                pass
-
-    # If no name was found, the first message is likely a question, not a name.
-    # Skip the "Очень приятно" greeting and process it as a real question.
-    # If name WAS found but message also contains a question, greet AND answer.
+    client_name = "друг"
     first_question = None
-    _also_has_question = _has_name_intro and bool(_words_in_input & _QUESTION_TOPICS)
+    try:
+        _classify_resp = await asyncio.to_thread(
+            call_openai_compatible,
+            base_url=settings.llm.fast_base_url or settings.llm.base_url,
+            model=settings.llm.fast_model or settings.llm.model,
+            system_prompt=(
+                "Проанализируй первую реплику клиента в разговоре с голосовым помощником. "
+                "Верни строго JSON без пояснений:\n"
+                '{"type": "name"|"question"|"both", "name": "имя в именительном падеже или null", "question": "текст вопроса или null"}\n\n'
+                "type=name: клиент представился (Привет я Сергей / Меня зовут Илья / Можно Илье обращаться / Евгений)\n"
+                "type=question: клиент задал вопрос без имени (Какие условия лизинга? / Сколько стоит?)\n"
+                "type=both: клиент назвал имя И задал вопрос (Привет, я Никита, какие условия лизинга?)\n\n"
+                "Имя ВСЕГДА в именительном падеже: Илье→Илья, Сергею→Сергей, Никитой→Никита.\n"
+                "Если не уверен что это имя, верни null."
+            ),
+            user_prompt=client_name_raw,
+            temperature=0.0,
+            max_tokens=80,
+            timeout_sec=5,
+        )
+        _parsed = None
+        _text = _classify_resp.text.strip()
+        _js_start = _text.find("{")
+        _js_end = _text.rfind("}") + 1
+        if _js_start >= 0 and _js_end > _js_start:
+            import json as _json_mod
+            _parsed = _json_mod.loads(_text[_js_start:_js_end])
+
+        if _parsed:
+            _utype = _parsed.get("type", "question")
+            _uname = _parsed.get("name") or None
+            _uquestion = _parsed.get("question") or None
+
+            if _uname and 2 <= len(_uname) <= 20:
+                client_name = _uname.strip().title()
+            if _utype in ("question", "both") and _uquestion:
+                first_question = _uquestion
+            elif _utype == "question":
+                first_question = client_name_raw
+    except Exception:  # noqa: BLE001
+        first_question = client_name_raw
+
     if client_name == "друг":
-        first_question = client_name_raw  # save the original message, answer it directly
-        # No greeting -- go straight to answering the question
+        if not first_question:
+            first_question = client_name_raw
     else:
-        if _also_has_question:
+        if first_question:
             await _send_tts_message(f"Очень приятно, {client_name}!")
-            first_question = client_name_raw  # name + question combo, answer the question too
         else:
             await _send_tts_message(f"Очень приятно, {client_name}! Чем могу помочь?")
 
@@ -1779,6 +1777,9 @@ async def _jambonz_send_tts(
 ) -> None:
     """Synthesize text and send audio back as binary WebSocket frames."""
     try:
+        text = clean_voice_output(text)
+        if not text:
+            return
         print(f"[Jambonz:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
         audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
         audio_b64 = audio_resp.get("audio_b64") or ""
@@ -2155,15 +2156,15 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     # Phone AEC suppresses mic during TTS, making caller audio quiet
                     # but Silero VAD can still detect speech patterns at low energy
                     _prob = vad.last_probability
-                    if _prob >= 0.35:
+                    if _prob >= 0.40:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
                     else:
                         session._barge_vad_count = max(0, getattr(session, '_barge_vad_count', 0) - 1)
 
-                    # 3 consecutive VAD detections (~96ms) = confirmed speech
-                    if getattr(session, '_barge_vad_count', 0) >= 3:
+                    # 4 consecutive VAD detections (~128ms) = confirmed speech
+                    if getattr(session, '_barge_vad_count', 0) >= 4:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._tts_start_time = 0
