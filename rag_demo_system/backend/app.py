@@ -711,18 +711,23 @@ async def _stream_voice_response(
     has_sms_intent = any(t in message.lower() for t in sms_triggers)
     tools_used_in_session = bool(session.tool_calls_this_turn)
 
-    # Fast intent classification (only when tools are available)
+    # Smart intent classifier: sees last 7 turns of conversation, extracts
+    # structured data (subject, cost, currency) for immediate tool calling.
     needs_tool = False
+    _extracted_hints: dict[str, Any] = {}
     if tool_schemas:
-        # If tools were already used, use LLM to classify whether this
-        # new message needs a tool or is a general KB question.
-        # If tools were never used, also classify to catch first calc request.
-        # Build richer context for classifier: include recent tool calls
-        _tool_context = ""
+        # Build conversation context: last 7 turns (not just 400 chars)
+        _recent_turns = chat_session.transcript[-14:] if chat_session.transcript else []  # 7 pairs
+        _conv_lines = []
+        for _turn in _recent_turns:
+            _role = "Клиент" if _turn.get("role") == "user" else "Бот"
+            _conv_lines.append(f"{_role}: {_turn.get('text', '')}")
+        _conv_context = "\n".join(_conv_lines) if _conv_lines else "начало разговора"
+
+        _tool_history = ""
         if session.tool_calls_this_turn:
-            _last_tools = [tc.get("tool", "") for tc in session.tool_calls_this_turn[-3:]]
-            _tool_context = f"В этом разговоре уже вызывались инструменты: {', '.join(_last_tools)}. "
-        _dialog_context = memory_block[-400:] if memory_block else "начало разговора"
+            _last_tools = [f"{tc.get('tool', '')}({tc.get('ok', '?')})" for tc in session.tool_calls_this_turn[-3:]]
+            _tool_history = f"Инструменты в этом разговоре: {', '.join(_last_tools)}"
 
         try:
             classify_resp = await asyncio.to_thread(
@@ -730,38 +735,63 @@ async def _stream_voice_response(
                 base_url=effective_base_url,
                 model=effective_model,
                 system_prompt=(
-                    "Классифицируй сообщение клиента. Ответь ОДНИМ словом:\n"
-                    "TOOL - если клиент:\n"
-                    "  - просит расчёт, пересчёт, калькуляцию лизинга\n"
-                    "  - хочет изменить параметры расчёта (аванс, срок, сумму, валюту)\n"
-                    "  - просит отправить СМС, график платежей\n"
-                    "  - подтверждает действие: да, давай, отправь, хорошо, ладно, согласен\n"
-                    "  - говорит о пересчёте, изменении параметров после предыдущего расчёта\n"
-                    "RAG - если клиент задаёт информационный вопрос о компании, условиях, документах\n"
-                    "Ответь ТОЛЬКО одно слово: TOOL или RAG"
+                    "Ты классификатор сообщений голосового бота лизинговой компании. "
+                    "Проанализируй НОВОЕ сообщение клиента в контексте диалога.\n\n"
+                    "Верни строго JSON:\n"
+                    '{"intent": "TOOL" или "RAG", "subject": "тип предмета или null", '
+                    '"cost": число или null, "currency": "BYN/USD/EUR или null", '
+                    '"action": "calculate/recalculate/sms/change_param/confirm или null"}\n\n'
+                    "intent=TOOL если клиент:\n"
+                    "- хочет рассчитать, взять в лизинг, узнать платежи (даже без слова 'рассчитай')\n"
+                    "- называет предмет + стоимость (это запрос на расчёт)\n"
+                    "- просит изменить параметры предыдущего расчёта\n"
+                    "- подтверждает действие (да, давай, хорошо) после предложения бота\n"
+                    "- просит отправить СМС или график\n\n"
+                    "intent=RAG если клиент задаёт информационный вопрос (адрес, документы, условия, часы работы)\n\n"
+                    "subject: определи тип из контекста. Легковой автомобиль, Грузовой автомобиль, Спецтехника, Оборудование, Недвижимость, Прочий транспорт.\n"
+                    "Если клиент назвал марку, определи тип (легковой/грузовой).\n"
+                    "cost/currency: извлеки если клиент назвал в ЭТОМ или ПРЕДЫДУЩИХ сообщениях.\n"
+                    "Никаких пояснений, только JSON."
                 ),
-                user_prompt=f"{_tool_context}Контекст: {_dialog_context}\nСообщение: {message}",
+                user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=5,
+                max_tokens=120,
                 timeout_sec=5,
             )
-            intent = classify_resp.text.strip().upper()
-            needs_tool = "TOOL" in intent
+            _raw = classify_resp.text.strip()
+            _js_start = _raw.find("{")
+            _js_end = _raw.rfind("}") + 1
+            if _js_start >= 0 and _js_end > _js_start:
+                import json as _json_classify
+                _parsed = _json_classify.loads(_raw[_js_start:_js_end])
+                needs_tool = str(_parsed.get("intent", "")).upper() == "TOOL"
+                # Extract hints for tool path
+                if _parsed.get("subject"):
+                    _extracted_hints["subject"] = _parsed["subject"]
+                if _parsed.get("cost"):
+                    _extracted_hints["cost"] = _parsed["cost"]
+                if _parsed.get("currency"):
+                    _extracted_hints["currency"] = _parsed["currency"]
+                if _parsed.get("action"):
+                    _extracted_hints["action"] = _parsed["action"]
+            else:
+                needs_tool = "TOOL" in _raw.upper()
         except Exception:
-            # Classification failed, fall back to keyword heuristic
+            # Fallback to keyword heuristic
             needs_tool = has_sms_intent or any(
                 t in message.lower() for t in
                 ["рассчит", "расчет", "расчёт", "посчит", "пересчит", "калькул",
-                 "аванс", "срок", "измени", "помен", "увелич", "уменьш"]
+                 "аванс", "срок", "измени", "помен", "увелич", "уменьш",
+                 "лизинг", "взять", "стоимость", "тысяч"]
             )
-            # If tools were already used and user confirms, treat as TOOL
             if not needs_tool and tools_used_in_session:
                 confirm_words = ["да", "давай", "хорошо", "ладно", "согласен", "отправь", "ок"]
                 if message.strip().lower().rstrip(".!,") in confirm_words:
                     needs_tool = True
-        # Also treat SMS intent as tool
         if has_sms_intent:
             needs_tool = True
+        if _extracted_hints:
+            print(f"[Classifier] intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
     sms_context = ""
@@ -835,9 +865,17 @@ async def _stream_voice_response(
             "НЕ отвечай текстом о расчёте — ВЫЗОВИ calculator. "
             "НЕ говори 'отправляю СМС' — ВЫЗОВИ send_sms.\n\n"
         )
+        # Inject extracted hints from classifier so LLM has structured data
+        _hints_text = ""
+        if _extracted_hints:
+            import json as _json_hints
+            _hints_text = (
+                f"Классификатор извлёк из диалога: {_json_hints.dumps(_extracted_hints, ensure_ascii=False)}. "
+                "Используй эти данные для вызова инструмента.\n\n"
+            )
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{_tool_instruction}{sms_context}{prev_calc_context}{message}"},
+            {"role": "user", "content": f"{_tool_instruction}{_hints_text}{sms_context}{prev_calc_context}{message}"},
         ]
     else:
         # RAG path: full context for KB questions
