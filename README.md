@@ -73,10 +73,13 @@ Russian-language voice assistant with SIP telephony, tool use, and RAG. This is 
 - Tool calling: leasing calculator (1C API), SMS sender (sms-assistent.by)
 - RAG with chunk deduplication (overlapping chunk removal at retrieval time)
 - LLM intent routing (greeting, company questions, off-topic, tools)
+- DTMF consent collection at call start (keypad 1/2, barge-in supported)
 - Conversation memory across turns
 - Stress dictionary for proper name pronunciation
 - Whisper hallucination filtering
 - Phone number TTS pronunciation fix
+- Post-call quality analytics (automatic per-session transcript + LLM analysis)
+- Self-improvement reports: KB gap detection, quality trends, flagged sessions
 
 ```
 rag_demo_system/
@@ -113,7 +116,9 @@ rag_demo_system/
 │   ├── smoke_test.sh           # Service verification + KB indexing
 │   ├── deploy_jambonz.sh       # SIP telephony deployment
 │   ├── restart_all.sh          # Full stack restart
-│   └── doctor.sh               # Health check
+│   ├── doctor.sh               # Health check
+│   ├── kb_gap_report.py        # Aggregate KB gaps across sessions
+│   └── quality_report.py       # Quality trends and flagged sessions
 └── tests/                      # Unit and integration tests
 ```
 
