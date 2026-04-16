@@ -742,7 +742,8 @@ async def _stream_voice_response(
                     "Верни строго JSON:\n"
                     '{"intent": "TOOL" или "RAG", "subject": "тип предмета или null", '
                     '"cost": число или null, "currency": "BYN/USD/EUR или null", '
-                    '"action": "calculate/recalculate/sms/change_param/confirm или null"}\n\n'
+                    '"client_type": "Физическое лицо/ИП/Юридическое лицо или null", '
+                    '"action": "calculate/recalculate/sms/change_param/confirm/clarify_client_type или null"}\n\n'
                     "intent=TOOL если клиент:\n"
                     "- хочет рассчитать, взять в лизинг, узнать платежи (даже без слова 'рассчитай')\n"
                     "- называет предмет + стоимость (это запрос на расчёт)\n"
@@ -752,8 +753,22 @@ async def _stream_voice_response(
                     "intent=RAG если клиент задаёт информационный вопрос (адрес, документы, условия, часы работы)\n\n"
                     "subject: определи тип из контекста. Легковой автомобиль, Грузовой автомобиль, Спецтехника, Оборудование, Недвижимость, Прочий транспорт.\n"
                     "Если клиент назвал марку, определи тип (легковой/грузовой).\n"
-                    "cost: извлеки число ТОЛЬКО если клиент ЯВНО назвал стоимость.\n"
-                    "currency: ТОЛЬКО если клиент ЯВНО сказал 'долларов', 'евро', 'USD', 'EUR'. Если не сказал, ставь null. НЕ угадывай валюту.\n"
+                    "cost: извлеки число СТРОГО из НОВОГО сообщения клиента. "
+                    "ЗАПРЕЩЕНО брать стоимость из предыдущих сообщений, ответов бота или результатов расчётов. "
+                    "Если в НОВОМ сообщении клиент не назвал число, ставь null.\n"
+                    "currency: ТОЛЬКО если клиент ЯВНО сказал 'долларов', 'евро', 'USD', 'EUR' в НОВОМ сообщении. "
+                    "Если не сказал, ставь null. НЕ угадывай валюту.\n"
+                    "client_type: извлеки ТОЛЬКО если клиент ЯВНО указал тип в НОВОМ сообщении. "
+                    "'физлицо/физическое лицо' = 'Физическое лицо', "
+                    "'ИП/предприниматель/индивидуальный' = 'ИП', "
+                    "'юрлицо/юридическое/ООО/компания/фирма' = 'Юридическое лицо'. "
+                    "Если не указал, ставь null.\n\n"
+                    "БИЗНЕС-ПРАВИЛА:\n"
+                    "Грузовые, спецтехника, оборудование, недвижимость: ТОЛЬКО для ИП и юрлиц.\n"
+                    "USD/EUR: ТОЛЬКО для ИП и юрлиц. Физлица только BYN.\n"
+                    "Если клиент хочет такой предмет или валюту И его client_type НЕИЗВЕСТЕН из всего диалога, "
+                    "ставь action='clarify_client_type'.\n"
+                    "Если client_type уже ясен из предыдущих сообщений, не переспрашивай.\n\n"
                     "Никаких пояснений, только JSON."
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
@@ -775,6 +790,8 @@ async def _stream_voice_response(
                     _extracted_hints["cost"] = _parsed["cost"]
                 if _parsed.get("currency"):
                     _extracted_hints["currency"] = _parsed["currency"]
+                if _parsed.get("client_type"):
+                    _extracted_hints["client_type"] = _parsed["client_type"]
                 if _parsed.get("action"):
                     _extracted_hints["action"] = _parsed["action"]
             else:
@@ -795,7 +812,7 @@ async def _stream_voice_response(
         if has_sms_intent:
             needs_tool = True
         # Override: if classifier extracted a tool action, force TOOL regardless of intent field
-        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm"):
+        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm", "clarify_client_type"):
             needs_tool = True
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
 
@@ -878,6 +895,8 @@ async def _stream_voice_response(
         }
         if _extracted_hints.get("currency"):
             _direct_params["currency"] = _extracted_hints["currency"]
+        if _extracted_hints.get("client_type"):
+            _direct_params["client_type"] = _extracted_hints["client_type"]
 
         # For recalculation/param change: merge with previous calc params
         if _action in ("recalculate", "change_param") and session.tool_calls_this_turn:
@@ -890,11 +909,14 @@ async def _stream_voice_response(
                         _merged[_k] = _v
                 _direct_params = _merged
 
-        # Check subject restrictions for individuals before calling API
+        # Check subject restrictions for individuals before calling API.
+        # Only block when client_type is EXPLICITLY individual (not defaulted).
+        # If client_type is unknown, the classifier should have set clarify_client_type.
+        # This is a lightweight fallback in case the classifier missed it.
         _subj_lower = _direct_params.get("subject", "").lower()
-        _client = _direct_params.get("client_type", "Физическое лицо")
+        _client = _direct_params.get("client_type")  # None if not set
         _individual_subjects = {"легковой автомобиль", "прочий транспорт"}
-        if "Физическое" in str(_client) and _subj_lower not in _individual_subjects and _subj_lower:
+        if _client and "Физическое" in str(_client) and _subj_lower not in _individual_subjects and _subj_lower:
             _direct_tool_result = {
                 "ok": False,
                 "error": f"Для физических лиц доступен лизинг только легковых автомобилей и прочего транспорта. "
@@ -935,7 +957,29 @@ async def _stream_voice_response(
                 print(f"[DirectTool] ERROR: {_texc}", flush=True)
                 _direct_tool_result = None
 
-    if _direct_tool_result and _direct_tool_result.get("ok"):
+    # ── Clarify client type: classifier detected restricted subject/currency ──
+    _clarify_needed = needs_tool and _extracted_hints.get("action") == "clarify_client_type"
+    if _clarify_needed:
+        _subj = _extracted_hints.get("subject", "предмет лизинга")
+        _cur = _extracted_hints.get("currency")
+        _reason_parts = []
+        if _subj.lower() not in {"легковой автомобиль", "прочий транспорт"}:
+            _reason_parts.append(f"{_subj} доступен для юридических лиц и ИП")
+        if _cur and _cur != "BYN":
+            _reason_parts.append(f"расчёт в {_cur} доступен для юридических лиц и ИП")
+        _reason = "; ".join(_reason_parts) if _reason_parts else "для данного расчёта важен тип клиента"
+        print(f"[DirectTool] clarify_client_type: {_reason}", flush=True)
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Клиент хочет рассчитать лизинг. {_reason}. "
+                "Нужно уточнить тип клиента. Спроси КРАТКО (1 предложение): "
+                "они оформляют как физическое лицо, ИП или юридическое лицо? "
+                f"Сообщение клиента: {message}"
+            )},
+        ]
+        tool_schemas = []
+    elif _direct_tool_result and _direct_tool_result.get("ok"):
         # Tool executed successfully: LLM only presents the result
         _p = _direct_tool_result.get("params", {})
         _cur = _p.get("currency", "BYN")
@@ -959,23 +1003,17 @@ async def _stream_voice_response(
         ]
         tool_schemas = []  # No function calling needed, just present result
     elif _direct_tool_result and not _direct_tool_result.get("ok"):
-        # Tool failed: build specific error explanation
+        # Tool failed (fallback): explain the API error naturally.
+        # This catches cases the classifier didn't flag via clarify_client_type.
         _err_params = _direct_tool_result.get("params", {})
-        _err_currency = _err_params.get("currency", "BYN")
-        _err_client = _err_params.get("client_type", "Физическое лицо")
-        if _err_currency != "BYN" and "Физическое" in str(_err_client):
-            _err_explanation = (
-                f"Для физических лиц лизинг доступен только в белорусских рублях (BYN). "
-                f"Расчёт в {_err_currency} возможен для юридических лиц и ИП."
-            )
-        else:
-            _err_explanation = _direct_tool_result.get("error", "По заданным параметрам условия не найдены.")
+        _err_explanation = _direct_tool_result.get("error", "По заданным параметрам условия не найдены.")
+        print(f"[DirectTool] FALLBACK error handler: {_err_explanation[:80]}", flush=True)
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
                 f"Калькулятор вернул ошибку: {_err_explanation}\n"
                 f"Сообщение клиента: {message}\n\n"
-                "Объясни кратко (1-2 предложения). Предложи пересчитать в BYN."
+                "Объясни кратко (1-2 предложения). Предложи альтернативу или уточни параметры."
             )},
         ]
         tool_schemas = []
@@ -2023,8 +2061,9 @@ async def _jambonz_process_utterance(
         session.assistant_speaking = False
         return
 
-    # Echo detection: if STT output is a fragment of recent bot speech, discard.
+    # Echo detection: if STT output matches recent bot speech, discard.
     # Catches speaker-mode echo where phone mic picks up bot's own TTS.
+    # Uses word-set overlap (not just substring) to catch Whisper paraphrasing.
     _chat_sess = state.get(session_id)
     if _chat_sess and _chat_sess.transcript:
         _recent_bot = " ".join(
@@ -2032,10 +2071,20 @@ async def _jambonz_process_utterance(
             if t.get("role") == "assistant"
         ).upper()
         _text_up = text.upper().strip()
-        if len(_text_up) >= 3 and _recent_bot and _text_up in _recent_bot:
-            print(f"[Jambonz:{session_id[:8]}] Echo filtered: '{text}' (fragment of bot speech)", flush=True)
-            session.assistant_speaking = False
-            return
+        if len(_text_up) >= 3 and _recent_bot:
+            # Method 1: exact substring (original, catches literal fragments)
+            _is_echo = _text_up in _recent_bot
+            # Method 2: word-set overlap (catches Whisper paraphrasing of echo)
+            if not _is_echo:
+                _user_words = set(_text_up.split())
+                _bot_words = set(_recent_bot.split())
+                if len(_user_words) >= 2:
+                    _overlap = len(_user_words & _bot_words) / len(_user_words)
+                    _is_echo = _overlap >= 0.6
+            if _is_echo:
+                print(f"[Jambonz:{session_id[:8]}] Echo filtered: '{text}' (matches bot speech)", flush=True)
+                session.assistant_speaking = False
+                return
 
     print(f"[Jambonz:{session_id[:8]}] STT: {text}", flush=True)
     await broadcast_sip_event({
@@ -2331,12 +2380,13 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
 
                 # Barge-in on clean caller audio (mono mode, separated tracks)
                 if session.assistant_speaking:
-                    # Skip first 1.5s of TTS (VAD model needs warmup)
+                    # Skip first 0.8s of TTS (VAD model warmup).
+                    # Was 1.5s but that blocked early barge-in on short responses.
                     if not hasattr(session, '_tts_start_time') or session._tts_start_time == 0:
                         session._tts_start_time = asyncio.get_event_loop().time()
                         session._barge_vad_count = 0
                     _tts_elapsed = asyncio.get_event_loop().time() - session._tts_start_time
-                    if _tts_elapsed < 1.5:
+                    if _tts_elapsed < 0.8:
                         continue
 
                     # Maintain pre-roll buffer (rolling 300ms of audio during TTS)
@@ -2362,6 +2412,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session._tts_start_time = 0
                         session._barge_vad_count = 0
                         session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
+                        session._was_barge_in = True  # type: ignore[attr-defined]
                         # Pre-roll: save buffered audio to prepend to next speech segment.
                         # This captures the speech onset that triggered barge-in.
                         vad.reset()
@@ -2401,14 +2452,19 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     })
 
                 if speech_audio is not None:
-                    # Guard: 0.8s minimum at 16kHz (25600 bytes) to prevent Whisper hallucinations
-                    if len(speech_audio) < 25600:
+                    # Minimum speech guard: prevents Whisper hallucinations on noise bursts.
+                    # After barge-in, accept shorter speech (0.4s) to catch "Da", "Net", "OK".
+                    # Normal listening uses 0.8s guard since short bursts are usually noise.
+                    _was_bi = getattr(session, '_was_barge_in', False)
+                    _min_bytes = 12800 if _was_bi else 25600  # 0.4s vs 0.8s at 16kHz
+                    if len(speech_audio) < _min_bytes:
                         print(
                             f"[Jambonz:{session_id[:8]}] VAD: speech_end SKIPPED "
-                            f"(too short: {len(speech_audio)} bytes)",
+                            f"(too short: {len(speech_audio)} bytes, min={_min_bytes}, barge_in={_was_bi})",
                             flush=True,
                         )
                         continue
+                    session._was_barge_in = False  # type: ignore[attr-defined]
 
                     from scipy.signal import resample_poly as _resample_poly
                     import numpy as _np

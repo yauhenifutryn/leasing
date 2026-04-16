@@ -211,7 +211,7 @@ info "Account linked to voice-bot application"
 ENV_FILE="$APP_DIR/.env"
 
 # Multiple SIP accounts: test (dev), sergey, ilya
-SIP_USERS="${JAMBONZ_SIP_USERS:-test sergey ilya}"
+SIP_USERS="${JAMBONZ_SIP_USERS:-test sergey ilya john mike victor}"
 declare -A SIP_PASSWORDS
 
 for _SIP_U in $SIP_USERS; do
