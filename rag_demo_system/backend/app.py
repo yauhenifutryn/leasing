@@ -622,73 +622,24 @@ async def _stream_voice_response(
         if user_msgs:
             rag_query = " ".join(m[:60] for m in user_msgs[-2:]) + " " + message
 
-    # --- RAG retrieval ---
-    _t_rag_start = time.time()
-    retrieval = await asyncio.to_thread(
-        engine.retrieve, rag_query, True, True, session_id,
-    )
-    t_retrieval_done = time.time()
-    print(f"[Latency:{session_id[:8]}] RAG: {(t_retrieval_done - _t_rag_start)*1000:.0f}ms", flush=True)
-    timings: dict[str, Any] = dict(retrieval.get("timings") or {})
-    final_chunks = retrieval.get("final") or []
-
-    if not retrieval.get("ok") or not final_chunks:
-        answer = settings.app.strict_refusal_text
-        await websocket.send_json({
-            "type": "response.output_text.delta",
-            "session_id": session_id,
-            "delta": answer,
-        })
-        try:
-            audio_resp = await asyncio.to_thread(
-                synthesize_audio, answer, session_id,
-            )
-            if audio_resp.get("audio_b64"):
-                await websocket.send_json({
-                    "type": "response.output_audio.delta",
-                    "session_id": session_id,
-                    "delta": audio_resp["audio_b64"],
-                    "sample_rate_hz": audio_resp.get("sample_rate_hz"),
-                })
-        except Exception:  # noqa: BLE001
-            pass
-        t_now = time.time()
-        state.log({
-            "event": "voice_turn", "question_id": question_id,
-            "stack_id": session.stack_id, "session_id": session_id,
-            "backend": backend, "brain_model": brain_model,
-            "stt_provider": session.stt_provider, "tts_provider": session.tts_provider,
-            "transcript": message, "speech_stopped": t_speech_stopped,
-            "stt_done": t_stt_done, "retrieval_done": t_retrieval_done,
-            "llm_first_token": t_retrieval_done, "tts_first_chunk": t_now,
-            "playback_started": t_now,
-            "primary_kpi_ms": (t_now - t_speech_stopped) * 1000,
-        })
-        await websocket.send_json({
-            "type": "response.done", "session_id": session_id,
-            "backend": backend, "used_knowledge": [],
-            "citations": [], "timings": timings,
-        })
-        return
-
-    # --- Build prompt ---
+    # --- Build prompt (needed before parallel tasks) ---
     system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
-    context_block = "\n\n".join(
-        [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
-    )
+
+    # --- Start RAG retrieval in background (runs while classifier executes) ---
+    _t_rag_start = time.time()
+    _rag_task = asyncio.create_task(asyncio.to_thread(
+        engine.retrieve, rag_query, True, True, session_id,
+    ))
+    # RAG result awaited after classifier (see _rag_await below).
+    # context_block, weak_hint built after await.
     expanded = any(trigger in message.lower() for trigger in settings.llm.expand_triggers)
     length_hint = (
         "Это голосовой разговор. Ответ: 1-2 коротких предложения. Самое важное. Не заканчивай каждый ответ вопросом. Задавай вопрос только если тебе реально нужна информация для продолжения."
         if not expanded
         else "Ответь подробнее, но кратко. Максимум три-четыре предложения."
     )
-    weak_context = bool(retrieval.get("weak"))
-    weak_hint = (
-        "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
-        "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
-    ) if weak_context else ""
     # Get tool schemas early (only calculator; SMS is handled deterministically from code)
     tool_schemas = []
     _calc_tool = get_all_tools().get("calculator")
@@ -845,6 +796,49 @@ async def _stream_voice_response(
             needs_tool = True
         _t_classify_ms = (time.time() - _t_classify_start) * 1000
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints} ({_t_classify_ms:.0f}ms)", flush=True)
+
+    # --- Await RAG retrieval (started before classifier, should be done by now) ---
+    retrieval = await _rag_task
+    t_retrieval_done = time.time()
+    print(f"[Latency:{session_id[:8]}] RAG: {(t_retrieval_done - _t_rag_start)*1000:.0f}ms (parallel)", flush=True)
+    timings: dict[str, Any] = dict(retrieval.get("timings") or {})
+    final_chunks = retrieval.get("final") or []
+    context_block = "\n\n".join(
+        [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
+    )
+    weak_context = bool(retrieval.get("weak"))
+    weak_hint = (
+        "Контекст может быть неполным. Дай ближайшую релевантную информацию из фрагментов, "
+        "скажи, что точных данных может не хватать, и задай уточняющий вопрос.\n\n"
+    ) if weak_context else ""
+
+    # Refusal: no RAG chunks found and not a tool request
+    if (not retrieval.get("ok") or not final_chunks) and not needs_tool:
+        answer = settings.app.strict_refusal_text
+        await websocket.send_json({
+            "type": "response.output_text.delta",
+            "session_id": session_id,
+            "delta": answer,
+        })
+        try:
+            audio_resp = await asyncio.to_thread(synthesize_audio, answer, session_id)
+            if audio_resp.get("audio_b64"):
+                await websocket.send_json({
+                    "type": "response.output_audio.delta",
+                    "session_id": session_id,
+                    "delta": audio_resp["audio_b64"],
+                    "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+        await websocket.send_json({
+            "type": "response.done", "session_id": session_id,
+            "backend": backend, "used_knowledge": [], "citations": [], "timings": timings,
+        })
+        return
+
+    _t_total_parallel = (t_retrieval_done - _t_rag_start) * 1000
+    print(f"[Latency:{session_id[:8]}] Total RAG+Classifier parallel: {_t_total_parallel:.0f}ms", flush=True)
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
     # Trigger on: explicit SMS keywords OR classifier detected sms action
