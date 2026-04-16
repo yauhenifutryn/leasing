@@ -770,6 +770,9 @@ async def _stream_voice_response(
                     "Если клиент хочет такой предмет или валюту И его client_type НЕИЗВЕСТЕН из всего диалога, "
                     "ставь action='clarify_client_type'.\n"
                     "Если client_type уже ясен из предыдущих сообщений, не переспрашивай.\n\n"
+                    "ЛИМИТЫ КАЛЬКУЛЯТОРА:\n"
+                    "prepaid: минимум 10%. Если клиент просит 0% или 5%, ставь action='invalid_param'.\n"
+                    "Если клиент просит аванс ниже 10%, ставь action='invalid_param'.\n\n"
                     "Никаких пояснений, только JSON."
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
@@ -817,7 +820,7 @@ async def _stream_voice_response(
         if has_sms_intent:
             needs_tool = True
         # Override: if classifier extracted a tool action, force TOOL regardless of intent field
-        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm", "clarify_client_type"):
+        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm", "clarify_client_type", "invalid_param"):
             needs_tool = True
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
 
@@ -1002,6 +1005,24 @@ async def _stream_voice_response(
                 "Нужно уточнить тип клиента. Спроси КРАТКО (1 предложение): "
                 "они оформляют как физическое лицо, ИП или юридическое лицо? "
                 f"Сообщение клиента: {message}"
+            )},
+        ]
+        tool_schemas = []
+    elif needs_tool and _extracted_hints.get("action") == "invalid_param":
+        # Classifier detected a parameter that will fail the calculator
+        _invalid_prepaid = _extracted_hints.get("prepaid")
+        if _invalid_prepaid is not None and _invalid_prepaid < 10:
+            _invalid_reason = f"Минимальный аванс для лизинга составляет 10%. Клиент просит {_invalid_prepaid}%."
+        else:
+            _invalid_reason = "Указанные параметры выходят за лимиты калькулятора."
+        print(f"[DirectTool] invalid_param: {_invalid_reason}", flush=True)
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"{_invalid_reason}\n"
+                f"Сообщение клиента: {message}\n\n"
+                "Объясни кратко (1 предложение), что минимальный аванс 10%. "
+                "Предложи рассчитать с 10%."
             )},
         ]
         tool_schemas = []
