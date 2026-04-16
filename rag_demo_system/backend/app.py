@@ -1070,6 +1070,20 @@ async def _stream_voice_response(
         # Tool executed successfully: LLM only presents the result
         _p = _direct_tool_result.get("params", {})
         _cur = _p.get("currency", "BYN")
+        _defaulted = set(_direct_tool_result.get("defaulted", []))
+        _defaults_note = ""
+        if _defaulted:
+            _def_parts = []
+            if "prepaid" in _defaulted:
+                _def_parts.append(f"аванс {_p.get('prepaid', 30)}% (по умолчанию)")
+            if "term" in _defaulted:
+                _def_parts.append(f"срок {_p.get('term', 36)} мес. (по умолчанию)")
+            if "client_type" in _defaulted:
+                _def_parts.append(f"тип клиента: {_p.get('client_type', '?')} (по умолчанию)")
+            if "type_schedule" in _defaulted:
+                _def_parts.append("аннуитетный график (по умолчанию)")
+            if _def_parts:
+                _defaults_note = f" Параметры по умолчанию: {', '.join(_def_parts)}."
         _result_summary = (
             f"Аванс {_p.get('prepaid', 30)}%: {_direct_tool_result.get('advance_sum', '?')} {_cur}. "
             f"Ежемесячный платёж: {_direct_tool_result.get('payment_min', '?')} {_cur}. "
@@ -1077,6 +1091,7 @@ async def _stream_voice_response(
             f"Общая сумма: {_direct_tool_result.get('total', '?')} {_cur}. "
             f"Удорожание: {_direct_tool_result.get('increase_percent', '?')}%. "
             f"Срок: {_direct_tool_result.get('num_payments', '?')} мес."
+            f"{_defaults_note}"
         )
         print(f"[DirectTool] presenting: {_result_summary[:100]}", flush=True)
         llm_messages = [

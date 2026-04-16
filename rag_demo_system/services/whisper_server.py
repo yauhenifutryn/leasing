@@ -13,8 +13,9 @@ from pydantic import BaseModel
 # Domain vocabulary for Whisper: biases transcription towards car brands,
 # leasing terms, and financial amounts common in Belarus leasing calls.
 _DEFAULT_INITIAL_PROMPT = (
-    "Клиент звонит в компанию Микро Лизинг по вопросам лизинга автомобилей "
-    "и грузового транспорта в Беларуси. "
+    "Клиент звонит в компанию Микро Лизинг. "
+    "Типы клиентов: ИП (индивидуальный предприниматель), физическое лицо, юридическое лицо. "
+    "Лизинг автомобилей и грузового транспорта в Беларуси. "
     "Марки: Volkswagen Фольксваген, Toyota Тойота, BMW бэха, "
     "Mercedes-Benz мерс, Audi аудюха, Hyundai Хёндай, Kia Киа, "
     "Skoda Шкода, Renault Рено, Nissan Ниссан, Mazda Мазда, Ford Форд, "
