@@ -1034,9 +1034,11 @@ async def _stream_voice_response(
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
+                f"{memory_block}"
                 f"Клиент хочет рассчитать лизинг. {_reason}. "
-                "Нужно уточнить тип клиента. Спроси КРАТКО (1 предложение): "
-                "они оформляют как физическое лицо, ИП или юридическое лицо? "
+                "Если сообщение клиента действительно связано с расчётом, "
+                "спроси КРАТКО тип клиента: физическое лицо, ИП или юридическое лицо. "
+                "Если сообщение не про расчёт, просто ответь на вопрос клиента.\n\n"
                 f"Сообщение клиента: {message}"
             )},
         ]
@@ -1052,6 +1054,7 @@ async def _stream_voice_response(
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
+                f"{memory_block}"
                 f"{_invalid_reason}\n"
                 f"Сообщение клиента: {message}\n\n"
                 "Объясни кратко (1 предложение), что минимальный аванс 10%. "
@@ -1074,6 +1077,7 @@ async def _stream_voice_response(
         llm_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
+                f"{memory_block}"
                 f"{_param_summary}\n"
                 f"Сообщение клиента: {message}\n\n"
                 "Клиент хочет изменить параметры. Назови текущие значения (аванс, срок) "
