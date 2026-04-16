@@ -892,17 +892,34 @@ async def _stream_voice_response(
         and session.tool_calls_this_turn
     )
     _param_change_params: dict[str, Any] | None = None
+    _change_no_new_value = False  # True when user asks about changing but gives no value
     if _is_param_change:
         _prev = next((tc for tc in reversed(session.tool_calls_this_turn)
                       if tc.get("tool") == "calculator"), None)
         if _prev and _prev.get("params"):
             import json as _json_change
-            _param_change_params = dict(_prev["params"])
-            # Override only what the classifier extracted in the new message
-            for _k, _v in _extracted_hints.items():
-                if _k in ("subject", "cost", "currency", "prepaid", "term",
-                          "client_type", "condition_new", "type_schedule") and _v is not None:
-                    _param_change_params[_k] = _v
+            # Check if classifier actually extracted any NEW changeable field
+            _changeable = ("prepaid", "term", "currency", "client_type", "condition_new", "type_schedule")
+            _has_new_value = any(_extracted_hints.get(k) is not None for k in _changeable)
+            if not _has_new_value:
+                # User asked about changing but didn't specify a value.
+                # Present current params, ask what to change. Don't re-call the API.
+                _change_no_new_value = True
+                _direct_tool_result = _prev.get("result")
+                print(f"[DirectTool] change_param: no new values, presenting current params", flush=True)
+            else:
+                _param_change_params = dict(_prev["params"])
+                # Override only what the classifier extracted in the new message
+                for _k, _v in _extracted_hints.items():
+                    if _k in ("subject", "cost", "currency", "prepaid", "term",
+                              "client_type", "condition_new", "type_schedule") and _v is not None:
+                        # Convert prepaid amount to percentage if it looks like an amount
+                        if _k == "prepaid" and _v > 100:
+                            _prev_cost = _param_change_params.get("cost", 0)
+                            if _prev_cost > 0:
+                                _v = round((_v / _prev_cost) * 100, 1)
+                                print(f"[DirectTool] prepaid amount {_extracted_hints['prepaid']} -> {_v}%", flush=True)
+                        _param_change_params[_k] = _v
             print(f"[DirectTool] change_param: {_json_change.dumps({k: v for k, v in _extracted_hints.items() if k != 'action'}, ensure_ascii=False)}", flush=True)
 
     # If classifier detected tool intent but no cost and not a param change,
@@ -1023,6 +1040,29 @@ async def _stream_voice_response(
                 f"Сообщение клиента: {message}\n\n"
                 "Объясни кратко (1 предложение), что минимальный аванс 10%. "
                 "Предложи рассчитать с 10%."
+            )},
+        ]
+        tool_schemas = []
+    elif _change_no_new_value and _direct_tool_result and _direct_tool_result.get("ok"):
+        # User asked about changing params but didn't specify a new value.
+        # Present current params and ask what they want to change.
+        _p = _direct_tool_result.get("params", {})
+        _cur = _p.get("currency", "BYN")
+        _param_summary = (
+            f"Текущие параметры: аванс {_p.get('prepaid', 30)}%, "
+            f"срок {_p.get('term', 36)} мес., "
+            f"валюта {_cur}, "
+            f"тип графика {'аннуитетный' if _p.get('type_schedule') == '0' else 'убывающий'}."
+        )
+        print(f"[DirectTool] presenting current params for change request", flush=True)
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"{_param_summary}\n"
+                f"Сообщение клиента: {message}\n\n"
+                "Клиент хочет изменить параметры. Назови текущие значения (аванс, срок) "
+                "и спроси, какой именно параметр и на какое значение хочет изменить. "
+                "Минимальный аванс: 10%."
             )},
         ]
         tool_schemas = []
@@ -2444,16 +2484,19 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     # Feed audio to VAD
                     vad.feed(pcm_16k)
 
+                    # Barge-in threshold: 0.55 probability, 6 consecutive frames (~192ms).
+                    # Higher than normal VAD (0.40/4) to resist speaker echo feedback.
+                    # Real speech easily exceeds 0.55; speaker echo is typically 0.40-0.50.
                     _prob = vad.last_probability
-                    if _prob >= 0.40:
+                    if _prob >= 0.55:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
                     else:
                         session._barge_vad_count = max(0, getattr(session, '_barge_vad_count', 0) - 1)
 
-                    # 4 consecutive VAD detections (~128ms) = confirmed speech
-                    if getattr(session, '_barge_vad_count', 0) >= 4:
+                    # 6 consecutive VAD detections (~192ms) = confirmed speech
+                    if getattr(session, '_barge_vad_count', 0) >= 6:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._tts_start_time = 0
