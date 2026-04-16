@@ -728,7 +728,14 @@ async def _stream_voice_response(
 
         _tool_history = ""
         if session.tool_calls_this_turn:
-            _last_tools = [f"{tc.get('tool', '')}({tc.get('ok', '?')})" for tc in session.tool_calls_this_turn[-3:]]
+            _last_tools = []
+            for tc in session.tool_calls_this_turn[-3:]:
+                _tc_params = tc.get("params", {})
+                _tc_brief = f"{tc.get('tool', '')}(ok={tc.get('ok', '?')}"
+                if _tc_params.get("client_type"):
+                    _tc_brief += f", client_type={_tc_params['client_type']}"
+                _tc_brief += ")"
+                _last_tools.append(_tc_brief)
             _tool_history = f"Инструменты в этом разговоре: {', '.join(_last_tools)}"
 
         try:
@@ -769,7 +776,9 @@ async def _stream_voice_response(
                     "USD/EUR: ТОЛЬКО для ИП и юрлиц. Физлица только BYN.\n"
                     "Если клиент хочет такой предмет или валюту И его client_type НЕИЗВЕСТЕН из всего диалога, "
                     "ставь action='clarify_client_type'.\n"
-                    "Если client_type уже ясен из предыдущих сообщений, не переспрашивай.\n\n"
+                    "ВАЖНО: если client_type уже ЯСЕН из диалога (клиент сказал 'физлицо', 'ИП', 'юрлицо' "
+                    "ранее, ИЛИ калькулятор уже вызывался с конкретным client_type), "
+                    "НЕ ставь clarify_client_type. Используй известный тип.\n\n"
                     "ЛИМИТЫ КАЛЬКУЛЯТОРА:\n"
                     "prepaid: минимум 10%. Если клиент просит 0% или 5%, ставь action='invalid_param'.\n"
                     "Если клиент просит аванс ниже 10%, ставь action='invalid_param'.\n\n"
@@ -2499,19 +2508,19 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     # Feed audio to VAD
                     vad.feed(pcm_16k)
 
-                    # Barge-in threshold: 0.55 probability, 6 consecutive frames (~192ms).
-                    # Higher than normal VAD (0.40/4) to resist speaker echo feedback.
-                    # Real speech easily exceeds 0.55; speaker echo is typically 0.40-0.50.
+                    # Barge-in threshold: 0.45 probability, 5 consecutive frames (~160ms).
+                    # Slightly above normal VAD to resist speaker echo (typically 0.35-0.45).
+                    # 0.55 was too aggressive: delayed real speech detection by ~2s.
                     _prob = vad.last_probability
-                    if _prob >= 0.55:
+                    if _prob >= 0.45:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
                     else:
                         session._barge_vad_count = max(0, getattr(session, '_barge_vad_count', 0) - 1)
 
-                    # 6 consecutive VAD detections (~192ms) = confirmed speech
-                    if getattr(session, '_barge_vad_count', 0) >= 6:
+                    # 5 consecutive VAD detections (~160ms) = confirmed speech
+                    if getattr(session, '_barge_vad_count', 0) >= 5:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._tts_start_time = 0
