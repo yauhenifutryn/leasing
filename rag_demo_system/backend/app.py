@@ -2460,13 +2460,14 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         )
         asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, intro_text))
 
-        # Pre-roll buffer: keeps last 300ms of audio during TTS playback.
+        # Pre-roll buffer: keeps last 500ms of audio during TTS playback.
         # On barge-in, this audio is prepended to STT so the speech onset isn't lost.
-        # 300ms at 16kHz, 16-bit mono = 9600 bytes
-        _PREROLL_BYTES = 9600
+        # 500ms at 16kHz, 16-bit mono = 16000 bytes
+        _PREROLL_BYTES = 16000
         _preroll_buf = bytearray()
-        # Post-TTS cooldown: skip VAD for 200ms after TTS ends to avoid echo triggers
-        _COOLDOWN_SEC = 0.2
+        # Post-TTS cooldown: skip VAD for 100ms after natural TTS end.
+        # Was 200ms but ate the start of user speech. 100ms is enough for echo tail.
+        _COOLDOWN_SEC = 0.1
 
         # 5. Audio loop
         while True:
@@ -2491,13 +2492,13 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
 
                 # Barge-in on clean caller audio (mono mode, separated tracks)
                 if session.assistant_speaking:
-                    # Skip first 0.8s of TTS (VAD model warmup).
-                    # Was 1.5s but that blocked early barge-in on short responses.
+                    # Skip first 0.5s of TTS (VAD model warmup).
+                    # 0.5s = ~15 frames, enough for Silero VAD to stabilize.
                     if not hasattr(session, '_tts_start_time') or session._tts_start_time == 0:
                         session._tts_start_time = asyncio.get_event_loop().time()
                         session._barge_vad_count = 0
                     _tts_elapsed = asyncio.get_event_loop().time() - session._tts_start_time
-                    if _tts_elapsed < 0.8:
+                    if _tts_elapsed < 0.5:
                         continue
 
                     # Maintain pre-roll buffer (rolling 300ms of audio during TTS)
