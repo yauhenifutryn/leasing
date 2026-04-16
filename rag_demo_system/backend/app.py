@@ -2508,19 +2508,19 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     # Feed audio to VAD
                     vad.feed(pcm_16k)
 
-                    # Barge-in threshold: 0.45 probability, 5 consecutive frames (~160ms).
-                    # Slightly above normal VAD to resist speaker echo (typically 0.35-0.45).
-                    # 0.55 was too aggressive: delayed real speech detection by ~2s.
+                    # Barge-in threshold: 0.40 probability, 4 consecutive frames (~128ms).
+                    # Original values: optimized for phone mode responsiveness.
+                    # Speaker mode echo handled by post-STT echo detection, not by VAD threshold.
                     _prob = vad.last_probability
-                    if _prob >= 0.45:
+                    if _prob >= 0.40:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
                     else:
                         session._barge_vad_count = max(0, getattr(session, '_barge_vad_count', 0) - 1)
 
-                    # 5 consecutive VAD detections (~160ms) = confirmed speech
-                    if getattr(session, '_barge_vad_count', 0) >= 5:
+                    # 4 consecutive VAD detections (~128ms) = confirmed speech
+                    if getattr(session, '_barge_vad_count', 0) >= 4:
                         session.interrupted = True
                         session.assistant_speaking = False
                         session._tts_start_time = 0
