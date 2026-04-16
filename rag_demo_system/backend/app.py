@@ -2525,7 +2525,9 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         session.assistant_speaking = False
                         session._tts_start_time = 0
                         session._barge_vad_count = 0
-                        session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
+                        # Do NOT set _tts_finished_at here. The post-TTS cooldown
+                        # is for natural TTS end (prevent echo). After barge-in,
+                        # the user is already speaking; cooldown would eat their speech.
                         session._was_barge_in = True  # type: ignore[attr-defined]
                         # Pre-roll: save buffered audio to prepend to next speech segment.
                         # This captures the speech onset that triggered barge-in.
