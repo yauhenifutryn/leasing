@@ -2509,11 +2509,21 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     # Feed audio to VAD
                     vad.feed(pcm_16k)
 
-                    # Barge-in threshold: 0.40 probability, 4 consecutive frames (~128ms).
-                    # Original values: optimized for phone mode responsiveness.
-                    # Speaker mode echo handled by post-STT echo detection, not by VAD threshold.
+                    # Barge-in: require BOTH VAD probability AND audio energy (RMS).
+                    # Silero VAD has state residue: after real speech, prob stays 0.99+
+                    # for many frames even on silence. RMS check catches this:
+                    # echo/silence RMS = 0-110, real speech RMS = 2000+.
+                    # RMS floor 300 cleanly separates them.
+                    import struct as _st_bi
+                    import math as _math_bi
+                    _n_bi = len(pcm_16k) // 2
+                    _frame_rms = 0.0
+                    if _n_bi > 0:
+                        _samps_bi = _st_bi.unpack(f"<{_n_bi}h", pcm_16k[:_n_bi * 2])
+                        _frame_rms = _math_bi.sqrt(sum(s * s for s in _samps_bi) / _n_bi)
+
                     _prob = vad.last_probability
-                    if _prob >= 0.40:
+                    if _prob >= 0.40 and _frame_rms >= 300:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
@@ -2541,7 +2551,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                             print(f"[Jambonz:{session_id[:8]}] Pre-roll: {len(_preroll_buf)} bytes injected into speech buffer", flush=True)
                         _preroll_buf.clear()
                         await websocket.send_text(json.dumps({"type": "killAudio"}))
-                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN (vad_prob={_prob:.2f})", flush=True)
+                        print(f"[Jambonz:{session_id[:8]}] BARGE-IN (vad_prob={_prob:.2f} rms={_frame_rms:.0f})", flush=True)
                         await broadcast_sip_event({
                             "type": "sip.barge_in",
                             "call_id": session_id,
