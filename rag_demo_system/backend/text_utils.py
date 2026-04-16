@@ -56,6 +56,10 @@ def clean_voice_output(text: str) -> str:
     # Clean up leading comma from list conversion
     text = re.sub(r"^,\s*", "", text)
     text = re.sub(r":\s*,\s*", ": ", text)
+    # Replace em-dash and en-dash with comma (Silero TTS hisses on dashes)
+    text = text.replace("—", ",").replace("–", ",")
+    # Replace regular dash between words with comma (not in hyphenated words)
+    text = re.sub(r"\s-\s", ", ", text)
     # Collapse multiple spaces and newlines
     text = re.sub(r"\s+", " ", text)
     return text.strip()
