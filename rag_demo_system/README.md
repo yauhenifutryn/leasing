@@ -26,7 +26,13 @@ HF_TOKEN=hf_YOUR_TOKEN bash scripts/provision_server.sh
 # Verify services, index KB
 bash scripts/smoke_test.sh
 
-# Deploy SIP telephony (optional, creates 3 accounts)
+# Fill in credentials (not in git)
+sed -i "s|^CALCULATOR_API_TOKEN=''|CALCULATOR_API_TOKEN='...'|" .env
+sed -i "s|^SMS_API_LOGIN=''|SMS_API_LOGIN='...'|" .env
+sed -i "s|^SMS_API_PASSWORD=''|SMS_API_PASSWORD='...'|" .env
+sed -i "s|^SMS_SENDER_NAME=''|SMS_SENDER_NAME='...'|" .env
+
+# Deploy SIP telephony (creates 6 accounts: test, sergey, ilya, john, mike, victor)
 bash scripts/deploy_jambonz.sh
 
 # Expose to the internet (browser UI)
