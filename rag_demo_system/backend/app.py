@@ -716,8 +716,17 @@ async def _stream_voice_response(
     # structured data (subject, cost, currency) for immediate tool calling.
     needs_tool = False
     _extracted_hints: dict[str, Any] = {}
-    print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}", flush=True)
-    if tool_schemas:
+    # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
+    _msg_stripped = message.strip().lower().rstrip(".!,?")
+    _SKIP_CLASSIFIER = {
+        "спасибо", "спасибо большое", "понял", "понятно", "ясно", "ок",
+        "хорошо", "ладно", "пока", "до свидания", "всего доброго",
+        "привет", "здравствуйте", "добрый день", "нет", "не надо",
+        "всем пока", "это всё", "больше ничего",
+    }
+    _skip = _msg_stripped in _SKIP_CLASSIFIER and not session.tool_calls_this_turn
+    print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
+    if tool_schemas and not _skip:
         # Build conversation context: last 7 turns (not just 400 chars)
         _recent_turns = chat_session.transcript[-14:] if chat_session.transcript else []  # 7 pairs
         _conv_lines = []
@@ -786,8 +795,8 @@ async def _stream_voice_response(
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=120,
-                timeout_sec=5,
+                max_tokens=80,
+                timeout_sec=3,
             )
             _raw = classify_resp.text.strip()
             _js_start = _raw.find("{")
