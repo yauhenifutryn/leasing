@@ -623,10 +623,12 @@ async def _stream_voice_response(
             rag_query = " ".join(m[:60] for m in user_msgs[-2:]) + " " + message
 
     # --- RAG retrieval ---
+    _t_rag_start = time.time()
     retrieval = await asyncio.to_thread(
         engine.retrieve, rag_query, True, True, session_id,
     )
     t_retrieval_done = time.time()
+    print(f"[Latency:{session_id[:8]}] RAG: {(t_retrieval_done - _t_rag_start)*1000:.0f}ms", flush=True)
     timings: dict[str, Any] = dict(retrieval.get("timings") or {})
     final_chunks = retrieval.get("final") or []
 
@@ -747,6 +749,7 @@ async def _stream_voice_response(
                 _last_tools.append(_tc_brief)
             _tool_history = f"Инструменты в этом разговоре: {', '.join(_last_tools)}"
 
+        _t_classify_start = time.time()
         try:
             classify_resp = await asyncio.to_thread(
                 call_openai_compatible,
@@ -840,7 +843,8 @@ async def _stream_voice_response(
         # Override: if classifier extracted a tool action, force TOOL regardless of intent field
         if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm", "clarify_client_type", "invalid_param"):
             needs_tool = True
-        print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints}", flush=True)
+        _t_classify_ms = (time.time() - _t_classify_start) * 1000
+        print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints} ({_t_classify_ms:.0f}ms)", flush=True)
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
     # Trigger on: explicit SMS keywords OR classifier detected sms action
@@ -2164,6 +2168,7 @@ async def _jambonz_process_utterance(
         return
 
     t_stt_done = time.time()
+    _stt_ms = (t_stt_done - t_speech_stopped) * 1000
     text = (transcript.get("text") or "").strip()
     if not text:
         print(f"[Jambonz:{session_id[:8]}] STT: empty transcription", flush=True)
@@ -2207,7 +2212,7 @@ async def _jambonz_process_utterance(
                 session.assistant_speaking = False
                 return
 
-    print(f"[Jambonz:{session_id[:8]}] STT: {text}", flush=True)
+    print(f"[Jambonz:{session_id[:8]}] STT({_stt_ms:.0f}ms): {text}", flush=True)
     await broadcast_sip_event({
         "type": "sip.stt.result",
         "call_id": session_id,
