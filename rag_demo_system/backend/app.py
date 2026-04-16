@@ -2164,7 +2164,8 @@ async def _jambonz_process_utterance(
     # Filter known Whisper hallucinations (YouTube training data artifacts)
     _WHISPER_HALLUCINATIONS = [
         "субтитры", "подписывайтесь", "канал", "спасибо за просмотр",
-        "dimator", "продолжение следует", "редактор субтитров",
+        "dimator", "продолжение следует", "продолжаем", "редактор субтитров",
+        "корректор", "семкин", "егорова",
     ]
     _text_lower = text.lower()
     if any(h in _text_lower for h in _WHISPER_HALLUCINATIONS):
