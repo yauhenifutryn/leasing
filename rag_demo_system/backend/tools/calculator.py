@@ -107,11 +107,25 @@ class CalculatorTool(ToolDefinition):
         "прочий транспорт": "Прочий транспорт",
     }
 
+    # API only accepts these two client types; ИП maps to Юридическое лицо
+    _CLIENT_TYPE_MAP = {
+        "ип": "Юридическое лицо",
+        "индивидуальный предприниматель": "Юридическое лицо",
+        "физическое лицо": "Физическое лицо",
+        "физлицо": "Физическое лицо",
+        "юридическое лицо": "Юридическое лицо",
+        "юрлицо": "Юридическое лицо",
+    }
+
     def execute(self, params: dict[str, Any], session_context: dict[str, Any]) -> dict[str, Any]:
         # Normalize subject casing (classifier may return lowercase)
         _subj = params.get("subject", "")
         _normalized = self._SUBJECT_MAP.get(_subj.lower().strip(), _subj)
         params["subject"] = _normalized
+        # Normalize client_type: API only accepts Физическое/Юридическое лицо
+        _ct = params.get("client_type", "")
+        if _ct:
+            params["client_type"] = self._CLIENT_TYPE_MAP.get(_ct.lower().strip(), _ct)
         filled, defaulted = self.fill_defaults(params)
 
         # Validate: used item requires age

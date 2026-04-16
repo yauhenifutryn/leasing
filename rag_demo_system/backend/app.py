@@ -743,6 +743,7 @@ async def _stream_voice_response(
                     '{"intent": "TOOL" или "RAG", "subject": "тип предмета или null", '
                     '"cost": число или null, "currency": "BYN/USD/EUR или null", '
                     '"client_type": "Физическое лицо/ИП/Юридическое лицо или null", '
+                    '"prepaid": число (процент аванса) или null, "term": число (месяцев) или null, '
                     '"action": "calculate/recalculate/sms/change_param/confirm/clarify_client_type или null"}\n\n'
                     "intent=TOOL если клиент:\n"
                     "- хочет рассчитать, взять в лизинг, узнать платежи (даже без слова 'рассчитай')\n"
@@ -792,6 +793,10 @@ async def _stream_voice_response(
                     _extracted_hints["currency"] = _parsed["currency"]
                 if _parsed.get("client_type"):
                     _extracted_hints["client_type"] = _parsed["client_type"]
+                if _parsed.get("prepaid") is not None:
+                    _extracted_hints["prepaid"] = _parsed["prepaid"]
+                if _parsed.get("term") is not None:
+                    _extracted_hints["term"] = _parsed["term"]
                 if _parsed.get("action"):
                     _extracted_hints["action"] = _parsed["action"]
             else:
@@ -874,8 +879,32 @@ async def _stream_voice_response(
     # When classifier extracts enough data, call tools from code directly.
     # LLM only presents the result. This bypasses unreliable LLM tool calling.
     _direct_tool_result = None
-    # If classifier detected tool intent but no cost, check if asking about previous result
-    if needs_tool and _extracted_hints.get("subject") and not _extracted_hints.get("cost"):
+
+    # Parameter change path: user wants to modify previous calculation
+    # (e.g., "change advance to 20%", "make it 48 months", "switch to юрлицо").
+    # Does NOT require subject+cost; uses previous calc params as base.
+    _is_param_change = (
+        needs_tool
+        and _extracted_hints.get("action") in ("change_param", "recalculate")
+        and session.tool_calls_this_turn
+    )
+    _param_change_params: dict[str, Any] | None = None
+    if _is_param_change:
+        _prev = next((tc for tc in reversed(session.tool_calls_this_turn)
+                      if tc.get("tool") == "calculator"), None)
+        if _prev and _prev.get("params"):
+            import json as _json_change
+            _param_change_params = dict(_prev["params"])
+            # Override only what the classifier extracted in the new message
+            for _k, _v in _extracted_hints.items():
+                if _k in ("subject", "cost", "currency", "prepaid", "term",
+                          "client_type", "condition_new", "type_schedule") and _v is not None:
+                    _param_change_params[_k] = _v
+            print(f"[DirectTool] change_param: {_json_change.dumps({k: v for k, v in _extracted_hints.items() if k != 'action'}, ensure_ascii=False)}", flush=True)
+
+    # If classifier detected tool intent but no cost and not a param change,
+    # check if asking about previous result
+    if not _is_param_change and needs_tool and _extracted_hints.get("subject") and not _extracted_hints.get("cost"):
         _prev_calc = next((tc for tc in reversed(getattr(session, 'tool_calls_this_turn', []))
                           if tc.get("tool") == "calculator" and tc.get("ok")), None)
         if _prev_calc and _prev_calc.get("result"):
@@ -883,31 +912,28 @@ async def _stream_voice_response(
             _direct_tool_result = _prev_calc["result"]
             print(f"[DirectTool] re-presenting previous result", flush=True)
 
-    if needs_tool and _extracted_hints.get("subject") and _extracted_hints.get("cost"):
+    _can_direct_call = (
+        _param_change_params is not None
+        or (needs_tool and _extracted_hints.get("subject") and _extracted_hints.get("cost"))
+    )
+    if _can_direct_call:
         _action = _extracted_hints.get("action", "calculate")
         calc_tool = get_tool("calculator")
         import json as _json_direct
 
-        # Build params: start with extracted hints
-        _direct_params: dict[str, Any] = {
-            "subject": _extracted_hints["subject"],
-            "cost": _extracted_hints["cost"],
-        }
-        if _extracted_hints.get("currency"):
-            _direct_params["currency"] = _extracted_hints["currency"]
-        if _extracted_hints.get("client_type"):
-            _direct_params["client_type"] = _extracted_hints["client_type"]
-
-        # For recalculation/param change: merge with previous calc params
-        if _action in ("recalculate", "change_param") and session.tool_calls_this_turn:
-            _prev = next((tc for tc in reversed(session.tool_calls_this_turn) if tc.get("tool") == "calculator"), None)
-            if _prev and _prev.get("params"):
-                _merged = dict(_prev["params"])
-                # Override only what the classifier extracted
-                for _k, _v in _extracted_hints.items():
-                    if _k in ("subject", "cost", "currency", "prepaid", "term", "client_type", "condition_new", "type_schedule") and _v is not None:
-                        _merged[_k] = _v
-                _direct_params = _merged
+        if _param_change_params is not None:
+            # Use pre-built params from change_param path
+            _direct_params = _param_change_params
+        else:
+            # Build params: start with extracted hints
+            _direct_params: dict[str, Any] = {
+                "subject": _extracted_hints["subject"],
+                "cost": _extracted_hints["cost"],
+            }
+            if _extracted_hints.get("currency"):
+                _direct_params["currency"] = _extracted_hints["currency"]
+            if _extracted_hints.get("client_type"):
+                _direct_params["client_type"] = _extracted_hints["client_type"]
 
         # Check subject restrictions for individuals before calling API.
         # Only block when client_type is EXPLICITLY individual (not defaulted).
