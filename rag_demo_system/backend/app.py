@@ -1432,17 +1432,17 @@ async def _stream_voice_response(
     producer_task = asyncio.create_task(llm_producer())
     consumer_task = asyncio.create_task(tts_consumer())
     await asyncio.gather(producer_task, consumer_task)
-    # If interrupted, save partial transcript NOW so the next turn sees it.
-    # Without this, the barge-in speech triggers a new _stream_voice_response
-    # before this one saves, causing the LLM to lose context (e.g., double greeting).
-    if session.interrupted and all_sentences:
-        _partial = " ".join(all_sentences) + " [прервано клиентом]"
-        _cs = state.get(session_id) or state.create(session_id)
-        _cs.transcript.append({"role": "user", "text": message})
-        _cs.transcript.append({"role": "assistant", "text": _partial})
-        state.update(_cs)
+    # Save transcript IMMEDIATELY after LLM+TTS finishes (before audio loop
+    # can spawn the next utterance task). Uses chat_session from line 627
+    # to avoid race conditions with concurrent tasks.
+    full_answer = " ".join(all_sentences)
+    if session.interrupted and full_answer:
+        full_answer += " [прервано клиентом]"
+    if full_answer:
+        _append_turn(chat_session, message, full_answer, settings.app.memory_turns)
+        state.update(chat_session)
         session.turn_count += 1
-        print(f"[Jambonz:{session_id[:8]}] Partial transcript saved on barge-in ({len(all_sentences)} sentences)", flush=True)
+        print(f"[Jambonz:{session_id[:8]}] Transcript saved ({len(all_sentences)} sentences{', interrupted' if session.interrupted else ''})", flush=True)
     # Wait for FreeSWITCH to finish playing buffered audio
     # Jambonz shim tracks bytes sent; 24kHz * 2 = 48000 bytes/sec
     if hasattr(websocket, 'audio_bytes_sent') and websocket.audio_bytes_sent > 0 and not session.interrupted:
@@ -1456,16 +1456,7 @@ async def _stream_voice_response(
     if rtc_handler is not None:
         rtc_handler.tts_track.flush()
 
-    full_answer = " ".join(all_sentences)
-    if session.interrupted and full_answer:
-        full_answer += " [прервано клиентом]"
-    # Skip transcript save if already saved on barge-in (above)
-    _already_saved = session.interrupted and all_sentences
-    if full_answer and not _already_saved:
-        session.turn_count += 1
-        chat_session = state.get(session_id) or state.create(session_id)
-        _append_turn(chat_session, message, full_answer, settings.app.memory_turns)
-        state.update(chat_session)
+    # Transcript already saved above (right after asyncio.gather).
 
     t_now = time.time()
     _llm_ft = t_llm_first_token or t_retrieval_done
