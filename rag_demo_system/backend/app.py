@@ -152,10 +152,17 @@ class _JambonzWebSocketShim:
     WebSocket frames (no resampling needed). Other events broadcast to SIP monitor.
     """
 
-    def __init__(self, ws: WebSocket, session_id: str, control_ws: WebSocket | None = None) -> None:
+    def __init__(
+        self,
+        ws: WebSocket,
+        session_id: str,
+        control_ws: WebSocket | None = None,
+        session: Any | None = None,
+    ) -> None:
         self._ws = ws
         self._control_ws = control_ws
         self._session_id = session_id
+        self._session = session  # VoiceSession - for interrupt checks in TTS chunk loop
         self.audio_bytes_sent = 0
 
     async def send_bytes(self, data: bytes) -> None:
@@ -180,14 +187,26 @@ class _JambonzWebSocketShim:
 
         if event_type == "response.output_audio.delta":
             import base64 as _b64
+            import json as _json
             audio_b64 = data.get("delta", "")
             if audio_b64:
                 pcm_raw = _b64.b64decode(audio_b64)
-                # Send in chunks to prevent overwhelming mod_audio_fork
-                _chunk = 1920
+                _chunk = 1920  # 40ms @ 24kHz 16-bit mono
+                _sent = 0
+                _interrupted = False
                 for _i in range(0, len(pcm_raw), _chunk):
+                    if self._session is not None and getattr(self._session, "interrupted", False):
+                        _interrupted = True
+                        break
                     await self._ws.send_bytes(pcm_raw[_i : _i + _chunk])
-                self.audio_bytes_sent += len(pcm_raw)
+                    _sent += len(pcm_raw[_i : _i + _chunk])
+                self.audio_bytes_sent += _sent
+                if _interrupted:
+                    # Tell mod_audio_fork to drop any buffered PCM downstream.
+                    try:
+                        await self.send_text(_json.dumps({"type": "killAudio"}))
+                    except Exception:  # noqa: BLE001
+                        pass
             return
 
         if event_type == "response.output_text.delta":
@@ -2726,7 +2745,7 @@ async def _jambonz_process_utterance(
 
     session.on_transcript_final(text)
 
-    jambonz_ws = _JambonzWebSocketShim(ws, session_id)
+    jambonz_ws = _JambonzWebSocketShim(ws, session_id, session=session)
     await _stream_voice_response(
         websocket=jambonz_ws,
         session=session,
