@@ -927,11 +927,20 @@ async def _stream_voice_response(
                 print(f"[Profile] patched: {_changed}", flush=True)
             elif _had_patches and not _profile_patches:
                 print(f"[Profile] filter_patches: dropped (noise / invalid values)", flush=True)
-            # Handle change_field post-confirmation
-            if _sa_change_field and session.client_profile.confirmed_at:
+            # Handle change_field post-confirmation — transition to CHANGE_PENDING
+            if _sa_change_field and session.client_profile.state == ProfileState.CONFIRMED:
+                _old_value = getattr(session.client_profile, _sa_change_field, None)
+                session.client_profile.pending_change = {
+                    "field": _sa_change_field,
+                    "old_value": _old_value,
+                    "new_value": _sa_change_value,
+                }
+                session.client_profile.state = ProfileState.CHANGE_PENDING
+                import time as _time
+                session.client_profile.change_emitted_at = _time.time()
+                # Keep the legacy field in sync for any remaining consumers
                 session.client_profile.last_change_pending = _sa_change_field
-                if _sa_change_value is not None:
-                    session.client_profile.apply_patches({_sa_change_field: _sa_change_value})
+                print(f"[Profile] CHANGE_PENDING: {_sa_change_field} {_old_value} -> {_sa_change_value}", flush=True)
             # Confirmation → stamp confirmed_at
             if _sa_is_confirm:
                 if session.client_profile.last_change_pending:
