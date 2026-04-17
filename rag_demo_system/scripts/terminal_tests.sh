@@ -259,6 +259,55 @@ PY
 [ $? -eq 0 ] && pass "Profile hygiene filter rejects noise and normalizes enums" || fail "Profile hygiene mismatches"
 
 # ────────────────────────────────────────────────────────────────────────────
+section "11. Skip-RAG predicate"
+"$PY" - <<'PY'
+import sys
+from backend.rag_skip import should_skip_rag
+cases = [
+    ("Привет, я Вадим.", {"name": "Вадим"}, {}, True),
+    ("Привет, я Вадим, какие офисы в Минске?", {"name": "Вадим"}, {"action": "clarify"}, False),
+    ("Я Вадим. Адрес в Минске?", {"name": "Вадим"}, {}, False),
+    ("Здравствуйте.", {}, {}, False),
+]
+bad = 0
+for utt, p, h, want in cases:
+    got = should_skip_rag(utt, p, h)
+    if got != want:
+        print(f"BAD {utt!r}: got={got} want={want}")
+        bad += 1
+    else:
+        print(f"OK  {utt!r} -> {got}")
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] && pass "Skip-RAG predicate" || fail "Skip-RAG predicate"
+
+# ────────────────────────────────────────────────────────────────────────────
+section "12. Grounding validator"
+"$PY" - <<'PY'
+import sys
+from backend.grounding_validator import check_grounded, replace_ungrounded
+
+# Hallucinated address gets stripped
+resp = "В Минске офис: ул. Немига, 24."
+chunks = ["Наш офис: проспект Победителей, 57."]
+cleaned = replace_ungrounded(resp, chunks)
+if "Немига" in cleaned:
+    print(f"BAD ungrounded address survived: {cleaned!r}")
+    sys.exit(1)
+print(f"OK  stripped ungrounded address: {cleaned!r}")
+
+# Grounded address survives
+resp2 = "Офис: проспект Победителей, 57."
+chunks2 = ["проспект Победителей, 57"]
+cleaned2 = replace_ungrounded(resp2, chunks2)
+if "Победителей" not in cleaned2:
+    print(f"BAD grounded address stripped: {cleaned2!r}")
+    sys.exit(1)
+print(f"OK  preserved grounded address: {cleaned2!r}")
+PY
+[ $? -eq 0 ] && pass "Grounding validator" || fail "Grounding validator"
+
+# ────────────────────────────────────────────────────────────────────────────
 echo
 echo "=============================="
 echo "  Summary: ${GRN}${PASS} pass${NC} | ${YLW}${WARN} warn${NC} | ${RED}${FAIL} fail${NC}"
