@@ -304,6 +304,24 @@ if "Победителей" not in cleaned2:
     print(f"BAD grounded address stripped: {cleaned2!r}")
     sys.exit(1)
 print(f"OK  preserved grounded address: {cleaned2!r}")
+
+# Ungrounded "обычно 10%" gets silently dropped
+resp3 = "Аванс от 0% до 40%. На обычных условиях обычно от 10%."
+chunks3 = ["По условиям калькулятора аванс может быть от 0% до 40% от стоимости."]
+cleaned3 = replace_ungrounded(resp3, chunks3)
+if "10" in cleaned3:
+    print(f"BAD ungrounded typical percent survived: {cleaned3!r}")
+    sys.exit(1)
+print(f"OK  stripped ungrounded typical percent: {cleaned3!r}")
+
+# Grounded "обычно 30%" survives (both number and anchor in same chunk)
+resp4 = "Для ИП обычно 30%."
+chunks4 = ["Для индивидуальных предпринимателей обычно 30% аванс по калькулятору."]
+cleaned4 = replace_ungrounded(resp4, chunks4)
+if "30" not in cleaned4:
+    print(f"BAD grounded typical percent stripped: {cleaned4!r}")
+    sys.exit(1)
+print(f"OK  preserved grounded typical percent: {cleaned4!r}")
 PY
 [ $? -eq 0 ] && pass "Grounding validator" || fail "Grounding validator"
 

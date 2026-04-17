@@ -25,6 +25,27 @@ _NAME_RE = re.compile(
     rf"[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+{_PATRONYMIC}\s+[А-ЯЁ][а-яё]+"
 )
 
+# "Typical percent" phrases — an LLM assertion that some percentage is
+# "usually / typically" the rate. Only considered grounded if BOTH the exact
+# number (e.g. "10%") AND one of the anchor words (обычно/типично/...) appear
+# together in the same retrieved chunk. Otherwise the whole phrase is stripped
+# silently (no FALLBACK substitution — just drop the ungrounded assertion).
+_TYPICAL_PCT_ANCHORS = (
+    "обычно",
+    "как правило",
+    "в среднем",
+    "типично",
+    "чаще всего",
+    "на обычных условиях",
+    "стандартно",
+)
+_TYPICAL_PCT_RE = re.compile(
+    r"(?:обычно|как\s+правило|в\s+среднем|типично|чаще\s+всего|на\s+обычных\s+условиях|стандартно)"
+    r"\s+(?:от\s+|около\s+|примерно\s+|до\s+)?"
+    r"(\d{1,2})\s*(?:%|процент\w*)",
+    re.IGNORECASE,
+)
+
 
 def extract_high_risk_facts(text: str) -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
@@ -34,6 +55,13 @@ def extract_high_risk_facts(text: str) -> list[dict[str, Any]]:
         facts.append({"type": "street_address", "value": m.group(0), "span": m.span()})
     for m in _NAME_RE.finditer(text or ""):
         facts.append({"type": "personal_name", "value": m.group(0), "span": m.span()})
+    for m in _TYPICAL_PCT_RE.finditer(text or ""):
+        facts.append({
+            "type": "typical_percent",
+            "value": m.group(0),
+            "span": m.span(),
+            "number": m.group(1),
+        })
     return facts
 
 
@@ -42,6 +70,23 @@ def _normalize(s: str) -> str:
 
 
 def check_grounded(fact: dict[str, Any], chunks: list[str]) -> bool:
+    # "Typical percent" needs both the exact number AND an anchor word in the
+    # SAME chunk. Generic substring check on the joined haystack is too loose.
+    if fact.get("type") == "typical_percent":
+        number = str(fact.get("number") or "").strip()
+        if not number:
+            return True
+        number_token = f"{number}%"
+        for chunk in chunks or []:
+            chunk_norm = _normalize(chunk)
+            if number_token not in chunk_norm and f"{number} %" not in chunk_norm:
+                # also allow "X процент..." form
+                if not re.search(rf"\b{re.escape(number)}\s*процент", chunk_norm):
+                    continue
+            if any(anchor in chunk_norm for anchor in _TYPICAL_PCT_ANCHORS):
+                return True
+        return False
+
     value_norm = _normalize(fact.get("value", ""))
     if not value_norm:
         return True
@@ -69,6 +114,13 @@ def replace_ungrounded(response: str, chunks: list[str]) -> str:
         print(f"[Grounding] replaced ungrounded {f['type']}: {f['value']!r} -> fallback", flush=True)
         if f["type"] == "personal_name":
             out = out[:start] + out[end:]  # strip entirely
+        elif f["type"] == "typical_percent":
+            # Silently drop the ungrounded assertion (no FALLBACK substitution).
+            # Collapse adjacent whitespace to avoid double spaces / orphan punctuation.
+            out = out[:start] + " " + out[end:]
         else:
             out = out[:start] + FALLBACK + out[end:]
-    return out
+    # Clean up whitespace/punctuation artifacts left by silent drops.
+    out = re.sub(r"\s+([.,;:!?])", r"\1", out)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip()

@@ -50,3 +50,28 @@ def test_replace_leaves_grounded_facts():
     chunks = ["проспект Победителей, 57"]
     out = replace_ungrounded(response, chunks)
     assert "Победителей" in out
+
+
+def test_strips_ungrounded_typical_percent():
+    # "обычно 10%" in response but not in chunks -> stripped
+    resp = "Аванс от 0% до 40%. На обычных условиях обычно от 10%."
+    chunks = ["По условиям калькулятора аванс может быть от 0% до 40% от стоимости."]
+    out = replace_ungrounded(resp, chunks)
+    assert "10" not in out
+    assert "обычно" not in out.lower() or "обычных условиях" not in out.lower()
+
+
+def test_keeps_grounded_percent_when_anchor_in_chunk():
+    # "обычно 30%" with "обычно 30%" in a chunk -> keep
+    resp = "Для ИП обычно 30%."
+    chunks = ["Для индивидуальных предпринимателей обычно 30% аванс по калькулятору."]
+    out = replace_ungrounded(resp, chunks)
+    assert "30" in out
+
+
+def test_keeps_non_anchored_percent():
+    # Plain "40%" with no anchor word -> not checked by typical_percent rule
+    resp = "Аванс до 40%."
+    chunks = ["Аванс до 40%."]
+    out = replace_ungrounded(resp, chunks)
+    assert "40" in out
