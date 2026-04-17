@@ -4,6 +4,29 @@ import re
 from collections.abc import Iterable, Iterator
 
 
+_STOP_WORD_PATTERN = re.compile(
+    r"\b("
+    r"стоп|стопе|стопой|"
+    r"замолчи|замолчите|"
+    r"помолчи|помолчите|"
+    r"погоди|погодите|"
+    r"подожди|подождите|"
+    r"тихо|тише|"
+    r"хватит|"
+    r"не\s+надо\s+говорить|"
+    r"не\s+перебивай"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def contains_stop_word(text: str) -> bool:
+    """Return True if text contains a Russian stop-command word as a whole word."""
+    if not text:
+        return False
+    return bool(_STOP_WORD_PATTERN.search(text))
+
+
 _BANNED_PHRASES = [
     "к сожалению",
     "понимаю ваше беспокойство",
