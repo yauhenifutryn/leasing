@@ -1,8 +1,8 @@
 # Leasing AI Pipeline
 
-End-to-end audio intelligence and voice assistant system for a leasing company. Starts with raw call recordings, extracts structured insights, builds a knowledge base, and serves it through a production voice assistant over WebSocket.
+End-to-end audio intelligence and voice assistant system for a leasing company. Starts with raw call recordings, extracts structured insights, builds a knowledge base, and serves it through a production voice assistant over WebSocket or SIP.
 
-> **Branch cleanup planned.** Once all active work is complete, the core branches will be merged into `main` and experiments archived as tags. See the [restructure plan](docs/superpowers/plans/2026-04-08-repo-restructure.md).
+> **Branch cleanup planned.** Once all active work is complete, the core branches will be merged into `main` and experiments archived as tags.
 
 ## Branches
 
@@ -61,25 +61,31 @@ Also includes a Streamlit review UI (`scripts/review_app.py`) for human validati
 
 Russian-language voice assistant with SIP telephony, tool use, and RAG. This is the production system deployed for the client.
 
-**Stack:** Whisper STT (1.2.1), Silero TTS (v5_4_ru), Qwen3.5-35B-A3B-FP8 via vLLM (0.19.0), Qdrant vector search, BM25 + cross-encoder reranker, Jambonz SIP (0.9.6).
+**Stack:** Whisper STT (1.2.1), Silero TTS (v5_4_ru), Qwen3.5-35B-A3B-FP8 main brain via vLLM (0.19.0), Qwen3-4B-Instruct-2507-FP8 dedicated SessionAgent (classifier + profile extractor), Qdrant vector search, BM25 + cross-encoder reranker, Jambonz SIP (0.9.6).
 
 **Capabilities:**
 
 - SIP telephony via Jambonz (separated audio tracks, no echo)
-- Multi-account SIP (3 concurrent users with per-user monitoring)
+- Multi-account SIP (6 concurrent users with per-user monitoring)
 - WebSocket streaming audio (browser push-to-talk and continuous modes)
 - Silero VAD for voice activity detection (mono mode, 0.35 threshold)
 - Barge-in support (interrupt the bot mid-response)
+- Semantic stop-command detection (`стоп`, `помолчи` etc. → `listen_mode`, auto-exit)
 - Tool calling: leasing calculator (1C API), SMS sender (sms-assistent.by)
+- `ClientProfile` state machine: fields collected once per session; bot does read-back before first calc and single-field change-confirmation on recalc
+- Calculator MVP relaxation: no hardcoded defaults (missing fields raise `IncompleteProfileError`), prepaid range 0-40%, term 12-84 months, linear/annuity graph selection forwarded to API
+- Currency policy (physical person): USD auto-converted to BYN at a configurable rate with explicit disclosure; EUR/RUB politely rejected
+- Dedicated small-model SessionAgent on port 8788 (Qwen3-4B-Instruct-2507-FP8) so classifier does not queue behind the main LLM
 - RAG with chunk deduplication (overlapping chunk removal at retrieval time)
 - LLM intent routing (greeting, company questions, off-topic, tools)
 - DTMF consent collection at call start (keypad 1/2, barge-in supported)
 - Conversation memory across turns
 - Stress dictionary for proper name pronunciation
-- Whisper hallucination filtering
+- TTS abbreviation expansion (`ул.`→улица, `пр-т`→проспект, `г.`→город, `д.`→дом, `тел.`→телефон)
+- Whisper hallucination filtering + domain-biased initial prompt (Ксения, линейный, аннуитет, нагрузка, ипэшник)
 - Phone number TTS pronunciation fix
 - Post-call quality analytics (automatic per-session transcript + LLM analysis)
-- Self-improvement reports: KB gap detection, quality trends, flagged sessions
+- Self-improvement reports: KB gap detection, quality trends, flagged sessions, operational metrics (readback/change-confirm/USD-conversion/stop-command rates)
 
 ```
 rag_demo_system/
@@ -89,15 +95,17 @@ rag_demo_system/
 │   ├── retrieval_utils.py      # Vector filtering, chunk deduplication
 │   ├── llm.py                  # vLLM streaming (OpenAI-compatible)
 │   ├── voice_adapters.py       # Whisper STT + Silero TTS
-│   ├── voice_session.py        # Session state, barge-in tracking
+│   ├── voice_session.py        # Session state, barge-in tracking, ClientProfile, listen_mode
+│   ├── session.py              # ClientProfile dataclass + state machine
+│   ├── session_analyzer.py     # Per-call LLM quality analyzer
 │   ├── sentence_detector.py    # Streaming sentence boundaries
 │   ├── vad.py                  # Silero VAD wrapper
 │   ├── audio_input.py          # Transport adapter (WebSocket, SIP)
-│   ├── router.py               # Intent classification (LLM-based)
+│   ├── router.py               # Intent classification (SessionAgent 8788 w/ main fallback)
 │   ├── memory.py               # Turn history
-│   ├── text_utils.py           # Answer cleaning, address validation
+│   ├── text_utils.py           # Answer cleaning, address validation, abbreviation expansion
 │   ├── state.py                # Session store, event logging
-│   ├── settings.py             # Config loading (app.yaml + .env)
+│   ├── settings.py             # Config loading (app.yaml + .env) + TurnTakingConfig
 │   └── tools/                  # Calculator, SMS sender, filler phrases
 ├── config/
 │   ├── app.yaml                # All config: LLM, RAG, embedding, reranker, dedup
@@ -112,23 +120,27 @@ rag_demo_system/
 │   ├── whisper_server.py       # STT microservice
 │   └── silero_tts_server.py    # TTS microservice
 ├── scripts/
-│   ├── provision_server.sh     # One-command GPU server setup
-│   ├── smoke_test.sh           # Service verification + KB indexing
-│   ├── deploy_jambonz.sh       # SIP telephony deployment
-│   ├── restart_all.sh          # Full stack restart
-│   ├── doctor.sh               # Health check
-│   ├── kb_gap_report.py        # Aggregate KB gaps across sessions
-│   └── quality_report.py       # Quality trends and flagged sessions
-└── tests/                      # Unit and integration tests
+│   ├── provision_server.sh               # One-command GPU server setup
+│   ├── regenerate_env_and_restart.sh     # Rewrite .env from template + clean restart
+│   ├── smoke_test.sh                     # Service verification + KB indexing
+│   ├── terminal_tests.sh                 # 8 post-deploy correctness checks
+│   ├── deploy_jambonz.sh                 # SIP telephony deployment
+│   ├── restart_all.sh                    # Full stack restart
+│   ├── doctor.sh                         # Health check
+│   ├── kb_gap_report.py                  # Aggregate KB gaps + operational metrics
+│   └── quality_report.py                 # Quality trends and flagged sessions
+└── tests/                                # Unit and integration tests
 ```
 
 **Deployment flow (in order):**
 
-1. `provision_server.sh` -- installs everything, starts stack
-2. `smoke_test.sh` -- waits for services, indexes KB, verifies chat
-3. `deploy_jambonz.sh` -- deploys SIP telephony, creates accounts
+1. `provision_server.sh` -- first-time install, downloads models, writes `.env`, starts stack
+2. `regenerate_env_and_restart.sh` -- use after config/code changes (picks up exported creds, rewrites `.env`, clean restart)
+3. `smoke_test.sh` -- waits for services, indexes KB, verifies chat + SessionAgent
+4. `terminal_tests.sh` -- 8 shell-level correctness checks (SA latency/JSON, calculator no-defaults, currency math, Whisper vocab, abbreviation expansion, KB retrieval, end-to-end chat)
+5. `deploy_jambonz.sh` -- deploys SIP telephony, creates 6 accounts
 
-**All dependencies pinned:** Docker images (Jambonz 0.9.6, drachtio, rtpengine), Python packages (vLLM 0.19.0, faster-whisper 1.2.1, silero 0.5.5). No `:latest` tags or `>=` ranges.
+**All dependencies pinned:** Docker images (Jambonz 0.9.6, drachtio, rtpengine), Python packages (vLLM 0.19.0, faster-whisper 1.2.1, silero 0.5.5), HuggingFace model revisions pinnable via `QWEN_MAIN_REVISION` / `QWEN_SESSIONAGENT_REVISION`. No `:latest` tags or `>=` ranges.
 
 ### feature/tool-use: Tool Use Layer
 
@@ -189,17 +201,36 @@ make transcribe && make analyze-calls && make kb
 ```bash
 git clone --branch feature/voice-pipeline git@github.com:yauhenifutryn/leasing.git
 cd leasing/rag_demo_system
-cp .env.example .env   # fill in all credentials
-HF_TOKEN=hf_... bash scripts/provision_server.sh
-bash scripts/smoke_test.sh      # indexes KB, verifies all services
-bash scripts/deploy_jambonz.sh  # SIP telephony (optional)
+
+# Export credentials once per shell session
+export HF_TOKEN=hf_...
+export CALCULATOR_API_TOKEN='...'
+export CALCULATOR_API_BASE_URL='https://personal.mikro-leasing.by/calculator/api'
+export SMS_API_LOGIN='...'
+export SMS_API_PASSWORD='...'
+export SMS_SENDER_NAME='MikroLizing'
+
+# First-time install (downloads models, writes .env with your exported creds, starts stack)
+bash scripts/provision_server.sh
+
+# Verify services + index KB
+bash scripts/smoke_test.sh
+
+# Run 8-test correctness suite
+bash scripts/terminal_tests.sh
+
+# SIP telephony (optional)
+bash scripts/deploy_jambonz.sh
 ```
 
-After provisioning, add tool credentials to `.env`:
-```
-CALCULATOR_API_TOKEN=...
-SMS_API_LOGIN=...
-SMS_API_PASSWORD=...
+For routine updates on an already-provisioned server:
+
+```bash
+cd /ephemeral/leasing/rag_demo_system
+git pull origin feature/voice-pipeline
+bash scripts/regenerate_env_and_restart.sh   # preserves exported creds + .env values
+bash scripts/smoke_test.sh
+bash scripts/terminal_tests.sh
 ```
 
 The server IP must be whitelisted by the client before external API calls will work.
