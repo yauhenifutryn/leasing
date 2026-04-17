@@ -549,18 +549,18 @@ write_env_file() {
   local SESSIONAGENT_GPU_UTIL
   if [ "$GPU_GB" -ge 120 ]; then
     # H200 141GB or larger: plenty of room
-    GPU_UTIL="0.70"
-    SESSIONAGENT_GPU_UTIL="0.06"
+    GPU_UTIL="0.68"
+    SESSIONAGENT_GPU_UTIL="0.10"
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL} (large GPU)"
   elif [ "$GPU_GB" -ge 90 ]; then
     # H100 NVL 94GB
-    GPU_UTIL="0.65"
-    SESSIONAGENT_GPU_UTIL="0.07"
+    GPU_UTIL="0.62"
+    SESSIONAGENT_GPU_UTIL="0.11"
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL} (standard)"
   elif [ "$GPU_GB" -ge 75 ]; then
-    # H100 80GB or A100 80GB: 35B FP8 weights ~35GB + 10GB KV cache + 6GB SA
-    GPU_UTIL="0.62"
-    SESSIONAGENT_GPU_UTIL="0.08"
+    # H100 80GB or A100 80GB: 48GB main + 9.6GB SA = 57.6GB, ~22GB headroom
+    GPU_UTIL="0.60"
+    SESSIONAGENT_GPU_UTIL="0.12"
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL} (tight)"
   else
     # Smaller GPU, may not fit both models
