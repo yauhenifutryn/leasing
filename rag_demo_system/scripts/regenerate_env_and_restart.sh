@@ -23,13 +23,13 @@ GPU_GB=$(( ${GPU_MIB:-0} / 1024 ))
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
 
 if [ "$GPU_GB" -ge 120 ]; then
-  GPU_UTIL="0.65"; SESSIONAGENT_GPU_UTIL="0.06"
+  GPU_UTIL="0.70"; SESSIONAGENT_GPU_UTIL="0.06"
 elif [ "$GPU_GB" -ge 90 ]; then
-  GPU_UTIL="0.55"; SESSIONAGENT_GPU_UTIL="0.07"
+  GPU_UTIL="0.65"; SESSIONAGENT_GPU_UTIL="0.07"
 elif [ "$GPU_GB" -ge 75 ]; then
-  GPU_UTIL="0.50"; SESSIONAGENT_GPU_UTIL="0.08"
+  GPU_UTIL="0.62"; SESSIONAGENT_GPU_UTIL="0.08"
 else
-  GPU_UTIL="0.50"; SESSIONAGENT_GPU_UTIL="0.00"  # disabled
+  GPU_UTIL="0.55"; SESSIONAGENT_GPU_UTIL="0.00"  # SA disabled on small GPU
 fi
 
 echo "[regen] GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL}"
