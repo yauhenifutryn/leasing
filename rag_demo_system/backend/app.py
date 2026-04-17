@@ -939,6 +939,12 @@ async def _stream_voice_response(
                     _sa_parsed = _json_classify.loads(_raw[_js_start:_js_end])
                 except Exception:
                     _sa_parsed = {}
+            try:
+                import json as _json
+                _sa_summary = {k: v for k, v in (_sa_parsed or {}).items() if v not in (None, "", [], {})}
+                print(f"[SessionAgent] raw={_json.dumps(_sa_summary, ensure_ascii=False)[:250]} session={session_id[:8]}", flush=True)
+            except Exception:  # noqa: BLE001
+                pass
             _intent = str(_sa_parsed.get("intent", "")).upper()
             needs_tool = _intent == "TOOL"
             if not _sa_parsed:
@@ -995,12 +1001,29 @@ async def _stream_voice_response(
                 print(f"[Profile] stale name patch ignored: '{_sa_name}' (already have '{session.client_profile.name}')", flush=True)
             # Hygiene filter before merge: drops noise, normalizes enums, validates MVP ranges.
             _had_patches = bool(_profile_patches)
+            if _had_patches:
+                print(f"[Profile] patches_pre_filter={_profile_patches}", flush=True)
             _profile_patches = filter_patches(_profile_patches, message or "")
+            if _had_patches:
+                print(f"[Profile] patches_post_filter={_profile_patches}", flush=True)
             _changed = session.client_profile.apply_patches(_profile_patches)
             if _changed:
                 print(f"[Profile] patched: {_changed}", flush=True)
             elif _had_patches and not _profile_patches:
                 print(f"[Profile] filter_patches: dropped (noise / invalid values)", flush=True)
+            try:
+                _p = session.client_profile
+                _ts = _p.type_schedule if _p.type_schedule is not None else '-'
+                print(
+                    f"[Profile] snapshot: state={_p.state.value} name={_p.name or '-'} "
+                    f"subj={_p.subject or '-'} cost={_p.cost or '-'} {_p.currency or '-'} "
+                    f"client_type={_p.client_type or '-'} cond_new={_p.condition_new if _p.condition_new is not None else '-'} "
+                    f"term={_p.term_months or '-'} prepaid={_p.prepaid_pct if _p.prepaid_pct is not None else '-'}% "
+                    f"graph={_ts} missing={sorted(_p.missing_fields())}",
+                    flush=True,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             # Handle change_field post-confirmation — transition to CHANGE_PENDING
             if _sa_change_field and session.client_profile.state == ProfileState.CONFIRMED:
                 _old_value = getattr(session.client_profile, _sa_change_field, None)
@@ -1206,12 +1229,15 @@ async def _stream_voice_response(
             _extracted_hints.get(k) not in (None, "")
             for k in _FRESH_CALC_PARAM_KEYS_GUARD
         )
-        if _INFO_QUESTION_RE.search(_msg_lower) and _no_fresh_calc_hint:
+        _has_info_q = bool(_INFO_QUESTION_RE.search(_msg_lower))
+        _guard_reason = None
+        if _has_info_q and _no_fresh_calc_hint:
             print(
                 f"[RAG-Guard] info-question override: '{_msg_lower[:60]}' -> RAG",
                 flush=True,
             )
             needs_tool = False
+            _guard_reason = "info_q_fired"
         elif (
             session.client_profile.state in (ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING)
             and session.consecutive_calc_failures >= 2
@@ -1222,6 +1248,10 @@ async def _stream_voice_response(
                 flush=True,
             )
             needs_tool = False
+            _guard_reason = "circuit_breaker"
+        else:
+            _guard_reason = f"pass (info_q={_has_info_q}, no_fresh_hint={_no_fresh_calc_hint}, state={session.client_profile.state.value}, failures={session.consecutive_calc_failures})"
+        print(f"[RAG-Guard] decision={_guard_reason}", flush=True)
 
     # ── Profile State-Machine Gate ──
     # Enforces server-side readback + change-confirm BEFORE any calculator call.
@@ -1235,6 +1265,14 @@ async def _stream_voice_response(
     #                                   to CONFIRMED and fall through; otherwise re-ask.
     if needs_tool:
         _gate_profile = session.client_profile
+        print(
+            f"[Orchestrator] gate entered: state={_gate_profile.state.value} "
+            f"missing={sorted(_gate_profile.missing_fields())} "
+            f"action={_extracted_hints.get('action', '-')} "
+            f"is_confirm={_sa_is_confirm} "
+            f"has_history={bool(session.tool_calls_history)}",
+            flush=True,
+        )
         # Gate 1: profile incomplete -> clarify missing fields.
         # Skip the gate when we're doing a pure param-change on an existing calc
         # (the change path reuses previous params and doesn't need the full profile).
@@ -1254,6 +1292,13 @@ async def _stream_voice_response(
             _extracted_hints.get("action") in ("change_param", "recalculate")
             and bool(session.tool_calls_history)
             and _has_fresh_param_hint
+        )
+        print(
+            f"[Orchestrator] is_param_change={_is_param_change_for_gate} "
+            f"has_fresh_hint={_has_fresh_param_hint} "
+            f"action={_extracted_hints.get('action', '-')} "
+            f"fresh_hints={[k for k in _FRESH_CALC_PARAM_KEYS if _extracted_hints.get(k) not in (None, '')]}",
+            flush=True,
         )
         if not _is_param_change_for_gate:
             _missing = _gate_profile.missing_fields()
@@ -1529,6 +1574,11 @@ async def _stream_voice_response(
                         "ok": _tool_ok,
                     })
                     session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
+                    print(
+                        f"[DirectTool] invoking calculator with params={_direct_params} "
+                        f"(path=direct, is_param_change={locals().get('_is_param_change_for_gate', False)})",
+                        flush=True,
+                    )
                     session.tool_calls_this_turn.append({
                         "tool": "calculator",
                         "params": _direct_tool_result.get("params", _direct_params),
