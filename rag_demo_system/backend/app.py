@@ -706,81 +706,158 @@ async def _stream_voice_response(
         # effective_* when the env var is empty (single-instance mode).
         _sa_base_url = settings.llm.session_agent_base_url or effective_base_url
         _sa_model = settings.llm.session_agent_model or effective_model
+        # Semantic flags from SessionAgent (pre-initialized so downstream can reference them
+        # even when classification fails / uses keyword fallback).
+        _sa_is_stop = False
+        _sa_is_confirm = False
+        _sa_wants_readback = False
+        _sa_change_field = None
+        _sa_change_value = None
         try:
             classify_resp = await asyncio.to_thread(
                 call_openai_compatible,
                 base_url=_sa_base_url,
                 model=_sa_model,
                 system_prompt=(
-                    "Ты классификатор сообщений голосового бота лизинговой компании. "
-                    "Проанализируй НОВОЕ сообщение клиента в контексте диалога.\n\n"
-                    "Верни строго JSON:\n"
-                    '{"intent": "TOOL" или "RAG", "subject": "тип предмета или null", '
-                    '"cost": число или null, "currency": "BYN/USD/EUR или null", '
-                    '"client_type": "Физическое лицо/ИП/Юридическое лицо или null", '
-                    '"prepaid": число (процент аванса) или null, "term": число (месяцев) или null, '
-                    '"action": "calculate/recalculate/sms/change_param/confirm/clarify_client_type или null"}\n\n'
-                    "intent=TOOL если клиент:\n"
-                    "- хочет рассчитать, взять в лизинг, узнать платежи (даже без слова 'рассчитай')\n"
-                    "- называет предмет + стоимость (это запрос на расчёт)\n"
-                    "- просит изменить параметры предыдущего расчёта\n"
-                    "- подтверждает действие (да, давай, хорошо) после предложения бота\n"
-                    "- просит отправить СМС или график\n\n"
-                    "intent=RAG если клиент задаёт информационный вопрос (адрес, документы, условия, часы работы)\n\n"
-                    "subject: определи тип из контекста. Легковой автомобиль, Грузовой автомобиль, Спецтехника, Оборудование, Недвижимость, Прочий транспорт.\n"
-                    "Если клиент назвал марку, определи тип (легковой/грузовой).\n"
-                    "cost: извлеки число СТРОГО из НОВОГО сообщения клиента. "
-                    "ЗАПРЕЩЕНО брать стоимость из предыдущих сообщений, ответов бота или результатов расчётов. "
-                    "Если в НОВОМ сообщении клиент не назвал число, ставь null.\n"
-                    "currency: ТОЛЬКО если клиент ЯВНО сказал 'долларов', 'евро', 'USD', 'EUR' в НОВОМ сообщении. "
-                    "Если не сказал, ставь null. НЕ угадывай валюту.\n"
-                    "client_type: извлеки ТОЛЬКО если клиент ЯВНО указал тип в НОВОМ сообщении. "
-                    "'физлицо/физическое лицо' = 'Физическое лицо', "
-                    "'ИП/предприниматель/индивидуальный' = 'ИП', "
-                    "'юрлицо/юридическое/ООО/компания/фирма' = 'Юридическое лицо'. "
-                    "Если не указал, ставь null.\n\n"
+                    "Ты SessionAgent голосового бота лизинговой компании. "
+                    "Анализируешь НОВОЕ сообщение клиента в контексте диалога.\n\n"
+                    "Возвращаешь строго JSON:\n"
+                    '{"intent": "TOOL"|"RAG"|"CONVERSATION",\n'
+                    ' "subject": "Легковой автомобиль/Грузовой автомобиль/Спецтехника/Оборудование/Недвижимость/Прочий транспорт или null",\n'
+                    ' "cost": число или null,\n'
+                    ' "currency": "BYN"|"USD"|"EUR"|"RUB" или null,\n'
+                    ' "client_type": "Физическое лицо"|"ИП"|"Юридическое лицо" или null,\n'
+                    ' "condition_new": 1|0 или null,\n'
+                    ' "age_years": число или null,\n'
+                    ' "prepaid_pct": число (0-40) или null,\n'
+                    ' "prepaid_amount": число в валюте стоимости или null,\n'
+                    ' "term_months": число (12-84) или null,\n'
+                    ' "type_schedule": "0"|"1" или null,\n'
+                    ' "name": "имя клиента или null",\n'
+                    ' "is_confirmation": true|false,\n'
+                    ' "is_stop_request": true|false,\n'
+                    ' "wants_readback": true|false,\n'
+                    ' "change_field": "имя поля или null",\n'
+                    ' "change_value": значение или null,\n'
+                    ' "action": "calculate"|"recalculate"|"sms"|"clarify"|"confirm" или null}\n\n'
+                    "intent=TOOL: клиент хочет посчитать / изменить расчёт / отправить СМС / подтвердить расчёт.\n"
+                    "intent=RAG: информационный вопрос (офис, документы, условия общие).\n"
+                    "intent=CONVERSATION: короткая реакция, подтверждение, остановка, знакомство, шутка.\n\n"
+                    "ПРАВИЛА ИЗВЛЕЧЕНИЯ (только из НОВОГО сообщения, не из истории):\n"
+                    "- subject: тип предмета. Если клиент назвал марку авто (BMW, Toyota, и т.д.), subject='Легковой автомобиль'.\n"
+                    "- cost: число. НЕ берёшь из истории. Если клиент не назвал число, null.\n"
+                    "- currency: только если явно сказал 'долларов'/'евро'/'рублей'. Иначе null.\n"
+                    "- client_type: 'физлицо/физическое' -> 'Физическое лицо'; 'ИП/индивидуальный' -> 'ИП'; "
+                    "'юрлицо/юридическое/ООО/компания' -> 'Юридическое лицо'.\n"
+                    "- condition_new: 'новый/новая' -> 1; 'б/у/подержанный/с пробегом' -> 0.\n"
+                    "- age_years: при 'б/у' + число лет (например, '2018 года' -> сколько лет сейчас).\n"
+                    "- prepaid_pct: если клиент назвал процент (например, '20 процентов', 'двадцать процентов').\n"
+                    "- prepaid_amount: если клиент назвал сумму в валюте стоимости (например, '14 тысяч рублей').\n"
+                    "- Либо prepaid_pct либо prepaid_amount, не оба.\n"
+                    "- term_months: срок в месяцах. 'на 5 лет' -> 60. 'на 7 лет' -> 84.\n"
+                    "- type_schedule: 'аннуитет/аннуитетный' -> '0'; 'линейный/убывающий/дифференцированный' -> '1'.\n"
+                    "- name: имя клиента (когда он представляется: 'меня зовут Сергей' -> 'Сергей').\n\n"
+                    "СЕМАНТИЧЕСКИЕ ФЛАГИ:\n"
+                    "- is_confirmation: клиент подтверждает запрос бота ('да', 'всё верно', 'правильно', 'давай', 'согласен').\n"
+                    "- is_stop_request: клиент явно просит молчать/подождать ('стоп', 'подожди', 'помолчи', "
+                    "'хватит', 'не продолжай', 'замолчи', 'тебя невозможно прервать', 'я не договаривался').\n"
+                    "- wants_readback: клиент просит повторить параметры ('повтори', 'какие параметры', 'что у нас').\n"
+                    "- change_field/change_value: клиент меняет параметр. "
+                    "'поменяй срок на 48' -> change_field='term_months', change_value=48. "
+                    "'давай без аванса' -> change_field='prepaid_pct', change_value=0. "
+                    "'в долларах' -> change_field='currency', change_value='USD'.\n\n"
                     "БИЗНЕС-ПРАВИЛА:\n"
-                    "Грузовые, спецтехника, оборудование, недвижимость: ТОЛЬКО для ИП и юрлиц.\n"
-                    "USD/EUR: ТОЛЬКО для ИП и юрлиц. Физлица только BYN.\n"
-                    "Если клиент хочет такой предмет или валюту И его client_type НЕИЗВЕСТЕН из всего диалога, "
-                    "ставь action='clarify_client_type'.\n"
-                    "ВАЖНО: если client_type уже ЯСЕН из диалога (клиент сказал 'физлицо', 'ИП', 'юрлицо' "
-                    "ранее, ИЛИ калькулятор уже вызывался с конкретным client_type), "
-                    "НЕ ставь clarify_client_type. Используй известный тип.\n\n"
-                    "ЛИМИТЫ КАЛЬКУЛЯТОРА:\n"
-                    "prepaid: минимум 10%. Если клиент просит 0% или 5%, ставь action='invalid_param'.\n"
-                    "Если клиент просит аванс ниже 10%, ставь action='invalid_param'.\n\n"
-                    "Никаких пояснений, только JSON."
+                    "- Физлица: только легковой автомобиль и прочий транспорт. Грузовые, спецтехника, "
+                    "оборудование, недвижимость только для ИП/юрлиц.\n"
+                    "- prepaid_pct: допустимый диапазон 0-40. Не ставь invalid_param на граничные значения — "
+                    "API сам валидирует.\n"
+                    "- term_months: допустимый диапазон 12-84.\n"
+                    "- Если клиент хочет расчёт, но client_type неизвестен из всего диалога, "
+                    "ставь action='clarify'.\n\n"
+                    "Только JSON, никаких пояснений."
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=80,
-                timeout_sec=3,
+                max_tokens=220,
+                timeout_sec=4,
             )
             _raw = classify_resp.text.strip()
             _js_start = _raw.find("{")
             _js_end = _raw.rfind("}") + 1
+            _sa_parsed: dict[str, Any] = {}
             if _js_start >= 0 and _js_end > _js_start:
                 import json as _json_classify
-                _parsed = _json_classify.loads(_raw[_js_start:_js_end])
-                needs_tool = str(_parsed.get("intent", "")).upper() == "TOOL"
-                # Extract hints for tool path
-                if _parsed.get("subject"):
-                    _extracted_hints["subject"] = _parsed["subject"]
-                if _parsed.get("cost"):
-                    _extracted_hints["cost"] = _parsed["cost"]
-                if _parsed.get("currency"):
-                    _extracted_hints["currency"] = _parsed["currency"]
-                if _parsed.get("client_type"):
-                    _extracted_hints["client_type"] = _parsed["client_type"]
-                if _parsed.get("prepaid") is not None:
-                    _extracted_hints["prepaid"] = _parsed["prepaid"]
-                if _parsed.get("term") is not None:
-                    _extracted_hints["term"] = _parsed["term"]
-                if _parsed.get("action"):
-                    _extracted_hints["action"] = _parsed["action"]
-            else:
+                try:
+                    _sa_parsed = _json_classify.loads(_raw[_js_start:_js_end])
+                except Exception:
+                    _sa_parsed = {}
+            _intent = str(_sa_parsed.get("intent", "")).upper()
+            needs_tool = _intent == "TOOL"
+            if not _sa_parsed:
                 needs_tool = "TOOL" in _raw.upper()
+            # Legacy hint extraction for the existing DirectTool path
+            if _sa_parsed.get("subject"):
+                _extracted_hints["subject"] = _sa_parsed["subject"]
+            if _sa_parsed.get("cost") is not None:
+                _extracted_hints["cost"] = _sa_parsed["cost"]
+            if _sa_parsed.get("currency"):
+                _extracted_hints["currency"] = _sa_parsed["currency"]
+            if _sa_parsed.get("client_type"):
+                _extracted_hints["client_type"] = _sa_parsed["client_type"]
+            # prepaid: prefer pct, fallback to amount
+            if _sa_parsed.get("prepaid_pct") is not None:
+                _extracted_hints["prepaid"] = _sa_parsed["prepaid_pct"]
+                _extracted_hints["prepaid_pct"] = _sa_parsed["prepaid_pct"]
+            if _sa_parsed.get("prepaid_amount") is not None:
+                _extracted_hints["prepaid_amount"] = _sa_parsed["prepaid_amount"]
+            if _sa_parsed.get("term_months") is not None:
+                _extracted_hints["term"] = _sa_parsed["term_months"]
+                _extracted_hints["term_months"] = _sa_parsed["term_months"]
+            if _sa_parsed.get("condition_new") is not None:
+                _extracted_hints["condition_new"] = _sa_parsed["condition_new"]
+            if _sa_parsed.get("age_years") is not None:
+                _extracted_hints["age_years"] = _sa_parsed["age_years"]
+            if _sa_parsed.get("type_schedule"):
+                _extracted_hints["type_schedule"] = _sa_parsed["type_schedule"]
+            if _sa_parsed.get("action"):
+                _extracted_hints["action"] = _sa_parsed["action"]
+            # Semantic flags (new)
+            _sa_is_stop = bool(_sa_parsed.get("is_stop_request"))
+            _sa_is_confirm = bool(_sa_parsed.get("is_confirmation"))
+            _sa_wants_readback = bool(_sa_parsed.get("wants_readback"))
+            _sa_change_field = _sa_parsed.get("change_field")
+            _sa_change_value = _sa_parsed.get("change_value")
+            _sa_name = _sa_parsed.get("name")
+            # ── Apply to ClientProfile (single source of truth) ──
+            _profile_patches: dict[str, Any] = {}
+            for _k in ("subject", "cost", "currency", "condition_new",
+                       "age_years", "prepaid_pct", "prepaid_amount",
+                       "term_months", "type_schedule"):
+                if _sa_parsed.get(_k) is not None:
+                    _profile_patches[_k] = _sa_parsed[_k]
+            if _sa_parsed.get("client_type"):
+                _ct_raw = _sa_parsed["client_type"]
+                _profile_patches["client_type"] = (
+                    "Юридическое лицо" if _ct_raw == "ИП" else _ct_raw
+                )
+            if _sa_name:
+                _profile_patches["name"] = _sa_name
+            _changed = session.client_profile.apply_patches(_profile_patches)
+            if _changed:
+                print(f"[Profile] patched: {_changed}", flush=True)
+            # Handle change_field post-confirmation
+            if _sa_change_field and session.client_profile.confirmed_at:
+                session.client_profile.last_change_pending = _sa_change_field
+                if _sa_change_value is not None:
+                    session.client_profile.apply_patches({_sa_change_field: _sa_change_value})
+            # Confirmation → stamp confirmed_at
+            if _sa_is_confirm:
+                if session.client_profile.last_change_pending:
+                    session.client_profile.confirmed_at = time.time()
+                    session.client_profile.last_change_pending = None
+                elif (session.client_profile.is_complete_for_calc()
+                      and not session.client_profile.confirmed_at):
+                    session.client_profile.confirmed_at = time.time()
         except Exception as _classify_exc:
             print(f"[Classifier] ERROR: {_classify_exc}", flush=True)
             # Fallback to keyword heuristic
@@ -801,6 +878,23 @@ async def _stream_voice_response(
             needs_tool = True
         _t_classify_ms = (time.time() - _t_classify_start) * 1000
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints} ({_t_classify_ms:.0f}ms)", flush=True)
+
+    # --- Handle semantic stop-request: enter listen_mode and return silently ---
+    if _sa_is_stop:
+        print(f"[SessionAgent] is_stop_request -> listen_mode", flush=True)
+        try:
+            _listen_timeout = getattr(settings, "listen_mode_timeout_sec", 3.0)
+        except Exception:
+            _listen_timeout = 3.0
+        session.listen_mode = True
+        session.listen_mode_until = time.time() + _listen_timeout
+        session.interrupted = True
+        session.assistant_speaking = False
+        try:
+            await websocket.send_text(json.dumps({"type": "killAudio"}))
+        except Exception as _killexc:
+            print(f"[listen_mode] killAudio failed: {_killexc}", flush=True)
+        return  # no LLM response; bot goes silent
 
     # --- Await RAG retrieval (started before classifier, should be done by now) ---
     retrieval = await _rag_task
@@ -966,15 +1060,63 @@ async def _stream_voice_response(
             # Use pre-built params from change_param path
             _direct_params = _param_change_params
         else:
-            # Build params: start with extracted hints
+            # Build params from ClientProfile (source of truth) merged with new hints.
+            # Profile already has patches applied earlier from SessionAgent output.
+            _p = session.client_profile
             _direct_params: dict[str, Any] = {
-                "subject": _extracted_hints["subject"],
-                "cost": _extracted_hints["cost"],
+                "subject": _p.subject or _extracted_hints.get("subject"),
+                "cost": _p.cost if _p.cost is not None else _extracted_hints.get("cost"),
             }
-            if _extracted_hints.get("currency"):
-                _direct_params["currency"] = _extracted_hints["currency"]
-            if _extracted_hints.get("client_type"):
-                _direct_params["client_type"] = _extracted_hints["client_type"]
+            _cur = _p.currency or _extracted_hints.get("currency")
+            if _cur:
+                _direct_params["currency"] = _cur
+            _ct = _p.client_type or _extracted_hints.get("client_type")
+            if _ct:
+                _direct_params["client_type"] = _ct
+            if _p.condition_new is not None:
+                _direct_params["condition_new"] = _p.condition_new
+            if _p.age_years is not None:
+                _direct_params["age"] = _p.age_years
+                _direct_params["age_years"] = _p.age_years
+            if _p.prepaid_pct is not None:
+                _direct_params["prepaid"] = _p.prepaid_pct
+                _direct_params["prepaid_pct"] = _p.prepaid_pct
+            elif _p.prepaid_amount is not None:
+                _direct_params["prepaid_amount"] = _p.prepaid_amount
+            if _p.term_months is not None:
+                _direct_params["term"] = _p.term_months
+            if _p.type_schedule is not None:
+                _direct_params["type_schedule"] = _p.type_schedule
+
+        # ── MVP currency policy: USD->BYN for Физ лицо; reject EUR/RUB. ──
+        _ct_policy = _direct_params.get("client_type")
+        _cur_policy = _direct_params.get("currency")
+        _currency_conversion = None
+        if _ct_policy == "Физическое лицо" and _cur_policy in ("EUR", "RUB", "RUR", "CNY"):
+            # Block the direct call; emit UnsupportedCurrency fallback message via LLM
+            _direct_tool_result = {
+                "ok": False,
+                "error": (
+                    f"Для физических лиц сейчас поддерживаются расчёты в белорусских рублях "
+                    f"и в долларах. Валюта {_cur_policy} временно не поддерживается. "
+                    "Уточните, пожалуйста, стоимость в BYN или USD."
+                ),
+                "params": _direct_params,
+                "defaulted": [],
+            }
+            print(f"[DirectTool] currency_policy: reject {_cur_policy} for Физ лицо", flush=True)
+        elif _ct_policy == "Физическое лицо" and _cur_policy == "USD" and _direct_params.get("cost") is not None:
+            _rate = float(settings.tools.usd_byn_rate)
+            _old_cost = float(_direct_params["cost"])
+            _new_cost = round(_old_cost * _rate, 2)
+            _currency_conversion = {
+                "from": "USD", "to": "BYN",
+                "amount_from": _old_cost, "amount_to": _new_cost,
+                "rate": _rate, "rate_source": "MVP hardcoded",
+            }
+            _direct_params["cost"] = _new_cost
+            _direct_params["currency"] = "BYN"
+            print(f"[DirectTool] USD->BYN: {_old_cost} -> {_new_cost} @ {_rate}", flush=True)
 
         # Check subject restrictions for individuals before calling API.
         # Only block when client_type is EXPLICITLY individual (not defaulted).
@@ -1004,22 +1146,34 @@ async def _stream_voice_response(
                 "params": _direct_params,
             })
             try:
-                _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
-                _tool_ok = _direct_tool_result.get("ok", False)
-                print(f"[DirectTool] result: ok={_tool_ok}", flush=True)
-                await broadcast_sip_event({
-                    "type": "sip.tool.result",
-                    "call_id": session_id,
-                    "tool": "calculator",
-                    "ok": _tool_ok,
-                })
-                session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
-                session.tool_calls_this_turn.append({
-                    "tool": "calculator",
-                    "params": _direct_tool_result.get("params", _direct_params),
-                    "result": _direct_tool_result,
-                    "ok": _tool_ok,
-                })
+                from .tools.calculator import IncompleteProfileError as _IncProf
+                try:
+                    _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
+                except _IncProf as _inc_exc:
+                    # Profile incomplete: emit a missing-field prompt via LLM fallback.
+                    print(f"[DirectTool] IncompleteProfile: {_inc_exc.missing}", flush=True)
+                    _direct_tool_result = None
+                    # Hint to LLM which fields are missing
+                    _extracted_hints["_missing_profile_fields"] = _inc_exc.missing
+                if _direct_tool_result is not None:
+                    _tool_ok = _direct_tool_result.get("ok", False)
+                    # Attach conversion disclosure to result for presentation layer
+                    if _currency_conversion is not None:
+                        _direct_tool_result["currency_conversion"] = _currency_conversion
+                    print(f"[DirectTool] result: ok={_tool_ok}", flush=True)
+                    await broadcast_sip_event({
+                        "type": "sip.tool.result",
+                        "call_id": session_id,
+                        "tool": "calculator",
+                        "ok": _tool_ok,
+                    })
+                    session.tool_calls_this_turn = getattr(session, 'tool_calls_this_turn', [])
+                    session.tool_calls_this_turn.append({
+                        "tool": "calculator",
+                        "params": _direct_tool_result.get("params", _direct_params),
+                        "result": _direct_tool_result,
+                        "ok": _tool_ok,
+                    })
             except Exception as _texc:
                 print(f"[DirectTool] ERROR: {_texc}", flush=True)
                 _direct_tool_result = None

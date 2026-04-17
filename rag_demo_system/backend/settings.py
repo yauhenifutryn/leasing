@@ -96,6 +96,9 @@ class ToolsConfig:
     sms_sender_name: str
     crm_webhook_url: str
     crm_webhook_token: str
+    # MVP hardcoded USD->BYN conversion rate for physical persons.
+    # Remove when calculator API provides server-side NBRB conversion.
+    usd_byn_rate: float = 3.0
 
 
 @dataclass
@@ -286,6 +289,7 @@ def load_settings(path: Path | None = None) -> Settings:
             sms_sender_name=os.getenv("SMS_SENDER_NAME", tools_cfg.get("sms_sender_name", "MikroLizing")),
             crm_webhook_url=os.getenv("CRM_WEBHOOK_URL", tools_cfg.get("crm_webhook_url", "")),
             crm_webhook_token=os.getenv("CRM_WEBHOOK_TOKEN", tools_cfg.get("crm_webhook_token", "")),
+            usd_byn_rate=float(os.getenv("USD_BYN_RATE", tools_cfg.get("usd_byn_rate", 3.0))),
         ),
         jambonz=JambonzConfig(
             enabled=os.getenv("JAMBONZ_ENABLED", str(jambonz_cfg.get("enabled", False))).lower() in ("true", "1", "yes"),

@@ -1,4 +1,9 @@
-"""Tests for the payment calculator tool."""
+"""Tests for the payment calculator tool.
+
+Post-client-feedback-round: the calculator no longer applies defaults.
+Tests pass all 8 required fields explicitly. Missing-field coverage is in
+test_calculator_no_defaults.py.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.tools.calculator import CalculatorTool  # noqa: E402
+from backend.tools.calculator import CalculatorTool, IncompleteProfileError  # noqa: E402
 
 SAMPLE_RESPONSE = {
     "0": {
@@ -27,6 +32,17 @@ SAMPLE_RESPONSE = {
     "3": {"number": 3, "sum": 897.87},
     "999": {"number": 999, "sum": 300.0},
 }
+
+FULL_PARAMS = dict(
+    subject="Легковой автомобиль",
+    cost=30000,
+    client_type="Физическое лицо",
+    condition_new=1,
+    currency="BYN",
+    prepaid=30,
+    term=36,
+    type_schedule="0",
+)
 
 
 @pytest.fixture()
@@ -46,40 +62,20 @@ def test_schema_has_required_fields(tool: CalculatorTool) -> None:
     assert fn["name"] == "calculator"
     assert "subject" in fn["parameters"]["properties"]
     assert "cost" in fn["parameters"]["properties"]
-    assert fn["parameters"]["required"] == ["subject", "cost"]
 
 
 # ------------------------------------------------------------------
-# Defaults
+# Defaults (removed as of client-feedback round)
 # ------------------------------------------------------------------
 
 
-def test_defaults(tool: CalculatorTool) -> None:
-    d = tool.defaults()
-    assert d["client_type"] == "Физическое лицо"
-    assert d["condition_new"] == 1
-    assert d["currency"] == "BYN"
-    assert d["prepaid"] == 30
-    assert d["term"] == 36
-    assert d["type_schedule"] == "0"
-
-
-def test_fill_defaults_marks_defaulted(tool: CalculatorTool) -> None:
-    params = {"subject": "Легковой автомобиль", "cost": 30000}
-    filled, defaulted = tool.fill_defaults(params)
-    assert "client_type" in defaulted
-    assert "currency" in defaulted
-    assert "prepaid" in defaulted
-    assert "term" in defaulted
-    assert "type_schedule" in defaulted
-    assert "condition_new" in defaulted
-    # User-provided values must NOT be in defaulted
-    assert "subject" not in defaulted
-    assert "cost" not in defaulted
+def test_defaults_returns_empty(tool: CalculatorTool) -> None:
+    """No defaults anymore: ClientProfile is source of truth."""
+    assert tool.defaults() == {}
 
 
 # ------------------------------------------------------------------
-# Execute
+# Execute — full valid params
 # ------------------------------------------------------------------
 
 
@@ -90,7 +86,7 @@ def test_execute_calls_api(mock_get: MagicMock, tool: CalculatorTool) -> None:
     mock_resp.json.return_value = SAMPLE_RESPONSE
     mock_get.return_value = mock_resp
 
-    result = tool.execute({"subject": "Легковой автомобиль", "cost": 30000}, {})
+    result = tool.execute(dict(FULL_PARAMS), {})
 
     assert result["ok"] is True
     assert result["url"] == "https://mikro-leasing.by/graphic/?57030126"
@@ -100,8 +96,10 @@ def test_execute_calls_api(mock_get: MagicMock, tool: CalculatorTool) -> None:
     assert result["increase_percent"] == 13.0
     assert len(result["payments"]) == 3
     assert result["payments"][0]["sum"] == 897.87
+    # New fields from client-feedback round
+    assert result["prepaid_pct"] == 30.0
+    assert result["prepaid_amount"] == 9000.0
 
-    # Verify API was called with correct URL and auth
     mock_get.assert_called_once()
     call_kwargs = mock_get.call_args
     assert "Bearer test-token" in call_kwargs.kwargs.get("headers", {}).get("Authorization", "")
@@ -113,17 +111,18 @@ def test_execute_handles_404(mock_get: MagicMock, tool: CalculatorTool) -> None:
     mock_resp.status_code = 404
     mock_get.return_value = mock_resp
 
-    result = tool.execute({"subject": "Легковой автомобиль", "cost": 30000}, {})
+    result = tool.execute(dict(FULL_PARAMS), {})
 
     assert result["ok"] is False
     assert "не найдены" in result["error"]
 
 
-def test_execute_used_without_age(tool: CalculatorTool) -> None:
-    result = tool.execute({"subject": "Легковой автомобиль", "cost": 20000, "condition_new": 0}, {})
-
-    assert result["ok"] is False
-    assert "возраст" in result["error"].lower() or "age" in result["error"].lower()
+def test_execute_used_without_age_raises(tool: CalculatorTool) -> None:
+    params = dict(FULL_PARAMS)
+    params["condition_new"] = 0  # used, no age
+    with pytest.raises(IncompleteProfileError) as exc:
+        tool.execute(params, {})
+    assert "age" in exc.value.missing
 
 
 # ------------------------------------------------------------------
@@ -138,14 +137,13 @@ def test_voice_summary_contains_key_numbers(mock_get: MagicMock, tool: Calculato
     mock_resp.json.return_value = SAMPLE_RESPONSE
     mock_get.return_value = mock_resp
 
-    result = tool.execute({"subject": "Легковой автомобиль", "cost": 30000}, {})
+    result = tool.execute(dict(FULL_PARAMS), {})
     summary = tool.format_voice_summary(result)
 
     assert "9000.0" in summary  # advance
     assert "897.87" in summary  # monthly payment
     assert "300.0" in summary  # buyout
-    assert "13.0" in summary  # increase percent
-    assert "*" in summary  # defaulted markers
+    assert "13.0" in summary   # increase percent
 
 
 @patch("backend.tools.calculator.httpx.get")
@@ -155,7 +153,7 @@ def test_format_sms_body_contains_link(mock_get: MagicMock, tool: CalculatorTool
     mock_resp.json.return_value = SAMPLE_RESPONSE
     mock_get.return_value = mock_resp
 
-    result = tool.execute({"subject": "Легковой автомобиль", "cost": 30000}, {})
+    result = tool.execute(dict(FULL_PARAMS), {})
     sms = tool.format_sms_body(result)
 
     assert sms is not None
