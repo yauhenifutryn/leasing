@@ -987,8 +987,12 @@ async def _stream_voice_response(
                 # Preserve ИП distinctly; Task 4 (tools/calculator.py) translates
                 # to "Юридическое лицо" at the calculator API boundary.
                 _profile_patches["client_type"] = _sa_parsed["client_type"]
-            if _sa_name:
+            # Stale-name guard: once profile.name is set, ignore further name
+            # patches (classifier hallucinates names from nouns in mid-call).
+            if _sa_name and not (session.client_profile.name or "").strip():
                 _profile_patches["name"] = _sa_name
+            elif _sa_name:
+                print(f"[Profile] stale name patch ignored: '{_sa_name}' (already have '{session.client_profile.name}')", flush=True)
             # Hygiene filter before merge: drops noise, normalizes enums, validates MVP ranges.
             _had_patches = bool(_profile_patches)
             _profile_patches = filter_patches(_profile_patches, message or "")
@@ -1063,7 +1067,13 @@ async def _stream_voice_response(
         print(f"[SessionAgent] is_stop_request TRUE but no literal stop-word in '{(message or '')[:60]}' -> ignored", flush=True)
 
     # --- Skip RAG for pure name-capture turns (prevents KB hallucinations on names) ---
-    if should_skip_rag(message or "", _profile_patches, _extracted_hints):
+    # Skip-RAG name-capture path only applies on the VERY FIRST name turn.
+    # Once profile.name is set, any further {name: X} patch is almost certainly
+    # a classifier hallucination (extracting nouns/discourse markers as names),
+    # so we must NOT route to the greeting path — the user has asked a real
+    # question (about address, director, terms, etc.) that needs RAG.
+    _name_already_captured = bool((session.client_profile.name or "").strip())
+    if (not _name_already_captured) and should_skip_rag(message or "", _profile_patches, _extracted_hints):
         print(f"[Grounding] skip-RAG: name-capture session={session_id[:8]}", flush=True)
         # Cancel the in-flight RAG task since we won't use its result
         try:
