@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from .session import ClientProfile
 
@@ -32,6 +33,7 @@ class VoiceSession:
     # Turn-taking: listen_mode entered on semantic stop request.
     listen_mode: bool = False
     listen_mode_until: float = 0.0
+    listen_mode_task: Optional["asyncio.Task[None]"] = None  # auto-exit background task, see listen_mode.py
 
     @property
     def stack_id(self) -> str:
