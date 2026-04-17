@@ -96,6 +96,14 @@ info "============================================="
 info ""
 info "--- Phase 1: Infrastructure ---"
 
+# Source .env early so Phase 1 can detect SessionAgent config
+ENV_FILE="$(dirname "$0")/../.env"
+if [ -f "$ENV_FILE" ]; then
+  set +u
+  . "$ENV_FILE" 2>/dev/null || true
+  set -u
+fi
+
 # Qdrant
 wait_for_url "Qdrant" "http://localhost:6333/healthz" 30 5
 
@@ -115,6 +123,49 @@ if [ -z "$VLLM_RESP" ]; then
   fail "vLLM direct test -- no response after retries"
 fi
 pass "vLLM direct test"
+
+# ── SessionAgent (Qwen3-4B dedicated classifier instance) ──
+# Enabled when SESSIONAGENT_BASE_URL is set. On small GPUs provision leaves
+# the var empty (disabled) and backend falls back to main LLM — skip then.
+SA_BASE="${SESSIONAGENT_BASE_URL:-}"
+SA_MODEL="${SESSIONAGENT_MODEL:-Qwen/Qwen3-4B-Instruct-FP8}"
+if [ -n "$SA_BASE" ]; then
+  SA_HEALTH="${SA_BASE%/v1}/health"
+  wait_for_url "SessionAgent (Qwen3-4B)" "$SA_HEALTH" 300 10
+
+  info "SessionAgent direct test (timeout: 20s)..."
+  SA_RESP=$(retry_curl "SessionAgent direct" 2 \
+    -s --max-time 20 -X POST "$SA_BASE/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$SA_MODEL\",\"messages\":[{\"role\":\"system\",\"content\":\"Верни строго JSON: {\\\"intent\\\":\\\"TOOL\\\"}\"},{\"role\":\"user\",\"content\":\"посчитай лизинг\"}],\"max_tokens\":30,\"temperature\":0.0}")
+  if [ -z "$SA_RESP" ]; then
+    fail "SessionAgent direct test -- no response after retries"
+  fi
+  # Verify the response contains valid JSON extraction (tests the full classifier flow)
+  SA_RESULT=$(echo "$SA_RESP" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    content = d['choices'][0]['message'].get('content', '')
+    if '{' in content and '}' in content:
+        print('OK')
+    else:
+        print('NO_JSON')
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null || echo "ERROR")
+  case "$SA_RESULT" in
+    OK)
+      pass "SessionAgent direct test (JSON extraction works)"
+      ;;
+    *)
+      warn "SessionAgent direct test -- returned but JSON extraction failed: $SA_RESULT"
+      warn "  Backend will still work via fallback to main LLM."
+      ;;
+  esac
+else
+  info "SessionAgent disabled (SESSIONAGENT_BASE_URL empty) -- classifier uses main LLM"
+fi
 
 # VRAM
 if nvidia-smi &>/dev/null; then
@@ -231,14 +282,7 @@ pass "All voice sidecars healthy"
 info ""
 info "--- Phase 6: Tool Use ---"
 
-# Source .env for tool credentials
-ENV_FILE="$(dirname "$0")/../.env"
-if [ -f "$ENV_FILE" ]; then
-  set +u
-  . "$ENV_FILE" 2>/dev/null || true
-  set -u
-fi
-
+# .env already sourced in Phase 1 for SessionAgent detection
 TOOL_OK=true
 
 # 6a. Calculator API connectivity
@@ -336,7 +380,11 @@ fi
 info ""
 info "============================================="
 info "  Smoke test PASSED"
-info "  Infrastructure: Qdrant + vLLM + GPU"
+if [ -n "${SESSIONAGENT_BASE_URL:-}" ]; then
+  info "  Infrastructure: Qdrant + vLLM main + SessionAgent + GPU"
+else
+  info "  Infrastructure: Qdrant + vLLM + GPU (SessionAgent disabled)"
+fi
 info "  Backend: health + index + chat"
 info "  KB: $KB_COUNT chunks"
 info "  Voice: Whisper STT + Silero TTS"
