@@ -1439,25 +1439,6 @@ async def _stream_voice_response(
             )},
         ]
         tool_schemas = []
-    elif needs_tool and _extracted_hints.get("action") == "invalid_param":
-        # Classifier detected a parameter that will fail the calculator
-        _invalid_prepaid = _extracted_hints.get("prepaid")
-        if _invalid_prepaid is not None and _invalid_prepaid < 10:
-            _invalid_reason = f"Минимальный аванс для лизинга составляет 10%. Клиент просит {_invalid_prepaid}%."
-        else:
-            _invalid_reason = "Указанные параметры выходят за лимиты калькулятора."
-        print(f"[DirectTool] invalid_param: {_invalid_reason}", flush=True)
-        llm_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": (
-                f"{memory_block}"
-                f"{_invalid_reason}\n"
-                f"Сообщение клиента: {message}\n\n"
-                "Объясни кратко (1 предложение), что минимальный аванс 10%. "
-                "Предложи рассчитать с 10%."
-            )},
-        ]
-        tool_schemas = []
     elif _change_no_new_value and _direct_tool_result and _direct_tool_result.get("ok"):
         # User asked about changing params but didn't specify a new value.
         # Present current params and ask what they want to change.
@@ -1477,8 +1458,7 @@ async def _stream_voice_response(
                 f"{_param_summary}\n"
                 f"Сообщение клиента: {message}\n\n"
                 "Клиент хочет изменить параметры. Назови текущие значения (аванс, срок) "
-                "и спроси, какой именно параметр и на какое значение хочет изменить. "
-                "Минимальный аванс: 10%."
+                "и спроси, какой именно параметр и на какое значение хочет изменить."
             )},
         ]
         tool_schemas = []
