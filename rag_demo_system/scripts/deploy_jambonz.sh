@@ -308,12 +308,23 @@ echo "PUBLIC_IP=$PUBLIC_IP"
 info "Updated $ENV_FILE with Jambonz config"
 
 # ── 10. Restart backend (unless --skip-restart) ──
+# Only the backend reads JAMBONZ_* env vars (vLLM/Whisper/Silero/SessionAgent
+# don't care about SIP creds), so a targeted supervisorctl restart is enough.
+# Falls back to restart_all.sh if supervisor is not managing the stack.
 if [ "$SKIP_RESTART" = true ]; then
     info "Skipping backend restart (--skip-restart)"
 else
-    if [ -f "$APP_DIR/scripts/restart_all.sh" ]; then
-        info "Restarting backend..."
+    SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
+    SUPERVISOR_CONF="$APP_DIR/scripts/supervisord.conf"
+    if [ -x "$SUPERVISORCTL" ] && [ -f "$SUPERVISOR_CONF" ]; then
+        info "Restarting backend (targeted, ~5s)..."
+        "$SUPERVISORCTL" -c "$SUPERVISOR_CONF" restart backend \
+            || warn "Backend restart returned non-zero"
+    elif [ -f "$APP_DIR/scripts/restart_all.sh" ]; then
+        info "Supervisor not found, falling back to full stack restart..."
         bash "$APP_DIR/scripts/restart_all.sh" || warn "Backend restart returned non-zero"
+    else
+        warn "No restart mechanism found; restart backend manually"
     fi
 fi
 
