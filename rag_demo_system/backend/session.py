@@ -9,10 +9,18 @@ complete AND confirmed by the client through a semantic read-back gate.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Literal, Optional
 
-ClientType = Literal["Физическое лицо", "Юридическое лицо"]
+ClientType = Literal["Физическое лицо", "ИП", "Юридическое лицо"]
 ScheduleType = Literal["0", "1"]  # 0 = annuity, 1 = linear / declining
+
+
+class ProfileState(str, Enum):
+    COLLECTING = "COLLECTING"
+    READBACK_PENDING = "READBACK_PENDING"
+    CONFIRMED = "CONFIRMED"
+    CHANGE_PENDING = "CHANGE_PENDING"
 
 
 @dataclass
@@ -40,6 +48,11 @@ class ClientProfile:
     confirmed_at: Optional[float] = None
     last_change_pending: Optional[str] = None
     locked_fields: set[str] = field(default_factory=set)
+
+    state: ProfileState = ProfileState.COLLECTING
+    readback_emitted_at: Optional[float] = None
+    change_emitted_at: Optional[float] = None
+    pending_change: Optional[dict[str, Any]] = None  # {"field": str, "old_value": Any, "new_value": Any}
 
     _CORE_FIELDS = (
         "client_type",
@@ -86,6 +99,17 @@ class ClientProfile:
                 changed[k] = v
         return changed
 
+    def apply_pending_change(self) -> bool:
+        """Apply pending_change to the profile, clear it. Return True if applied."""
+        if not self.pending_change:
+            return False
+        field_name = self.pending_change.get("field")
+        new_value = self.pending_change.get("new_value")
+        if field_name and hasattr(self, field_name):
+            setattr(self, field_name, new_value)
+        self.pending_change = None
+        return True
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -102,4 +126,8 @@ class ClientProfile:
             "confirmed_at": self.confirmed_at,
             "last_change_pending": self.last_change_pending,
             "locked_fields": sorted(self.locked_fields),
+            "state": self.state.value,
+            "readback_emitted_at": self.readback_emitted_at,
+            "change_emitted_at": self.change_emitted_at,
+            "pending_change": self.pending_change,
         }
