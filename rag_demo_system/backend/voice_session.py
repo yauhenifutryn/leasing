@@ -22,6 +22,10 @@ class VoiceSession:
     turn_count: int = 0
     tool_calls_this_turn: list = field(default_factory=list)
 
+    # Full cumulative history of tool calls across the whole session (preserved
+    # even after reset_turn_state clears tool_calls_this_turn).
+    tool_calls_history: list = field(default_factory=list)
+
     # Circuit breaker: track repeated identical calc attempts that fail upstream.
     last_calc_signature: str = ""
     consecutive_calc_failures: int = 0
@@ -38,6 +42,20 @@ class VoiceSession:
     listen_mode: bool = False
     listen_mode_until: float = 0.0
     listen_mode_task: Optional["asyncio.Task[None]"] = None  # auto-exit background task, see listen_mode.py
+
+    def reset_turn_state(self) -> None:
+        """Clear per-turn scratch state at the start of each user turn.
+
+        Name `tool_calls_this_turn` was historically cumulative in practice
+        (never reset), which caused stuck-in-calculator loops: once a calc
+        succeeded, classifier hints like `recalculate` plus non-empty
+        tool_calls_this_turn made the orchestrator bypass all gates on every
+        subsequent turn. Clearing per turn fixes that; `tool_calls_history`
+        preserves historical context for prompts that need it.
+        """
+        if self.tool_calls_this_turn:
+            self.tool_calls_history.extend(self.tool_calls_this_turn)
+            self.tool_calls_this_turn = []
 
     @property
     def stack_id(self) -> str:

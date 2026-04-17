@@ -711,6 +711,10 @@ async def _stream_voice_response(
     from .llm import iter_openai_compatible_stream_events
     from .sentence_detector import SentenceDetector
 
+    # Per-turn reset: prevents stuck-in-calculator loops caused by
+    # tool_calls_this_turn persisting across turns (see voice_session.py).
+    session.reset_turn_state()
+
     backend = session.backend
     brain_model = session.brain_model
 
@@ -766,7 +770,9 @@ async def _stream_voice_response(
 
     sms_triggers = ["отправ", "смс", "sms", "пришли"]
     has_sms_intent = any(t in message.lower() for t in sms_triggers)
-    tools_used_in_session = bool(session.tool_calls_this_turn)
+    # "session-wide" view: switch to cumulative history since tool_calls_this_turn
+    # is reset at turn start (see VoiceSession.reset_turn_state).
+    tools_used_in_session = bool(session.tool_calls_history) or bool(session.tool_calls_this_turn)
 
     # Smart intent classifier: sees last 7 turns of conversation, extracts
     # structured data (subject, cost, currency) for immediate tool calling.
@@ -792,7 +798,9 @@ async def _stream_voice_response(
         "привет", "здравствуйте", "добрый день", "нет", "не надо",
         "всем пока", "это всё", "больше ничего",
     }
-    _skip = _msg_stripped in _SKIP_CLASSIFIER and not session.tool_calls_this_turn
+    _skip = _msg_stripped in _SKIP_CLASSIFIER and not (
+        session.tool_calls_history or session.tool_calls_this_turn
+    )
     print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
     if tool_schemas and not _skip:
         # Build conversation context: last 7 turns (not just 400 chars)
@@ -804,9 +812,12 @@ async def _stream_voice_response(
         _conv_context = "\n".join(_conv_lines) if _conv_lines else "начало разговора"
 
         _tool_history = ""
-        if session.tool_calls_this_turn:
+        # Whole-conversation view: prefer history (persists across turns) and
+        # also include any tool calls already appended this turn.
+        _all_tool_calls = session.tool_calls_history + session.tool_calls_this_turn
+        if _all_tool_calls:
             _last_tools = []
-            for tc in session.tool_calls_this_turn[-3:]:
+            for tc in _all_tool_calls[-3:]:
                 _tc_params = tc.get("params", {})
                 _tc_brief = f"{tc.get('tool', '')}(ok={tc.get('ok', '?')}"
                 if _tc_params.get("client_type"):
@@ -1095,11 +1106,14 @@ async def _stream_voice_response(
 
     # SMS: direct execution (bypass LLM) when we have calculator data + phone
     # Trigger on: explicit SMS keywords OR classifier detected sms action
-    _sms_from_classifier = _extracted_hints.get("action") == "sms" and session.tool_calls_this_turn
+    # Use cumulative history (+ in-turn appends) so SMS works for a calc done
+    # on a prior turn (tool_calls_this_turn is reset at turn start).
+    _sms_all_calls = session.tool_calls_history + session.tool_calls_this_turn
+    _sms_from_classifier = _extracted_hints.get("action") == "sms" and _sms_all_calls
     sms_context = ""
-    if (has_sms_intent or _sms_from_classifier) and session.tool_calls_this_turn and session.client_phone:
+    if (has_sms_intent or _sms_from_classifier) and _sms_all_calls and session.client_phone:
         last_calc = next(
-            (tc for tc in reversed(session.tool_calls_this_turn)
+            (tc for tc in reversed(_sms_all_calls)
              if tc.get("tool") == "calculator"), None)
         if last_calc and last_calc.get("result", {}).get("ok"):
             calc_tool = get_tool("calculator")
@@ -1139,32 +1153,40 @@ async def _stream_voice_response(
                 session.assistant_speaking = False
                 return
             sms_context = f"Текст для СМС:\n{sms_body}\n\n"
-    elif has_sms_intent and session.tool_calls_this_turn:
+    elif has_sms_intent and _sms_all_calls:
         last_calc = next(
-            (tc for tc in reversed(session.tool_calls_this_turn)
+            (tc for tc in reversed(_sms_all_calls)
              if tc.get("tool") == "calculator"), None)
         if last_calc and last_calc.get("result", {}).get("ok"):
             calc_tool = get_tool("calculator")
             sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
 
-    # ── RAG-Guard: prevent stale calc retriggers after CONFIRMED ──
-    # When profile is already CONFIRMED/CHANGE_PENDING and classifier STILL says
-    # calculate, check two override conditions:
-    #   (a) utterance contains an info-question marker (who/what/where/etc.)
-    #       -> user is asking about company/KB, not recalculating; route to RAG.
-    #   (b) this exact calc signature has failed >=2 times in a row
-    #       -> upstream API is rejecting; stop hammering, explain via RAG path.
-    if needs_tool and session.client_profile.state in (
-        ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING
-    ):
+    # ── RAG-Guard: prevent stale calc retriggers ──
+    # (a) info-question override: any turn where classifier says calculate but
+    #     utterance is a pure info question with no calc-param hints -> RAG.
+    #     Fires regardless of profile state because the classifier's "sticky
+    #     recalculate" bias happens at any stage, not just after CONFIRMED.
+    # (b) circuit-breaker: same calc signature failed >=2 times AFTER readback.
+    if needs_tool:
         _msg_lower = (message or "").lower()
-        if _INFO_QUESTION_RE.search(_msg_lower):
+        _FRESH_CALC_PARAM_KEYS_GUARD = (
+            "subject", "cost", "term", "prepaid", "prepaid_pct",
+            "currency", "type_schedule", "client_type", "condition_new",
+        )
+        _no_fresh_calc_hint = not any(
+            _extracted_hints.get(k) not in (None, "")
+            for k in _FRESH_CALC_PARAM_KEYS_GUARD
+        )
+        if _INFO_QUESTION_RE.search(_msg_lower) and _no_fresh_calc_hint:
             print(
                 f"[RAG-Guard] info-question override: '{_msg_lower[:60]}' -> RAG",
                 flush=True,
             )
             needs_tool = False
-        elif session.consecutive_calc_failures >= 2:
+        elif (
+            session.client_profile.state in (ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING)
+            and session.consecutive_calc_failures >= 2
+        ):
             print(
                 f"[RAG-Guard] circuit-breaker: {session.consecutive_calc_failures} "
                 f"consecutive calc failures with sig={session.last_calc_signature!r} -> RAG",
@@ -1187,9 +1209,22 @@ async def _stream_voice_response(
         # Gate 1: profile incomplete -> clarify missing fields.
         # Skip the gate when we're doing a pure param-change on an existing calc
         # (the change path reuses previous params and doesn't need the full profile).
+        # Real param-change turns must (a) reference an existing calc AND
+        # (b) include at least one fresh calc-param hint on this turn.
+        # Without (b), classifier-emitted `recalculate` on unrelated turns
+        # (e.g. info questions) would bypass Gate 1/2 and stale-recalc.
+        _FRESH_CALC_PARAM_KEYS = (
+            "subject", "cost", "term", "prepaid", "prepaid_pct",
+            "currency", "type_schedule", "client_type", "condition_new",
+        )
+        _has_fresh_param_hint = any(
+            _extracted_hints.get(k) not in (None, "")
+            for k in _FRESH_CALC_PARAM_KEYS
+        )
         _is_param_change_for_gate = (
             _extracted_hints.get("action") in ("change_param", "recalculate")
-            and bool(session.tool_calls_this_turn)
+            and bool(session.tool_calls_history)
+            and _has_fresh_param_hint
         )
         if not _is_param_change_for_gate:
             _missing = _gate_profile.missing_fields()
@@ -1275,15 +1310,18 @@ async def _stream_voice_response(
     # Parameter change path: user wants to modify previous calculation
     # (e.g., "change advance to 20%", "make it 48 months", "switch to юрлицо").
     # Does NOT require subject+cost; uses previous calc params as base.
+    # Use cumulative history (+ in-turn appends) so param-change survives across
+    # turns after tool_calls_this_turn is reset at turn start.
+    _all_calls_for_change = session.tool_calls_history + session.tool_calls_this_turn
     _is_param_change = (
         needs_tool
         and _extracted_hints.get("action") in ("change_param", "recalculate")
-        and session.tool_calls_this_turn
+        and bool(_all_calls_for_change)
     )
     _param_change_params: dict[str, Any] | None = None
     _change_no_new_value = False  # True when user asks about changing but gives no value
     if _is_param_change:
-        _prev = next((tc for tc in reversed(session.tool_calls_this_turn)
+        _prev = next((tc for tc in reversed(_all_calls_for_change)
                       if tc.get("tool") == "calculator"), None)
         if _prev and _prev.get("params"):
             import json as _json_change
@@ -1314,7 +1352,11 @@ async def _stream_voice_response(
     # If classifier detected tool intent but no cost and not a param change,
     # check if asking about previous result
     if not _is_param_change and needs_tool and _extracted_hints.get("subject") and not _extracted_hints.get("cost"):
-        _prev_calc = next((tc for tc in reversed(getattr(session, 'tool_calls_this_turn', []))
+        _prev_calls = (
+            getattr(session, 'tool_calls_history', [])
+            + getattr(session, 'tool_calls_this_turn', [])
+        )
+        _prev_calc = next((tc for tc in reversed(_prev_calls)
                           if tc.get("tool") == "calculator" and tc.get("ok")), None)
         if _prev_calc and _prev_calc.get("result"):
             # Re-present the previous result
@@ -1584,9 +1626,10 @@ async def _stream_voice_response(
         # TOOL path: classifier detected tool intent but insufficient data for direct execution.
         # Fall back to LLM function calling.
         prev_calc_context = ""
-        if session.tool_calls_this_turn:
+        _prev_all_calls = session.tool_calls_history + session.tool_calls_this_turn
+        if _prev_all_calls:
             last_calc = next(
-                (tc for tc in reversed(session.tool_calls_this_turn)
+                (tc for tc in reversed(_prev_all_calls)
                  if tc.get("tool") == "calculator"), None)
             if last_calc:
                 import json as _json_prev
