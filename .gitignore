@@ -69,6 +69,8 @@ models/
 
 .worktrees/
 
-# Developer-facing internal docs (local only)
-docs/client-feedback-round-test-playbook.md
-docs/*-test-playbook.md
+# Internal developer-only docs (local workspace, never commit).
+# Ignore everything under docs/ by default; allow only explicit client-facing
+# deliverables through with `!` exceptions below.
+docs/**
+!docs/calculator-api-production-spec-ru.md
