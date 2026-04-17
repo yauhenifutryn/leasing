@@ -6,8 +6,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-if [ -n "${WORKSPACE:-}" ]; then :; elif [ -d "/workspace" ]; then WORKSPACE="/workspace"; else WORKSPACE="$HOME"; fi
-MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
+
+# Prefer an explicit MODELS_DIR. Otherwise look for an existing HF hub cache in
+# known locations so the regen does not silently point HF_HOME at an empty dir.
+if [ -z "${MODELS_DIR:-}" ]; then
+  for candidate in /ephemeral/models /workspace/models "$HOME/models"; do
+    if [ -d "$candidate/hub" ]; then
+      MODELS_DIR="$candidate"
+      break
+    fi
+  done
+fi
+# Fallback to the old derivation if no cache was found yet (fresh machine).
+if [ -z "${MODELS_DIR:-}" ]; then
+  if [ -n "${WORKSPACE:-}" ]; then :; elif [ -d "/ephemeral" ]; then WORKSPACE="/ephemeral"; elif [ -d "/workspace" ]; then WORKSPACE="/workspace"; else WORKSPACE="$HOME"; fi
+  MODELS_DIR="$WORKSPACE/models"
+fi
+echo "[regen] Using MODELS_DIR=${MODELS_DIR}"
 VLLM_PORT=8787
 SESSIONAGENT_PORT=8788
 
