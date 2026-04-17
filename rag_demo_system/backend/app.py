@@ -1732,6 +1732,12 @@ async def _stream_voice_response(
         ]
     else:
         # RAG path: full context for KB questions
+        # Explicitly clear tool schemas: on non-tool turns the LLM must NOT be
+        # able to call calculator autonomously. Without this, the LLM re-invokes
+        # calculator with memorized params on info-question turns, producing
+        # stale calc results alongside the real RAG answer.
+        tool_schemas = []
+        print(f"[LLM] RAG path: tools cleared for non-tool turn", flush=True)
         user_prompt = (
             f"{memory_block}"
             f"Текущий вопрос клиента: {message}\n\n"
