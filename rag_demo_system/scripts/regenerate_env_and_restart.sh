@@ -9,23 +9,32 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [ -n "${WORKSPACE:-}" ]; then :; elif [ -d "/workspace" ]; then WORKSPACE="/workspace"; else WORKSPACE="$HOME"; fi
 MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 VLLM_PORT=8787
+SESSIONAGENT_PORT=8788
 
-# Auto-detect GPU memory and set optimal vLLM utilization
+# Auto-detect GPU memory and set optimal vLLM utilization for main + sessionagent
 GPU_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
 GPU_GB=$(( ${GPU_MIB:-0} / 1024 ))
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
 
 if [ "$GPU_GB" -ge 120 ]; then
-  GPU_UTIL="0.70"
+  GPU_UTIL="0.65"; SESSIONAGENT_GPU_UTIL="0.06"
 elif [ "$GPU_GB" -ge 90 ]; then
-  GPU_UTIL="0.60"
+  GPU_UTIL="0.55"; SESSIONAGENT_GPU_UTIL="0.07"
 elif [ "$GPU_GB" -ge 75 ]; then
-  GPU_UTIL="0.55"
+  GPU_UTIL="0.50"; SESSIONAGENT_GPU_UTIL="0.08"
 else
-  GPU_UTIL="0.50"
+  GPU_UTIL="0.50"; SESSIONAGENT_GPU_UTIL="0.00"  # disabled
 fi
 
-echo "[regen] GPU: ${GPU_NAME} ${GPU_GB}GB -> vLLM utilization ${GPU_UTIL}"
+echo "[regen] GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL}"
+
+if [ "$SESSIONAGENT_GPU_UTIL" = "0.00" ]; then
+  SA_ENV_LINES=$'\n'"# SessionAgent disabled on small GPU (falls back to main LLM)"$'\n'"SESSIONAGENT_BASE_URL="$'\n'"SESSIONAGENT_MODEL="
+  SA_CMD_LINE='STACK_SESSIONAGENT_CMD=""'
+else
+  SA_ENV_LINES=$'\n'"SESSIONAGENT_BASE_URL=http://127.0.0.1:${SESSIONAGENT_PORT}/v1"$'\n'"SESSIONAGENT_MODEL=Qwen/Qwen3-4B-Instruct-FP8"
+  SA_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-FP8 --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
+fi
 echo "[regen] Regenerating .env from latest template..."
 
 cat > "$APP_DIR/.env" <<ENVEOF
@@ -37,6 +46,7 @@ RAG_LLM_BASE_URL=http://127.0.0.1:${VLLM_PORT}/v1
 RAG_LLM_MODEL=Qwen/Qwen3.5-35B-A3B-FP8
 RAG_LLM_FAST_BASE_URL=http://127.0.0.1:${VLLM_PORT}/v1
 RAG_LLM_FAST_MODEL=Qwen/Qwen3.5-35B-A3B-FP8
+${SA_ENV_LINES}
 
 WHISPER_BASE_URL=http://127.0.0.1:50002
 WHISPER_DEVICE=cuda
@@ -55,6 +65,7 @@ RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
 STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR}"
+${SA_CMD_LINE}
 STACK_WHISPER_CMD="LD_LIBRARY_PATH=\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cublas/lib):\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cudnn/lib):\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
 

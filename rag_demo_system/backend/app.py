@@ -701,11 +701,16 @@ async def _stream_voice_response(
             _tool_history = f"Инструменты в этом разговоре: {', '.join(_last_tools)}"
 
         _t_classify_start = time.time()
+        # SessionAgent uses a dedicated small-model vLLM instance (Qwen3-4B on :8788)
+        # to avoid scheduler contention with the main 35B model. Falls back to
+        # effective_* when the env var is empty (single-instance mode).
+        _sa_base_url = settings.llm.session_agent_base_url or effective_base_url
+        _sa_model = settings.llm.session_agent_model or effective_model
         try:
             classify_resp = await asyncio.to_thread(
                 call_openai_compatible,
-                base_url=effective_base_url,
-                model=effective_model,
+                base_url=_sa_base_url,
+                model=_sa_model,
                 system_prompt=(
                     "Ты классификатор сообщений голосового бота лизинговой компании. "
                     "Проанализируй НОВОЕ сообщение клиента в контексте диалога.\n\n"

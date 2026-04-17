@@ -67,6 +67,10 @@ class LLMConfig:
     concise_sentences_min: int
     concise_sentences_max: int
     expand_triggers: list[str]
+    # Dedicated SessionAgent instance (classifier + profile extractor).
+    # Falls back to fast_* then base_url/model if unset.
+    session_agent_base_url: str
+    session_agent_model: str
 
 
 @dataclass
@@ -246,6 +250,14 @@ def load_settings(path: Path | None = None) -> Settings:
             concise_sentences_min=int(llm.get("concise_sentences_min", 3)),
             concise_sentences_max=int(llm.get("concise_sentences_max", 6)),
             expand_triggers=list(llm.get("expand_triggers", [])),
+            session_agent_base_url=os.getenv(
+                "SESSIONAGENT_BASE_URL",
+                llm.get("session_agent_base_url", "http://127.0.0.1:8788/v1"),
+            ),
+            session_agent_model=os.getenv(
+                "SESSIONAGENT_MODEL",
+                llm.get("session_agent_model", "Qwen/Qwen3-4B-Instruct-FP8"),
+            ),
         ),
         reranker=RerankerConfig(
             enabled=bool(reranker.get("enabled", True)),

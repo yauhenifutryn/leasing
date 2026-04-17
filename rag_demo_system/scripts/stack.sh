@@ -27,6 +27,12 @@ case "${1:-up}" in
 
     # Start all services (autostart=false, need explicit start)
     "$SUPERVISORCTL" -c "$CONF" start qwen
+    # SessionAgent: only start when STACK_SESSIONAGENT_CMD is set (small GPUs disable it)
+    if [ -n "${STACK_SESSIONAGENT_CMD:-}" ]; then
+      "$SUPERVISORCTL" -c "$CONF" start sessionagent
+    else
+      echo "SessionAgent disabled (STACK_SESSIONAGENT_CMD empty); classifier uses main LLM"
+    fi
     "$SUPERVISORCTL" -c "$CONF" start whisper
     "$SUPERVISORCTL" -c "$CONF" start silero_tts
     ;;

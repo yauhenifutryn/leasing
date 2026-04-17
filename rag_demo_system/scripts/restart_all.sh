@@ -7,6 +7,7 @@ if [ -n "${WORKSPACE:-}" ]; then :; elif [ -d "/workspace" ]; then WORKSPACE="/w
 SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
 CONF="$APP_DIR/scripts/supervisord.conf"
 VLLM_PORT=8787
+SESSIONAGENT_PORT=8788
 
 echo "[restart] ============================================="
 echo "[restart]   Full Stack Restart"
@@ -45,7 +46,7 @@ fi
 
 # --- Step 3: Kill anything on service ports ---
 echo "[restart] Step 3: Clearing service ports..."
-for port in 8000 $VLLM_PORT 50002 50006; do
+for port in 8000 $VLLM_PORT $SESSIONAGENT_PORT 50002 50006; do
   pid=$(lsof -ti :"$port" 2>/dev/null || true)
   if [ -n "$pid" ]; then
     echo "  Killing PID $pid on port $port"
@@ -182,6 +183,10 @@ echo ""
 echo "[restart] Step 10: Health checks..."
 echo -n "[restart]   Backend:    "; curl -s --max-time 5 http://localhost:8000/api/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   vLLM:       "; curl -s --max-time 5 http://localhost:$VLLM_PORT/health >/dev/null && echo "OK" || echo "FAILED"
+# SessionAgent health check only if env var present
+if [ -n "${SESSIONAGENT_BASE_URL:-}" ]; then
+  echo -n "[restart]   SessionAgt: "; curl -s --max-time 5 http://localhost:$SESSIONAGENT_PORT/health >/dev/null && echo "OK" || echo "FAILED"
+fi
 echo -n "[restart]   Qdrant:     "; curl -s --max-time 5 http://localhost:6333/healthz >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Whisper:    "; curl -s --max-time 5 http://localhost:50002/health >/dev/null && echo "OK" || echo "FAILED"
 echo -n "[restart]   Silero TTS: "; curl -s --max-time 5 http://localhost:50006/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('OK' if d.get('ok') else f'FAILED ({d.get(\"reason\",\"unknown\")})')" 2>/dev/null || echo "FAILED"
