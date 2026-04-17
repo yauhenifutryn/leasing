@@ -11,6 +11,22 @@ from typing import Any
 MVP_PREPAID_RANGE = (0.0, 40.0)
 MVP_TERM_RANGE = (12, 84)
 
+# Enum-field slot-fill answers — single-word utterances that match these are
+# valid replies to clarification questions (e.g. "Аннуитет" → type_schedule).
+# We let such patches bypass the <2-token noise filter.
+_ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
+    # type_schedule
+    "аннуитет", "аннуитетный", "аннуитетная", "аннуитетное",
+    "линейный", "линейная", "линейное", "равный",
+    # client_type (raw single-word forms — _normalize_client_type handles full phrases)
+    "физлицо", "физик", "физическое",
+    "юрлицо", "юридическое", "ооо", "оао", "зао", "организация", "компания",
+    "ип", "ипэшник", "самозанятый",
+    # condition_new
+    "новый", "новая", "новое",
+    "бу", "б/у", "подержанный", "подержанная", "подержанное",
+})
+
 
 def _normalize_client_type(v: Any) -> str | None:
     if not isinstance(v, str):
@@ -53,10 +69,17 @@ def filter_patches(
     if not patches:
         return {}
 
-    # Drop everything when utterance is noise (fewer than 2 non-digit tokens).
+    # Noise filter: drop everything when utterance is truly short noise.
+    # EXCEPTION: single-word enum slot-fill answers ("Аннуитет", "Физлицо",
+    # "Новый" …) are valid replies to clarification questions and must
+    # survive so the profile state machine can reach CONFIRMED.
     tokens = [t for t in (utterance or "").strip().split() if not t.isdigit()]
     if len(tokens) < 2:
-        return {}
+        _stripped = (utterance or "").strip().lower().rstrip(".!,?;:")
+        _is_enum_fill = _stripped in _ENUM_SLOT_FILL_WORDS
+        if not _is_enum_fill:
+            return {}
+        print(f"[Profile] single-word enum patch accepted: '{_stripped}' patches={list(patches.keys())}", flush=True)
 
     out: dict[str, Any] = dict(patches)
 
@@ -97,5 +120,9 @@ def filter_patches(
                 out.pop("term_months")
         except (TypeError, ValueError):
             out.pop("term_months")
+
+    dropped_keys = [k for k in patches.keys() if k not in out]
+    if dropped_keys:
+        print(f"[Profile] normalized-dropped patch keys={dropped_keys} utterance='{(utterance or '')[:60]}'", flush=True)
 
     return out
