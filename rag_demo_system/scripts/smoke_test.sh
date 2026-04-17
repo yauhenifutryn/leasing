@@ -128,7 +128,7 @@ pass "vLLM direct test"
 # Enabled when SESSIONAGENT_BASE_URL is set. On small GPUs provision leaves
 # the var empty (disabled) and backend falls back to main LLM — skip then.
 SA_BASE="${SESSIONAGENT_BASE_URL:-}"
-SA_MODEL="${SESSIONAGENT_MODEL:-Qwen/Qwen3-4B-Instruct-FP8}"
+SA_MODEL="${SESSIONAGENT_MODEL:-Qwen/Qwen3-4B-Instruct-2507-FP8}"
 if [ -n "$SA_BASE" ]; then
   SA_HEALTH="${SA_BASE%/v1}/health"
   wait_for_url "SessionAgent (Qwen3-4B)" "$SA_HEALTH" 300 10

@@ -62,7 +62,7 @@ cd /ephemeral/leasing/rag_demo_system
 git pull origin feature/voice-pipeline
 
 # Regenerate .env (picks up all new vars) then full clean restart.
-# HF_TOKEN is needed ONCE to download Qwen3-4B-Instruct-FP8 on first boot.
+# HF_TOKEN is needed ONCE to download Qwen3-4B-Instruct-2507-FP8 on first boot.
 HF_TOKEN="$HF_TOKEN" bash scripts/regenerate_env_and_restart.sh
 ```
 
@@ -104,7 +104,7 @@ look up the HF commit SHAs for the two models and export before running
 provision/regenerate:
 
 ```bash
-# Lookup on https://huggingface.co/Qwen/Qwen3-4B-Instruct-FP8/commits/main
+# Lookup on https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507-FP8/commits/main
 # and https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8/commits/main
 # Use the latest commits you have tested.
 

@@ -269,7 +269,7 @@ def load_settings(path: Path | None = None) -> Settings:
             ),
             session_agent_model=os.getenv(
                 "SESSIONAGENT_MODEL",
-                llm.get("session_agent_model", "Qwen/Qwen3-4B-Instruct-FP8"),
+                llm.get("session_agent_model", "Qwen/Qwen3-4B-Instruct-2507-FP8"),
             ),
         ),
         reranker=RerankerConfig(

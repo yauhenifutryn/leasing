@@ -21,7 +21,7 @@ def _reload_settings():
 def test_session_agent_defaults_from_env(monkeypatch, tmp_path) -> None:
     """When SESSIONAGENT_BASE_URL is set, LLMConfig reflects it."""
     monkeypatch.setenv("SESSIONAGENT_BASE_URL", "http://127.0.0.1:8788/v1")
-    monkeypatch.setenv("SESSIONAGENT_MODEL", "Qwen/Qwen3-4B-Instruct-FP8")
+    monkeypatch.setenv("SESSIONAGENT_MODEL", "Qwen/Qwen3-4B-Instruct-2507-FP8")
 
     # Write a minimal yaml config for load_settings
     yaml_path = tmp_path / "app.yaml"
@@ -55,7 +55,7 @@ def test_session_agent_defaults_from_env(monkeypatch, tmp_path) -> None:
     mod = _reload_settings()
     s = mod.load_settings(yaml_path)
     assert s.llm.session_agent_base_url == "http://127.0.0.1:8788/v1"
-    assert s.llm.session_agent_model == "Qwen/Qwen3-4B-Instruct-FP8"
+    assert s.llm.session_agent_model == "Qwen/Qwen3-4B-Instruct-2507-FP8"
 
 
 def test_session_agent_env_override(monkeypatch, tmp_path) -> None:
