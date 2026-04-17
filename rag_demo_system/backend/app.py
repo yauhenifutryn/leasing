@@ -88,13 +88,20 @@ async def _emit_plain_assistant_response(
     """Send a plain assistant text + TTS audio response through the websocket.
 
     Replicates the inline pattern used in the refusal path: emits
-    `response.output_text.delta`, synthesizes audio, emits
-    `response.output_audio.delta`, then closes with `response.done`.
-    Used by the orchestrator state-machine gate (clarification /
-    readback / change-confirm prompts) to bypass the LLM.
+    `response.output_text.delta`, synthesizes audio, then streams audio in
+    40 ms chunks (1920 bytes @ 24kHz 16-bit mono) so that barge-in via VAD
+    can interrupt mid-playback by flipping `session.interrupted` True.
+    Used by the orchestrator state-machine gate (clarification / readback /
+    change-confirm prompts) to bypass the LLM while still supporting
+    interruption.
     """
+    import base64 as _b64
+
     if not text:
         return
+    if session is not None:
+        session.assistant_speaking = True
+        session.interrupted = False
     await websocket.send_json({
         "type": "response.output_text.delta",
         "session_id": session_id,
@@ -102,13 +109,21 @@ async def _emit_plain_assistant_response(
     })
     try:
         audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
-        if audio_resp.get("audio_b64"):
-            await websocket.send_json({
-                "type": "response.output_audio.delta",
-                "session_id": session_id,
-                "delta": audio_resp["audio_b64"],
-                "sample_rate_hz": audio_resp.get("sample_rate_hz"),
-            })
+        audio_b64 = audio_resp.get("audio_b64") or ""
+        if audio_b64:
+            pcm = _b64.b64decode(audio_b64)
+            sample_rate = audio_resp.get("sample_rate_hz")
+            chunk_size = 1920  # 40ms @ 24kHz 16-bit mono
+            for i in range(0, len(pcm), chunk_size):
+                if session is not None and session.interrupted:
+                    break
+                chunk = pcm[i : i + chunk_size]
+                await websocket.send_json({
+                    "type": "response.output_audio.delta",
+                    "session_id": session_id,
+                    "delta": _b64.b64encode(chunk).decode(),
+                    "sample_rate_hz": sample_rate,
+                })
     except Exception:  # noqa: BLE001
         pass
     # Append to transcript for memory continuity.
@@ -119,6 +134,7 @@ async def _emit_plain_assistant_response(
                 chat_sess.transcript.append({"role": "assistant", "text": text})
         except Exception:  # noqa: BLE001
             pass
+        session.assistant_speaking = False
     await websocket.send_json({
         "type": "response.done",
         "session_id": session_id,
