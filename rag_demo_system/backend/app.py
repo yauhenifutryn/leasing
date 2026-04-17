@@ -67,14 +67,28 @@ class _JambonzWebSocketShim:
     WebSocket frames (no resampling needed). Other events broadcast to SIP monitor.
     """
 
-    def __init__(self, ws: WebSocket, session_id: str) -> None:
+    def __init__(self, ws: WebSocket, session_id: str, control_ws: WebSocket | None = None) -> None:
         self._ws = ws
+        self._control_ws = control_ws
         self._session_id = session_id
         self.audio_bytes_sent = 0
 
     async def send_bytes(self, data: bytes) -> None:
         """Forward raw PCM bytes to the underlying Jambonz audio WebSocket."""
         await self._ws.send_bytes(data)
+
+    async def send_text(self, text: str) -> None:
+        """Forward control-channel messages (killAudio, disconnect) to Jambonz.
+
+        Jambonz mod_audio_fork accepts JSON control frames on the audio
+        websocket (see call sites for killAudio in jambonz_audio_ws,
+        e.g. barge-in and consent paths). When a separate control_ws is
+        supplied, prefer it (future-proofing for a dedicated control plane);
+        otherwise route to the audio ws, which is the established pattern
+        in this codebase and known to work for killAudio/disconnect.
+        """
+        target = self._control_ws if self._control_ws is not None else self._ws
+        await target.send_text(text)
 
     async def send_json(self, data: dict[str, Any]) -> None:
         event_type = data.get("type", "")
