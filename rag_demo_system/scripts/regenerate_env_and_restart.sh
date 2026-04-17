@@ -65,15 +65,19 @@ echo "[regen] Regenerating .env from latest template..."
 # pending from the client.
 _env_get() {
   local key="$1"; local default_val="${2:-}"
+  local value=""
   if [ -n "${!key:-}" ]; then
-    printf '%s' "${!key}"
+    value="${!key}"
   elif [ -f "$APP_DIR/.env" ]; then
     local line
     line=$(grep -E "^${key}=" "$APP_DIR/.env" | tail -1 || true)
-    printf '%s' "${line#*=}" | sed -E "s/^'(.*)'\$/\1/; s/^\"(.*)\"\$/\1/"
-  else
-    printf '%s' "$default_val"
+    value=$(printf '%s' "${line#*=}" | sed -E "s/^'(.*)'\$/\1/; s/^\"(.*)\"\$/\1/")
   fi
+  # Fall through to default when value is empty or whitespace-only.
+  if [ -z "${value// /}" ]; then
+    value="$default_val"
+  fi
+  printf '%s' "$value"
 }
 CALCULATOR_API_BASE_URL_V="$(_env_get CALCULATOR_API_BASE_URL 'https://personal.mikro-leasing.by/calculator/api')"
 CALCULATOR_API_TOKEN_V="$(_env_get CALCULATOR_API_TOKEN '')"

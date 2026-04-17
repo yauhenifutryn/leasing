@@ -299,7 +299,7 @@ def load_settings(path: Path | None = None) -> Settings:
             sms_sender_name=os.getenv("SMS_SENDER_NAME", tools_cfg.get("sms_sender_name", "MikroLizing")),
             crm_webhook_url=os.getenv("CRM_WEBHOOK_URL", tools_cfg.get("crm_webhook_url", "")),
             crm_webhook_token=os.getenv("CRM_WEBHOOK_TOKEN", tools_cfg.get("crm_webhook_token", "")),
-            usd_byn_rate=float(os.getenv("USD_BYN_RATE", tools_cfg.get("usd_byn_rate", 3.0))),
+            usd_byn_rate=float(os.getenv("USD_BYN_RATE", "").strip() or tools_cfg.get("usd_byn_rate", 3.0)),
         ),
         turn_taking=TurnTakingConfig(
             vad_silence_ms=int(os.getenv("VAD_SILENCE_MS", "700")),
