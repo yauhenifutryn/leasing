@@ -165,9 +165,11 @@ PY
 section "7. KB retrieval smoke (new sections indexed)"
 "$PY" - <<'PY'
 import sys
+from pathlib import Path
 from backend.engine import RAGEngine
 from backend.settings import load_settings
-eng = RAGEngine(load_settings())
+state_dir = Path(__file__).resolve().parent / ".state" if False else Path.cwd() / ".state"
+eng = RAGEngine(load_settings(), state_dir)
 queries = [
     "что такое нагрузка",
     "линейный график",
