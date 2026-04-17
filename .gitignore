@@ -52,6 +52,11 @@ demo_ui/__pycache__/
 
 # Archives
 *.zip
+*.tar.gz
+
+# Voice logs dump (analysis artifacts)
+voice-logs/
+voice-logs.tar.gz
 
 # Voice pipeline runtime artifacts
 **/voices/*.pt
