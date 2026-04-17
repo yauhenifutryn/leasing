@@ -308,6 +308,67 @@ PY
 [ $? -eq 0 ] && pass "Grounding validator" || fail "Grounding validator"
 
 # ────────────────────────────────────────────────────────────────────────────
+section "13. Currency mapping (via filter_patches)"
+"$PY" - <<'PY'
+import sys
+from backend.profile_hygiene import filter_patches
+
+cases = [
+    ("в рублях (бытовое)",     {"currency": "RUB"}, "давай в рублях", "BYN"),
+    ("белорусские рубли",      {"currency": "BYN"}, "белорусские рубли", "BYN"),
+    ("российские рубли",       {"currency": "RUB"}, "в российских рублях", "RUB"),
+    ("доллары",                {"currency": "USD"}, "в долларах", "USD"),
+    ("евро",                   {"currency": "EUR"}, "в евро", "EUR"),
+]
+bad = 0
+for name, patch, utt, expected in cases:
+    got = filter_patches(patch, utt).get("currency")
+    if got != expected:
+        print(f"BAD {name}: got={got} want={expected}")
+        bad += 1
+    else:
+        print(f"OK  {name} -> {got}")
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] && pass "Currency mapping" || fail "Currency mapping"
+
+# ────────────────────────────────────────────────────────────────────────────
+section "14. MVP range boundaries (profile hygiene)"
+"$PY" - <<'PY'
+import sys
+from backend.profile_hygiene import filter_patches
+
+prepaid_cases = [
+    ("prepaid 0 keep",  {"prepaid_pct": 0},   "без аванса", 0),
+    ("prepaid 40 keep", {"prepaid_pct": 40},  "сорок процентов", 40),
+    ("prepaid 41 drop", {"prepaid_pct": 41},  "сорок один процент", None),
+]
+term_cases = [
+    ("term 12 keep",    {"term_months": 12},  "двенадцать месяцев", 12),
+    ("term 84 keep",    {"term_months": 84},  "восемьдесят четыре месяца", 84),
+    ("term 11 drop",    {"term_months": 11},  "одиннадцать месяцев", None),
+    ("term 85 drop",    {"term_months": 85},  "восемьдесят пять", None),
+]
+bad = 0
+for name, patch, utt, expected in prepaid_cases:
+    got = filter_patches(patch, utt).get("prepaid_pct")
+    if got != expected:
+        print(f"BAD {name}: got={got} want={expected}")
+        bad += 1
+    else:
+        print(f"OK  {name} -> {got}")
+for name, patch, utt, expected in term_cases:
+    got = filter_patches(patch, utt).get("term_months")
+    if got != expected:
+        print(f"BAD {name}: got={got} want={expected}")
+        bad += 1
+    else:
+        print(f"OK  {name} -> {got}")
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] && pass "MVP range boundaries" || fail "MVP range boundaries"
+
+# ────────────────────────────────────────────────────────────────────────────
 echo
 echo "=============================="
 echo "  Summary: ${GRN}${PASS} pass${NC} | ${YLW}${WARN} warn${NC} | ${RED}${FAIL} fail${NC}"
