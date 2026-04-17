@@ -36,6 +36,19 @@ behavior changes you will observe on the server after deploy:
 You have two supported deploy flows. Choose one based on whether you
 want a minimal restart (1.1) or a full idempotent re-provision (1.2).
 
+**Before you start:** export `HF_TOKEN` from your local credentials store
+(it is intentionally NEVER committed to this repo). The token is stored
+in your Claude memory file `reference_api_credentials.md` — copy the
+value from there into your shell before running the commands below:
+
+```bash
+export HF_TOKEN=<paste-from-your-credentials-memory>
+```
+
+All `HF_TOKEN="$HF_TOKEN"` references below read it from that environment
+variable.
+
+
 ### 1.1 Fast path — fetch, regenerate .env, restart
 
 For a routine update that pulls this round's commits, rewrites `.env`
@@ -50,7 +63,7 @@ git pull origin feature/voice-pipeline
 
 # Regenerate .env (picks up all new vars) then full clean restart.
 # HF_TOKEN is needed ONCE to download Qwen3-4B-Instruct-FP8 on first boot.
-HF_TOKEN=$HF_TOKEN bash scripts/regenerate_env_and_restart.sh
+HF_TOKEN="$HF_TOKEN" bash scripts/regenerate_env_and_restart.sh
 ```
 
 **After first-boot HF download completes** (the 4B model is ~8 GB, 3-6 min
@@ -75,7 +88,7 @@ git pull origin feature/voice-pipeline
 
 # Re-run provision — downloads Qwen3-4B if missing, rewrites .env,
 # restarts stack. Safe to run multiple times.
-HF_TOKEN=$HF_TOKEN bash scripts/provision_server.sh
+HF_TOKEN="$HF_TOKEN" bash scripts/provision_server.sh
 
 # After provision completes, run smoke test (waits for services, verifies KB index).
 bash scripts/smoke_test.sh
@@ -97,7 +110,7 @@ provision/regenerate:
 
 QWEN_MAIN_REVISION=<sha-for-35B-main-model> \
 QWEN_SESSIONAGENT_REVISION=<sha-for-4B-sessionagent> \
-HF_TOKEN=$HF_TOKEN \
+HF_TOKEN="$HF_TOKEN" \
 bash scripts/regenerate_env_and_restart.sh
 ```
 
