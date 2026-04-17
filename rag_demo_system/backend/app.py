@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import uuid
 import time
 from pathlib import Path
@@ -58,6 +59,13 @@ _jambonz_last_caller_phone: str = ""
 
 # SIP monitor: connected WebSocket clients for live event streaming
 _sip_monitor_clients: set[WebSocket] = set()
+
+# Info-seeking question markers — used by RAG-guard to prevent stale
+# calculator retriggers on non-tool questions after profile is CONFIRMED.
+_INFO_QUESTION_RE = re.compile(
+    r"\b(кто|что|где|когда|почему|зачем|какой|какая|какое|какие|сколько|чей|чья|чьё|чьи)\b",
+    re.IGNORECASE,
+)
 
 
 async def broadcast_sip_event(event: dict[str, Any]) -> None:
@@ -1123,6 +1131,31 @@ async def _stream_voice_response(
             calc_tool = get_tool("calculator")
             sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
 
+    # ── RAG-Guard: prevent stale calc retriggers after CONFIRMED ──
+    # When profile is already CONFIRMED/CHANGE_PENDING and classifier STILL says
+    # calculate, check two override conditions:
+    #   (a) utterance contains an info-question marker (who/what/where/etc.)
+    #       -> user is asking about company/KB, not recalculating; route to RAG.
+    #   (b) this exact calc signature has failed >=2 times in a row
+    #       -> upstream API is rejecting; stop hammering, explain via RAG path.
+    if needs_tool and session.client_profile.state in (
+        ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING
+    ):
+        _msg_lower = (message or "").lower()
+        if _INFO_QUESTION_RE.search(_msg_lower):
+            print(
+                f"[RAG-Guard] info-question override: '{_msg_lower[:60]}' -> RAG",
+                flush=True,
+            )
+            needs_tool = False
+        elif session.consecutive_calc_failures >= 2:
+            print(
+                f"[RAG-Guard] circuit-breaker: {session.consecutive_calc_failures} "
+                f"consecutive calc failures with sig={session.last_calc_signature!r} -> RAG",
+                flush=True,
+            )
+            needs_tool = False
+
     # ── Profile State-Machine Gate ──
     # Enforces server-side readback + change-confirm BEFORE any calculator call.
     # Only active when the classifier detected a tool intent; RAG paths pass through.
@@ -1415,6 +1448,18 @@ async def _stream_voice_response(
                         "result": _direct_tool_result,
                         "ok": _tool_ok,
                     })
+                    # ── Circuit-breaker bookkeeping ──
+                    _calc_params = _direct_tool_result.get("params", _direct_params)
+                    _calc_sig = str(sorted(_calc_params.items())) if isinstance(_calc_params, dict) else ""
+                    _calc_ok = bool(_direct_tool_result.get("ok"))
+                    if _calc_sig and _calc_sig == session.last_calc_signature and not _calc_ok:
+                        session.consecutive_calc_failures += 1
+                    elif _calc_ok:
+                        session.consecutive_calc_failures = 0
+                        session.last_calc_signature = _calc_sig
+                    else:
+                        session.consecutive_calc_failures = 1
+                        session.last_calc_signature = _calc_sig
             except Exception as _texc:
                 print(f"[DirectTool] ERROR: {_texc}", flush=True)
                 _direct_tool_result = None
@@ -1686,6 +1731,19 @@ async def _stream_voice_response(
                     session.tool_calls_this_turn.append({
                         "tool": func_name, "params": filled_params, "result": result,
                     })
+                    # ── Circuit-breaker bookkeeping (calculator only) ──
+                    if func_name == "calculator":
+                        _calc_params = filled_params
+                        _calc_sig = str(sorted(_calc_params.items())) if isinstance(_calc_params, dict) else ""
+                        _calc_ok = bool(result.get("ok"))
+                        if _calc_sig and _calc_sig == session.last_calc_signature and not _calc_ok:
+                            session.consecutive_calc_failures += 1
+                        elif _calc_ok:
+                            session.consecutive_calc_failures = 0
+                            session.last_calc_signature = _calc_sig
+                        else:
+                            session.consecutive_calc_failures = 1
+                            session.last_calc_signature = _calc_sig
                     summary = tool.format_voice_summary(result)
                 except KeyError:
                     summary = f"Инструмент '{func_name}' не найден."

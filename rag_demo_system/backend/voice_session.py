@@ -22,6 +22,10 @@ class VoiceSession:
     turn_count: int = 0
     tool_calls_this_turn: list = field(default_factory=list)
 
+    # Circuit breaker: track repeated identical calc attempts that fail upstream.
+    last_calc_signature: str = ""
+    consecutive_calc_failures: int = 0
+
     # SIP telephony fields (defaults preserve existing WebSocket/RTC behavior)
     transport: str = "websocket"          # "websocket" | "rtc" | "jambonz"
     client_phone: str | None = None       # from SIP caller ID, None for browser
