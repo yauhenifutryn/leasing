@@ -230,6 +230,35 @@ PY
 [ $? -eq 0 ] && pass "Literal stop-word regex matches expected set" || fail "Literal stop-word regex mismatches"
 
 # ────────────────────────────────────────────────────────────────────────────
+section "10. Profile hygiene filter"
+"$PY" - <<'PY'
+import sys
+from backend.profile_hygiene import filter_patches
+
+cases = [
+    ("noise drop",      {"client_type": "Юридическое лицо"}, "ОООООО", {}),
+    ("bot name drop",   {"name": "Ксения"},                  "Ксения, что такое нагрузка?", {}),
+    ("ипэшник -> ИП",   {"client_type": "ИП"},               "я ипэшник", {"client_type": "ИП"}),
+    ("bare рубли BYN",  {"currency": "RUB"},                 "давай в рублях", {"currency": "BYN"}),
+    ("росс. рубли RUB", {"currency": "RUB"},                 "в российских рублях", {"currency": "RUB"}),
+    ("prepaid 50 drop", {"prepaid_pct": 50},                 "пятьдесят процентов аванс", {}),
+    ("prepaid 20 keep", {"prepaid_pct": 20},                 "двадцать процентов аванс", {"prepaid_pct": 20}),
+    ("term 300 drop",   {"term_months": 300},                "триста месяцев", {}),
+    ("term 84 keep",    {"term_months": 84},                 "восемьдесят четыре месяца", {"term_months": 84}),
+]
+bad = 0
+for name, patches, utterance, expected in cases:
+    got = filter_patches(patches, utterance)
+    if got != expected:
+        print(f"BAD {name}: got={got} want={expected}")
+        bad += 1
+    else:
+        print(f"OK  {name}")
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] && pass "Profile hygiene filter rejects noise and normalizes enums" || fail "Profile hygiene mismatches"
+
+# ────────────────────────────────────────────────────────────────────────────
 echo
 echo "=============================="
 echo "  Summary: ${GRN}${PASS} pass${NC} | ${YLW}${WARN} warn${NC} | ${RED}${FAIL} fail${NC}"
