@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .session import ClientProfile
+
 
 @dataclass
 class VoiceSession:
@@ -23,6 +25,13 @@ class VoiceSession:
     transport: str = "websocket"          # "websocket" | "rtc" | "jambonz"
     client_phone: str | None = None       # from SIP caller ID, None for browser
     call_id: str | None = None            # Jambonz call ID or RTC session ID
+
+    # Client profile: incrementally populated, gates calculator invocation.
+    client_profile: ClientProfile = field(default_factory=ClientProfile)
+
+    # Turn-taking: listen_mode entered on semantic stop request.
+    listen_mode: bool = False
+    listen_mode_until: float = 0.0
 
     @property
     def stack_id(self) -> str:
