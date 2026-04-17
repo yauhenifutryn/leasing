@@ -68,3 +68,7 @@ models/
 .state/
 
 .worktrees/
+
+# Developer-facing internal docs (local only)
+docs/client-feedback-round-test-playbook.md
+docs/*-test-playbook.md
