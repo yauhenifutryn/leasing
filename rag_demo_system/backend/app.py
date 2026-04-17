@@ -167,10 +167,14 @@ class _JambonzWebSocketShim:
             return
 
         if event_type == "response.output_text.delta":
+            # Apply clean_voice_output so the monitor displays what the caller
+            # actually hears (e.g. "улица" instead of "ул."). Upstream producers
+            # emit whole sentences/phrases here (not per-token), so abbreviation
+            # expansion works correctly on each delta.
             await broadcast_sip_event({
                 "type": "sip.llm.sentence",
                 "call_id": self._session_id,
-                "text": data.get("delta", ""),
+                "text": clean_voice_output(data.get("delta", "") or ""),
             })
             return
 
