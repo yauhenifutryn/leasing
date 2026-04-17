@@ -2246,6 +2246,8 @@ async def voice_ws(websocket: WebSocket) -> None:
                 state.log({"event": "session_analysis", "session_id": session_id, "overall_score": report.get("overall_score")})
         except Exception:  # noqa: BLE001
             pass
+        if session.listen_mode_task and not session.listen_mode_task.done():
+            session.listen_mode_task.cancel()
         if rtc_handler is not None:
             await rtc_handler.close()
         voice_sessions.pop(session_id, None)
@@ -2840,6 +2842,8 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
     finally:
         # Post-session: save transcript + quality analysis
         if session is not None:
+            if session.listen_mode_task and not session.listen_mode_task.done():
+                session.listen_mode_task.cancel()
             _state_dir = Path(__file__).resolve().parents[1] / ".state"
             try:
                 chat_session = state.get(session_id)
