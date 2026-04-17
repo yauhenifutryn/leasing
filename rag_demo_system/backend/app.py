@@ -19,6 +19,12 @@ from .citations import attach_citations
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
+from .profile_prompts import (
+    build_change_confirm_text,
+    build_clarification_prompt,
+    build_readback_text,
+)
+from .session import ProfileState
 from .consent import (
     consent_denied_response,
     consent_granted_response,
@@ -59,6 +65,58 @@ async def broadcast_sip_event(event: dict[str, Any]) -> None:
             await ws.send_json(event)
         except Exception:  # noqa: BLE001
             _sip_monitor_clients.discard(ws)
+
+
+async def _emit_plain_assistant_response(
+    text: str,
+    websocket: Any,
+    session_id: str,
+    *,
+    backend: str = "",
+    session: Any = None,
+) -> None:
+    """Send a plain assistant text + TTS audio response through the websocket.
+
+    Replicates the inline pattern used in the refusal path: emits
+    `response.output_text.delta`, synthesizes audio, emits
+    `response.output_audio.delta`, then closes with `response.done`.
+    Used by the orchestrator state-machine gate (clarification /
+    readback / change-confirm prompts) to bypass the LLM.
+    """
+    if not text:
+        return
+    await websocket.send_json({
+        "type": "response.output_text.delta",
+        "session_id": session_id,
+        "delta": text,
+    })
+    try:
+        audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
+        if audio_resp.get("audio_b64"):
+            await websocket.send_json({
+                "type": "response.output_audio.delta",
+                "session_id": session_id,
+                "delta": audio_resp["audio_b64"],
+                "sample_rate_hz": audio_resp.get("sample_rate_hz"),
+            })
+    except Exception:  # noqa: BLE001
+        pass
+    # Append to transcript for memory continuity.
+    if session is not None:
+        try:
+            chat_sess = state.get(session_id)
+            if chat_sess is not None:
+                chat_sess.transcript.append({"role": "assistant", "text": text})
+        except Exception:  # noqa: BLE001
+            pass
+    await websocket.send_json({
+        "type": "response.done",
+        "session_id": session_id,
+        "backend": backend,
+        "used_knowledge": [],
+        "citations": [],
+        "timings": {},
+    })
 
 
 class _JambonzWebSocketShim:
@@ -1021,6 +1079,101 @@ async def _stream_voice_response(
         if last_calc and last_calc.get("result", {}).get("ok"):
             calc_tool = get_tool("calculator")
             sms_context = f"Текст для СМС:\n{calc_tool.format_sms_body(last_calc['result'])}\n\n"
+
+    # ── Profile State-Machine Gate ──
+    # Enforces server-side readback + change-confirm BEFORE any calculator call.
+    # Only active when the classifier detected a tool intent; RAG paths pass through.
+    #
+    # Gate 1 (COLLECTING + incomplete): ask for missing fields, skip calculator.
+    # Gate 2 (COLLECTING + complete):   emit readback, transition to READBACK_PENDING.
+    # Gate 3 (READBACK_PENDING):        on is_confirm, transition to CONFIRMED and
+    #                                   fall through; otherwise re-prompt the readback.
+    # Gate 4 (CHANGE_PENDING):          on is_confirm, apply pending_change, transition
+    #                                   to CONFIRMED and fall through; otherwise re-ask.
+    if needs_tool:
+        _gate_profile = session.client_profile
+        # Gate 1: profile incomplete -> clarify missing fields.
+        # Skip the gate when we're doing a pure param-change on an existing calc
+        # (the change path reuses previous params and doesn't need the full profile).
+        _is_param_change_for_gate = (
+            _extracted_hints.get("action") in ("change_param", "recalculate")
+            and bool(session.tool_calls_this_turn)
+        )
+        if not _is_param_change_for_gate:
+            _missing = _gate_profile.missing_fields()
+            if _missing:
+                print(
+                    f"[Orchestrator] profile incomplete, missing={sorted(_missing)}",
+                    flush=True,
+                )
+                _clar = build_clarification_prompt(_missing, _gate_profile)
+                await _emit_plain_assistant_response(
+                    _clar, websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
+        # Gate 2: profile complete, never confirmed -> emit readback.
+        if (
+            _gate_profile.state == ProfileState.COLLECTING
+            and _gate_profile.is_complete_for_calc()
+            and _gate_profile.confirmed_at is None
+            and not _sa_is_confirm
+            and not _is_param_change_for_gate
+        ):
+            _gate_profile.state = ProfileState.READBACK_PENDING
+            _gate_profile.readback_emitted_at = time.time()
+            _readback = build_readback_text(_gate_profile)
+            print(f"[Orchestrator] readback emitted", flush=True)
+            await _emit_plain_assistant_response(
+                _readback, websocket, session_id,
+                backend=backend, session=session,
+            )
+            session.assistant_speaking = False
+            return
+        # Gate 3: awaiting confirmation of readback.
+        if _gate_profile.state == ProfileState.READBACK_PENDING:
+            if _sa_is_confirm:
+                _gate_profile.state = ProfileState.CONFIRMED
+                if _gate_profile.confirmed_at is None:
+                    _gate_profile.confirmed_at = time.time()
+                print(f"[Orchestrator] profile CONFIRMED", flush=True)
+                # fall through to deterministic tool orchestration below
+            else:
+                print(
+                    f"[Orchestrator] re-prompting readback (not yet confirmed)",
+                    flush=True,
+                )
+                await _emit_plain_assistant_response(
+                    build_readback_text(_gate_profile),
+                    websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
+        # Gate 4: awaiting change-confirm.
+        if _gate_profile.state == ProfileState.CHANGE_PENDING:
+            if _sa_is_confirm:
+                _gate_profile.apply_pending_change()
+                _gate_profile.state = ProfileState.CONFIRMED
+                _gate_profile.change_emitted_at = time.time()
+                print(
+                    f"[Orchestrator] change CONFIRMED, recalculating",
+                    flush=True,
+                )
+                # fall through to calculator recalc below
+            else:
+                print(
+                    f"[Orchestrator] re-prompting change-confirm",
+                    flush=True,
+                )
+                await _emit_plain_assistant_response(
+                    build_change_confirm_text(_gate_profile.pending_change),
+                    websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
 
     # ── Deterministic Tool Orchestration ──
     # When classifier extracts enough data, call tools from code directly.
