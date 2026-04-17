@@ -26,6 +26,50 @@ _DEFAULT_INITIAL_PROMPT = (
     "Ксения, Ксения."
 )
 
+# Known Whisper training-data hallucinations that appear on short/silent/noisy
+# audio. These are Russian YouTube caption boilerplate that Whisper memorized
+# during training and reproduces when the input has no real speech signal.
+# When detected, we treat the transcription as empty so the client-facing
+# "not understood" fallback handles the turn cleanly.
+_HALLUCINATION_BLACKLIST: frozenset[str] = frozenset({
+    "продолжение следует",
+    "продолжение следует...",
+    "продолжаем",
+    "продолжаем.",
+    "продолжаем...",
+    "субтитры создавал dimatorzok",
+    "субтитры подогнал «а.с.с.»",
+    "субтитры выполнены а.с.с.",
+    "субтитры сделал dimatorzok",
+    "редактор субтитров",
+    "корректор",
+    "спасибо за внимание",
+    "спасибо за просмотр",
+    "спасибо за внимание!",
+    "спасибо за просмотр!",
+    "подписывайтесь на канал",
+    "не забудьте подписаться",
+    "ставьте лайки",
+    "ставьте лайк",
+    "all rights reserved",
+    "субтитры",
+    "субтитры.",
+    "※",
+})
+
+
+def _is_hallucination(text: str) -> bool:
+    """Return True if transcription matches a known Whisper training-data leak."""
+    if not text:
+        return False
+    normalized = text.strip().lower().rstrip(".!?…;:")
+    normalized_nodots = normalized.replace("...", "").strip()
+    return (
+        text.strip().lower() in _HALLUCINATION_BLACKLIST
+        or normalized in _HALLUCINATION_BLACKLIST
+        or normalized_nodots in _HALLUCINATION_BLACKLIST
+    )
+
 
 class TranscribeRequest(BaseModel):
     audio_b64: str
@@ -82,6 +126,9 @@ def create_app(transcriber: FasterWhisperTranscriber) -> FastAPI:
         audio_duration_s = audio_len_bytes / (2 * payload.sample_rate_hz)  # PCM16 = 2 bytes/sample
         print(f"[whisper] transcribe: {audio_len_bytes} bytes, {audio_duration_s:.1f}s, sr={payload.sample_rate_hz}, lang={payload.language}")
         text = transcriber.transcribe_pcm16(audio_bytes, payload.sample_rate_hz, payload.language)
+        if _is_hallucination(text):
+            print(f"[whisper] hallucination filtered: '{text[:60]}' -> empty", flush=True)
+            text = ""
         print(f"[whisper] result: '{text[:100]}'" if text else "[whisper] result: (empty)")
         return {
             "ok": True,
