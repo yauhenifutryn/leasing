@@ -460,15 +460,13 @@ download_models() {
   "$hf_cli" download Qwen/Qwen3.5-35B-A3B-FP8 \
     --token "$HF_TOKEN"
 
-  # SessionAgent small-model download only when enabled for this GPU size
-  # (on small GPUs SESSIONAGENT_GPU_UTIL is "0.00" and the service is disabled).
-  if [ "${SESSIONAGENT_GPU_UTIL:-0.00}" != "0.00" ]; then
-    log "  Qwen3-4B-Instruct-FP8 (SessionAgent, ~4-5GB)"
-    "$hf_cli" download Qwen/Qwen3-4B-Instruct-FP8 \
-      --token "$HF_TOKEN"
-  else
-    log "  SessionAgent disabled on this GPU; skipping Qwen3-4B-Instruct-FP8 download"
-  fi
+  # Always download the SessionAgent small model. Cheap (~4-5 GB) and avoids
+  # a variable-scope bug where SESSIONAGENT_GPU_UTIL (set later in
+  # write_env_file) is not yet visible here. If SessionAgent ends up disabled
+  # on a small GPU, the weights just sit in cache with no runtime impact.
+  log "  Qwen3-4B-Instruct-FP8 (SessionAgent, ~4-5GB)"
+  "$hf_cli" download Qwen/Qwen3-4B-Instruct-FP8 \
+    --token "$HF_TOKEN"
 
   log "  Embedding model (intfloat/multilingual-e5-large)"
   "$APP_DIR/.venv/bin/python" -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
