@@ -669,6 +669,14 @@ async def _stream_voice_response(
     # structured data (subject, cost, currency) for immediate tool calling.
     needs_tool = False
     _extracted_hints: dict[str, Any] = {}
+    # SessionAgent semantic flags: initialize at function scope so post-classifier
+    # handlers can safely reference them even when fast-skip bypasses classification
+    # or classifier parsing fails.
+    _sa_is_stop = False
+    _sa_is_confirm = False
+    _sa_wants_readback = False
+    _sa_change_field = None
+    _sa_change_value = None
     # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
     _msg_stripped = message.strip().lower().rstrip(".!,?")
     _SKIP_CLASSIFIER = {
@@ -706,13 +714,6 @@ async def _stream_voice_response(
         # effective_* when the env var is empty (single-instance mode).
         _sa_base_url = settings.llm.session_agent_base_url or effective_base_url
         _sa_model = settings.llm.session_agent_model or effective_model
-        # Semantic flags from SessionAgent (pre-initialized so downstream can reference them
-        # even when classification fails / uses keyword fallback).
-        _sa_is_stop = False
-        _sa_is_confirm = False
-        _sa_wants_readback = False
-        _sa_change_field = None
-        _sa_change_value = None
         try:
             classify_resp = await asyncio.to_thread(
                 call_openai_compatible,
@@ -882,10 +883,7 @@ async def _stream_voice_response(
     # --- Handle semantic stop-request: enter listen_mode and return silently ---
     if _sa_is_stop:
         print(f"[SessionAgent] is_stop_request -> listen_mode", flush=True)
-        try:
-            _listen_timeout = getattr(settings, "listen_mode_timeout_sec", 3.0)
-        except Exception:
-            _listen_timeout = 3.0
+        _listen_timeout = settings.turn_taking.listen_mode_timeout_sec
         session.listen_mode = True
         session.listen_mode_until = time.time() + _listen_timeout
         session.interrupted = True
@@ -1047,9 +1045,25 @@ async def _stream_voice_response(
             _direct_tool_result = _prev_calc["result"]
             print(f"[DirectTool] re-presenting previous result", flush=True)
 
+    # Direct-call conditions:
+    # 1) change_param path has built explicit params, OR
+    # 2) ClientProfile is complete AND (confirmed OR client explicitly confirmed this turn)
+    #    — gates calc on explicit confirmation to match the no-defaults + read-back rule.
+    # 3) Legacy: current-turn hints have enough for a one-shot confirmed recalc.
+    _profile = session.client_profile
+    _profile_ready = _profile.is_complete_for_calc() and (
+        _profile.confirmed_at is not None or _sa_is_confirm
+    )
+    _legacy_hint_direct = (
+        needs_tool
+        and _extracted_hints.get("subject")
+        and _extracted_hints.get("cost")
+        and _profile.confirmed_at is not None  # only if already confirmed once in session
+    )
     _can_direct_call = (
         _param_change_params is not None
-        or (needs_tool and _extracted_hints.get("subject") and _extracted_hints.get("cost"))
+        or _profile_ready
+        or _legacy_hint_direct
     )
     if _can_direct_call:
         _action = _extracted_hints.get("action", "calculate")
@@ -1122,7 +1136,7 @@ async def _stream_voice_response(
         # Only block when client_type is EXPLICITLY individual (not defaulted).
         # If client_type is unknown, the classifier should have set clarify_client_type.
         # This is a lightweight fallback in case the classifier missed it.
-        _subj_lower = _direct_params.get("subject", "").lower()
+        _subj_lower = (_direct_params.get("subject") or "").lower()
         _client = _direct_params.get("client_type")  # None if not set
         _individual_subjects = {"легковой автомобиль", "прочий транспорт"}
         if _client and "Физическое" in str(_client) and _subj_lower not in _individual_subjects and _subj_lower:

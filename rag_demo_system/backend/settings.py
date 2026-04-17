@@ -125,6 +125,15 @@ class JambonzConfig:
 
 
 @dataclass
+class TurnTakingConfig:
+    vad_silence_ms: int
+    pre_response_hold_ms: int
+    listen_mode_timeout_sec: float
+    listen_mode_vad_rms: int
+    listen_mode_min_speech_ms: int
+
+
+@dataclass
 class Settings:
     app: AppConfig
     embedding: EmbeddingConfig
@@ -136,6 +145,7 @@ class Settings:
     voice: VoiceConfig
     tools: ToolsConfig
     jambonz: JambonzConfig
+    turn_taking: TurnTakingConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -290,6 +300,13 @@ def load_settings(path: Path | None = None) -> Settings:
             crm_webhook_url=os.getenv("CRM_WEBHOOK_URL", tools_cfg.get("crm_webhook_url", "")),
             crm_webhook_token=os.getenv("CRM_WEBHOOK_TOKEN", tools_cfg.get("crm_webhook_token", "")),
             usd_byn_rate=float(os.getenv("USD_BYN_RATE", tools_cfg.get("usd_byn_rate", 3.0))),
+        ),
+        turn_taking=TurnTakingConfig(
+            vad_silence_ms=int(os.getenv("VAD_SILENCE_MS", "700")),
+            pre_response_hold_ms=int(os.getenv("PRE_RESPONSE_HOLD_MS", "300")),
+            listen_mode_timeout_sec=float(os.getenv("LISTEN_MODE_TIMEOUT_SEC", "3.0")),
+            listen_mode_vad_rms=int(os.getenv("LISTEN_MODE_VAD_RMS", "180")),
+            listen_mode_min_speech_ms=int(os.getenv("LISTEN_MODE_MIN_SPEECH_MS", "300")),
         ),
         jambonz=JambonzConfig(
             enabled=os.getenv("JAMBONZ_ENABLED", str(jambonz_cfg.get("enabled", False))).lower() in ("true", "1", "yes"),
