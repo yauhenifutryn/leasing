@@ -129,7 +129,11 @@ class CalculatorTool(ToolDefinition):
         "прочий транспорт": "Прочий транспорт",
     }
 
-    # API only accepts these two client types; ИП maps to Юридическое лицо
+    # API only accepts two client types: 'Физическое лицо' and 'Юридическое лицо'.
+    # The ClientProfile preserves 'ИП' as a distinct value for prompt context
+    # (see ClientType enum), but at this tool boundary we fold ИП into
+    # 'Юридическое лицо' for the API payload. This is the single source of
+    # truth for that translation.
     _CLIENT_TYPE_MAP = {
         "ип": "Юридическое лицо",
         "индивидуальный предприниматель": "Юридическое лицо",
