@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .citations import attach_citations
+from .grounding_validator import replace_ungrounded
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
@@ -1810,6 +1811,10 @@ async def _stream_voice_response(
             # Validate addresses against retrieved context (catch hallucinations)
             from .text_utils import validate_addresses
             item = validate_addresses(item, _chunk_texts)
+            # Ground high-risk facts (addresses/phones/names) to retrieved chunks.
+            # Only runs on RAG intent turns - TOOL turns have no chunks to ground against.
+            if not needs_tool and _chunk_texts:
+                item = replace_ungrounded(item, _chunk_texts)
             all_sentences.append(item)
         await _orig_put(item)
 
