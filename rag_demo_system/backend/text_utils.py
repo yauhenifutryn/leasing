@@ -39,8 +39,41 @@ _EMOJI_RE = re.compile(
 )
 
 
+# Russian abbreviation expansions. Applied before TTS synthesis so Silero
+# reads words instead of spelling out "пэ-эр-тэ" etc. Whole-word patterns
+# so "д." is only expanded to "дом" when followed by a digit (not "д.н.э.").
+_ABBREVIATIONS_SIMPLE = [
+    # Whole-word abbreviations, case-insensitive, word-boundary trailing period/dash
+    (re.compile(r"\bул\.", re.IGNORECASE), "улица"),
+    (re.compile(r"\bпр-т\b", re.IGNORECASE), "проспект"),
+    (re.compile(r"\bпросп\.", re.IGNORECASE), "проспект"),
+    (re.compile(r"\bпр\.(?=\s+[А-ЯЁ])"), "проспект"),   # avoid "и пр." (etc.)
+    (re.compile(r"\bобл\.", re.IGNORECASE), "область"),
+    (re.compile(r"\bр-н\b", re.IGNORECASE), "район"),
+    (re.compile(r"\bтел\.(?=\s)", re.IGNORECASE), "телефон"),
+    (re.compile(r"\bкорп\.", re.IGNORECASE), "корпус"),
+    (re.compile(r"\bэт\.(?=\s*\d)", re.IGNORECASE), "этаж"),
+    # "г. Минск" → "город Минск"; requires capitalized next word to avoid "г." meaning "год"
+    (re.compile(r"\bг\.(?=\s+[А-ЯЁ][а-яё])"), "город"),
+]
+# Context-dependent: digit-following address abbreviations
+_ABBREVIATIONS_WITH_DIGIT = [
+    (re.compile(r"\bд\.\s*(\d)"), r"дом \1"),
+    (re.compile(r"\bкв\.\s*(\d)", re.IGNORECASE), r"квартира \1"),
+]
+
+
+def _expand_abbreviations(text: str) -> str:
+    """Expand Russian abbreviations to full words for TTS readability."""
+    for pattern, replacement in _ABBREVIATIONS_SIMPLE:
+        text = pattern.sub(replacement, text)
+    for pattern, replacement in _ABBREVIATIONS_WITH_DIGIT:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def clean_voice_output(text: str) -> str:
-    """Clean LLM output for voice TTS: strip emoji, lists, markdown."""
+    """Clean LLM output for voice TTS: strip emoji, lists, markdown, expand abbrs."""
     if not text:
         return text
     # Strip emoji
@@ -60,6 +93,10 @@ def clean_voice_output(text: str) -> str:
     text = text.replace("—", ",").replace("–", ",")
     # Replace regular dash between words with comma (not in hyphenated words)
     text = re.sub(r"\s-\s", ", ", text)
+    # Expand Russian abbreviations (ул. -> улица, пр-т -> проспект, etc.)
+    # Must happen AFTER numbered-list → comma conversion so digit-prefixed
+    # entries aren't mistaken for abbreviations.
+    text = _expand_abbreviations(text)
     # Collapse multiple spaces and newlines
     text = re.sub(r"\s+", " ", text)
     return text.strip()
