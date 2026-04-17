@@ -19,6 +19,7 @@ from .citations import attach_citations
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
+from .rag_skip import should_skip_rag
 from .profile_prompts import (
     build_change_confirm_text,
     build_clarification_prompt,
@@ -742,6 +743,10 @@ async def _stream_voice_response(
     # structured data (subject, cost, currency) for immediate tool calling.
     needs_tool = False
     _extracted_hints: dict[str, Any] = {}
+    # Initialize at function scope so the skip-RAG gate (and other post-classifier
+    # handlers) can safely reference it when fast-skip bypasses classification
+    # or classifier parsing fails.
+    _profile_patches: dict[str, Any] = {}
     # SessionAgent semantic flags: initialize at function scope so post-classifier
     # handlers can safely reference them even when fast-skip bypasses classification
     # or classifier parsing fails.
@@ -991,6 +996,24 @@ async def _stream_voice_response(
         return  # no LLM response; bot goes silent
     elif _sa_is_stop and not contains_stop_word(message or ""):
         print(f"[SessionAgent] is_stop_request TRUE but no literal stop-word in '{(message or '')[:60]}' -> ignored", flush=True)
+
+    # --- Skip RAG for pure name-capture turns (prevents KB hallucinations on names) ---
+    if should_skip_rag(message or "", _profile_patches, _extracted_hints):
+        print(f"[Grounding] skip-RAG: name-capture session={session_id[:8]}", flush=True)
+        # Cancel the in-flight RAG task since we won't use its result
+        try:
+            if not _rag_task.done():
+                _rag_task.cancel()
+        except Exception:
+            pass
+        _name = session.client_profile.name or "клиент"
+        _greeting = f"Здравствуйте, {_name}! Чем могу помочь по вопросам лизинга?"
+        await _emit_plain_assistant_response(
+            _greeting, websocket, session_id,
+            backend=backend, session=session,
+        )
+        session.assistant_speaking = False
+        return
 
     # --- Await RAG retrieval (started before classifier, should be done by now) ---
     retrieval = await _rag_task
