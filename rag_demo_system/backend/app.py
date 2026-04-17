@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .citations import attach_citations
-from .text_utils import clean_answer, clean_voice_output, iter_final_text
+from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text
 from .memory import build_memory_block
 from .consent import (
     consent_denied_response,
@@ -884,9 +884,9 @@ async def _stream_voice_response(
         _t_classify_ms = (time.time() - _t_classify_start) * 1000
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints} ({_t_classify_ms:.0f}ms)", flush=True)
 
-    # --- Handle semantic stop-request: enter listen_mode and return silently ---
-    if _sa_is_stop:
-        print(f"[SessionAgent] is_stop_request -> listen_mode", flush=True)
+    # --- Handle semantic stop-request: hybrid gate (literal + classifier) ---
+    if _sa_is_stop and contains_stop_word(message or ""):
+        print(f"[SessionAgent] is_stop_request AND literal match -> listen_mode", flush=True)
         _listen_timeout = settings.turn_taking.listen_mode_timeout_sec
         session.listen_mode = True
         session.listen_mode_until = time.time() + _listen_timeout
@@ -896,7 +896,15 @@ async def _stream_voice_response(
             await websocket.send_text(json.dumps({"type": "killAudio"}))
         except Exception as _killexc:
             print(f"[listen_mode] killAudio failed: {_killexc}", flush=True)
+        # Cancel any previous auto-exit task to prevent orphaned coroutines (re-entry safety).
+        if session.listen_mode_task and not session.listen_mode_task.done():
+            session.listen_mode_task.cancel()
+        # Spawn the auto-exit task (Task 5 module)
+        from .listen_mode import spawn_auto_exit_task
+        session.listen_mode_task = spawn_auto_exit_task(session, websocket, session_id)
         return  # no LLM response; bot goes silent
+    elif _sa_is_stop and not contains_stop_word(message or ""):
+        print(f"[SessionAgent] is_stop_request TRUE but no literal stop-word in '{(message or '')[:60]}' -> ignored", flush=True)
 
     # --- Await RAG retrieval (started before classifier, should be done by now) ---
     retrieval = await _rag_task
