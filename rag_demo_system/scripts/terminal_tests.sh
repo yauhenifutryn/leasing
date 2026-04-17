@@ -204,6 +204,32 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────────────────────
+section "9. Stop-detection (literal regex)"
+"$PY" - <<'PY'
+import sys
+from backend.text_utils import contains_stop_word
+cases = [
+    ("Стоп.", True),
+    ("Замолчи на секунду.", True),
+    ("Помолчи, я думаю.", True),
+    ("Ну и что?", False),
+    ("Алло.", False),
+    ("А подожди, ладно, неважно, а можно машину без аванса?", True),
+    ("Нажмите стоп-кран.", True),
+    ("В нашем разговоре уже.", False),
+]
+bad = 0
+for text, want in cases:
+    got = contains_stop_word(text)
+    mark = "OK " if got == want else "BAD"
+    print(f"{mark} contains_stop_word({text!r}) -> {got} (want {want})")
+    if got != want:
+        bad += 1
+sys.exit(1 if bad else 0)
+PY
+[ $? -eq 0 ] && pass "Literal stop-word regex matches expected set" || fail "Literal stop-word regex mismatches"
+
+# ────────────────────────────────────────────────────────────────────────────
 echo
 echo "=============================="
 echo "  Summary: ${GRN}${PASS} pass${NC} | ${YLW}${WARN} warn${NC} | ${RED}${FAIL} fail${NC}"
