@@ -25,3 +25,24 @@ from backend.text_utils import contains_stop_word
 ])
 def test_contains_stop_word(text, expected):
     assert contains_stop_word(text) is expected
+
+
+def test_contains_stop_word_short_commands_trigger():
+    assert contains_stop_word("стоп")
+    assert contains_stop_word("подожди")
+    assert contains_stop_word("тихо замолчи")
+    assert contains_stop_word("подожди пожалуйста")
+
+
+def test_contains_stop_word_discourse_markers_do_not_trigger():
+    # >3 tokens: stop-word embedded as discourse marker, not a command
+    assert not contains_stop_word("подожди секунду я хочу уточнить")
+    assert not contains_stop_word("погоди я ещё думаю над этим")
+    assert not contains_stop_word("хватит уже говорить про это мне")
+
+
+def test_contains_stop_word_three_token_boundary():
+    # Exactly 3 tokens: still treated as stop
+    assert contains_stop_word("стоп пожалуйста замолчи")
+    # 4 tokens: not a stop
+    assert not contains_stop_word("стоп пожалуйста замолчи уже")

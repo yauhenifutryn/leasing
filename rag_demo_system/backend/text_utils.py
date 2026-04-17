@@ -21,8 +21,15 @@ _STOP_WORD_PATTERN = re.compile(
 
 
 def contains_stop_word(text: str) -> bool:
-    """Return True if text contains a Russian stop-command word as a whole word."""
+    """Return True if text contains a Russian stop-command word as a whole word.
+
+    Requires len(text.split()) <= 3 so that discourse markers like
+    "подожди секунду, я хочу уточнить" don't falsely trigger listen_mode.
+    Real stop commands are short: "стоп", "подожди", "тихо замолчи".
+    """
     if not text:
+        return False
+    if len(text.split()) > 3:
         return False
     return bool(_STOP_WORD_PATTERN.search(text))
 
