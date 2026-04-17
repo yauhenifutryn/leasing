@@ -1,5 +1,26 @@
 # KB Audit Report — 2026-04-16
 
+> **Status (2026-04-16):** patches applied to `knowledge_base/kb_faq_ru_v2.md`
+> based on client-verified facts. Re-index required (`python scripts/index_kb.py`
+> on server, or automatic via `smoke_test.sh`).
+>
+> **Applied:**
+> - Added canonical "адреса офисов" section (all 6 cities with addresses)
+> - Added "что такое нагрузка" definition
+> - Added "типы графиков платежей" section (annuity + linear with synonyms)
+> - Fixed office hours: all offices Mon-Fri only; call-center adds Saturday 10-16
+>   (previous KB incorrectly said Minsk office works weekends)
+> - Removed "минимальный аванс 30%" hardcoded escalation rule (now triggers on
+>   calculator-reported failure instead)
+> - Updated stale "24–36 месяцев" examples to "от 12 до 84 месяцев"
+>
+> **Deferred to future audit** (client said "not needed for MVP"):
+> - Per-subject matrix (spectech, equipment, real estate) — calculator handles
+> - Additional narrative 10%/30% examples — left intact (not rule-statements)
+> - More granular S5-S8 stale content — only fixed blockers
+
+
+
 **Source:** client test call transcript 779154b4 (Сергей, 18:00-18:25)
 **KB file:** `knowledge_base/kb_faq_ru_v2.md`
 **Method:** manual extraction of 20 client questions + keyword-overlap diff against KB paragraphs + regex scan for stale operational values.
