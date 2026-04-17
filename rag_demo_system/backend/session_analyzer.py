@@ -28,19 +28,30 @@ _ANALYSIS_PROMPT = """Ты аналитик качества голосовог�
 10. tool_use_quality: если бот использовал инструменты (калькулятор, СМС), оцени:
     - Был ли инструмент вызван уместно (клиент действительно просил расчёт или отправку)?
     - Правильно ли бот заполнил параметры (предмет, стоимость, валюта)?
-    - Озвучил ли бот какие параметры были по умолчанию?
+    - Прошёл ли бот через read-back (перечислил параметры, спросил "всё верно?") ДО первого вызова калькулятора?
+    - Подтвердил ли бот изменение параметра ДО повторного расчёта?
     - Предложил ли бот отправить график по СМС после расчёта?
-    - Если инструмент не был вызван, но клиент спрашивал про расчёт, это ошибка: бот должен был вызвать калькулятор.
+    - Правильно ли применил конвертацию USD->BYN для физлиц (с озвучкой курса)?
+    - Правильно ли отклонил EUR/RUB для физлиц с понятным сообщением?
+    - Корректно ли передал тип графика (аннуитетный/линейный) в калькулятор?
+    - Если клиент просил линейный график, сработало ли это?
+    - Если инструмент не был вызван, но клиент спрашивал про расчёт, это ошибка.
     Если инструменты не использовались и не требовались, ставь 10.
+11. profile_hygiene: сколько раз бот ПОВТОРНО спрашивал у клиента информацию, которую тот уже сообщал в этом разговоре (тип клиента, предмет, стоимость, валюта, срок, аванс, тип графика)? Каждый повторный вопрос — потеря очков.
+12. stop_command_respect: если клиент говорил "стоп", "подожди", "помолчи", "хватит", правильно ли бот замолчал и не продолжал говорить? Перечисли случаи игнорирования.
+13. defaults_assumed: называл ли бот параметры по умолчанию ("аванс 30%", "срок 36 мес") как будто это факт, без подтверждения клиентом? Перечисли случаи.
 
 Верни строго JSON:
 {
-  "scores": {"banned_phrases": N, "specialist_overuse": N, "humor_and_tone": N, "answer_completeness": N, "response_variety": N, "tool_use_quality": N},
+  "scores": {"banned_phrases": N, "specialist_overuse": N, "humor_and_tone": N, "answer_completeness": N, "response_variety": N, "tool_use_quality": N, "profile_hygiene": N, "stop_command_respect": N},
   "issues": [{"type": "тип", "severity": "critical|important|minor", "detail": "описание", "suggested_fix": "предложение"}],
   "kb_gaps": ["тема1", "тема2"],
   "banned_phrases_found": ["фраза1"],
   "specialist_count": {"offered": N, "appropriate": N},
-  "tool_calls": {"calculator_called": true/false, "sms_called": true/false, "missed_opportunity": "описание или null", "defaults_announced": true/false, "sms_offered_after_calc": true/false},
+  "tool_calls": {"calculator_called": true/false, "sms_called": true/false, "missed_opportunity": "описание или null", "readback_before_first_calc": true/false, "change_confirmed_before_recalc": true/false, "sms_offered_after_calc": true/false, "usd_to_byn_conversion_done": true/false, "eur_rub_rejected_cleanly": true/false, "type_schedule_forwarded_correctly": true/false, "linear_graph_honored": true/false, "linear_requests_count": N, "linear_successes_count": N},
+  "profile_hygiene": {"repeat_asks": [{"field": "имя поля", "count": N}], "total_repeat_asks": N},
+  "stop_command_events": [{"client_said": "фраза", "bot_respected": true/false}],
+  "defaults_assumed": ["случай1"],
   "name_count": N,
   "overall_score": N,
   "summary": "одно предложение"

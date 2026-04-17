@@ -33,34 +33,99 @@ behavior changes you will observe on the server after deploy:
 
 ## 1. Deploy on server
 
-### 1.1 If the server already has the voice pipeline running
+You have two supported deploy flows. Choose one based on whether you
+want a minimal restart (1.1) or a full idempotent re-provision (1.2).
 
-SSH into the server and run these commands:
+### 1.1 Fast path — fetch, regenerate .env, restart
+
+For a routine update that pulls this round's commits, rewrites `.env`
+to pick up new variables (SESSIONAGENT_*, USD_BYN_RATE, turn_taking
+knobs, revision pins), and restarts the supervisor stack:
 
 ```bash
 ssh -i ~/.ssh/jarvislabs sesterce@<SERVER_IP>
 
 cd /ephemeral/leasing/rag_demo_system
-git pull
+git pull origin feature/voice-pipeline
 
-# Regenerates .env with new SESSIONAGENT_*, USD_BYN_RATE, and 
-# launch command for the second vLLM instance. Then restarts the stack.
+# Regenerate .env (picks up all new vars) then full clean restart.
+# HF_TOKEN is needed ONCE to download Qwen3-4B-Instruct-FP8 on first boot.
+HF_TOKEN=$HF_TOKEN bash scripts/regenerate_env_and_restart.sh
+```
+
+**After first-boot HF download completes** (the 4B model is ~8 GB, 3-6 min
+on a fast link), set `HF_HUB_OFFLINE=1` in `.env` to lock future starts
+to cached weights only. This follows the project's pin-all-versions
+rule — once the model is cached we never re-download.
+
+### 1.2 Clean re-provision — idempotent, skips already-done work
+
+Use this when you want to verify a clean install path end-to-end, or
+after major changes to provisioning itself (new model, new Docker
+images, new services). `provision_server.sh` is idempotent: it skips
+apt packages that are installed, skips venvs that exist, skips cached
+models. The one thing it **always** does is rewrite `.env` from the
+current template, then restart the stack.
+
+```bash
+ssh -i ~/.ssh/jarvislabs sesterce@<SERVER_IP>
+
+cd /ephemeral/leasing/rag_demo_system
+git pull origin feature/voice-pipeline
+
+# Re-run provision — downloads Qwen3-4B if missing, rewrites .env,
+# restarts stack. Safe to run multiple times.
+HF_TOKEN=$HF_TOKEN bash scripts/provision_server.sh
+
+# After provision completes, run smoke test (waits for services, verifies KB index).
+bash scripts/smoke_test.sh
+
+# Then deploy SIP accounts (Jambonz).
+bash scripts/deploy_jambonz.sh
+```
+
+### 1.3 Optional: pin exact model revisions
+
+If you want full reproducibility (weights frozen at specific commits),
+look up the HF commit SHAs for the two models and export before running
+provision/regenerate:
+
+```bash
+# Lookup on https://huggingface.co/Qwen/Qwen3-4B-Instruct-FP8/commits/main
+# and https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8/commits/main
+# Use the latest commits you have tested.
+
+QWEN_MAIN_REVISION=<sha-for-35B-main-model> \
+QWEN_SESSIONAGENT_REVISION=<sha-for-4B-sessionagent> \
+HF_TOKEN=$HF_TOKEN \
 bash scripts/regenerate_env_and_restart.sh
 ```
 
-First restart after this update will **download Qwen3-4B-Instruct-FP8
-(~8 GB)** from HuggingFace. Expect the `sessionagent` service to take
-5-15 minutes on first boot. The main LLM (Qwen3.5-35B) is already
-cached on disk and will start in ~2 min.
+Unset (empty) means "track main branch" — which is the current default
+and what was tested during this round. Leave empty unless you've tested
+a specific SHA and want to lock it.
 
-If HuggingFace is configured in offline mode on your server, you may
-need to either:
-- Temporarily set `HF_HUB_OFFLINE=0` in `.env`, restart, wait for
-  download, then restore `HF_HUB_OFFLINE=1`, OR
-- Pre-download with `huggingface-cli download Qwen/Qwen3-4B-Instruct-FP8
-  --local-dir /ephemeral/models/Qwen3-4B-Instruct-FP8`.
+### 1.4 Post-deploy: add back credentials
 
-### 1.2 If GPU is too small for SessionAgent side-by-side
+`provision_server.sh` rewrites `.env` from the template which has empty
+`CALCULATOR_API_TOKEN`, `SMS_API_LOGIN`, `SMS_API_PASSWORD`. After
+provision completes, append your real credentials:
+
+```bash
+cat >> /ephemeral/leasing/rag_demo_system/.env <<'EOF'
+CALCULATOR_API_TOKEN='OrS0Xtm32f3o]T[96EAr'
+SMS_API_LOGIN='Mikro_Lizing'
+SMS_API_PASSWORD='4T5Nf879'
+EOF
+
+# Restart backend to pick them up.
+./.venv/bin/supervisorctl -c scripts/supervisord.conf restart backend
+```
+
+(These are your production secrets — they are NEVER committed to git
+and are stored only in your memory files + the server's `.env`.)
+
+### 1.5 If GPU is too small for SessionAgent side-by-side
 
 On GPUs below 75 GB the provision script disables SessionAgent
 automatically (`STACK_SESSIONAGENT_CMD=""`). The backend then falls
@@ -68,10 +133,10 @@ back to the main LLM for classifier calls — latency wins are lost
 but everything still works. Check the log line during provision:
 
 ```
-GPU: ... -> main 0.50, sessionagent 0.00 (disabled)
+GPU: ... -> main 0.50, sessionagent 0.00 (disabled); classifier uses main LLM
 ```
 
-### 1.3 Verify the deploy
+### 1.6 Verify the deploy
 
 ```bash
 # On the server:
@@ -182,7 +247,84 @@ Should show two calculator calls, the second with `"type_schedule":"1"`.
 
 **Log check:** `grep 'transcription\|whisper' .state/backend.log`.
 
-## 4. Known limitations (for follow-up session)
+## 4. Self-improvement & KB audit
+
+### 4.1 Self-improvement pipeline (extended this round)
+
+Every SIP call automatically saves:
+- Full transcript → `.state/transcripts/<session_id>.json`
+- LLM-generated quality report → `.state/analysis/session_reports.jsonl`
+
+The analyzer prompt (`backend/session_analyzer.py`) was extended this round
+with new dimensions that specifically measure this round's fixes:
+
+| Dimension | What it tracks |
+|---|---|
+| `profile_hygiene.repeat_asks` | Fields the bot re-asked after client already stated them |
+| `stop_command_events` | Times client said стоп/подожди/помолчи + whether bot respected |
+| `tool_calls.readback_before_first_calc` | Did bot read back all params before first calc? |
+| `tool_calls.change_confirmed_before_recalc` | Did bot confirm before recalc on field change? |
+| `tool_calls.usd_to_byn_conversion_done` | Was USD auto-converted for физлицо? |
+| `tool_calls.eur_rub_rejected_cleanly` | Was EUR/RUB rejected with clear message? |
+| `tool_calls.type_schedule_forwarded_correctly` | Did linear-graph request reach calculator? |
+| `tool_calls.linear_requests_count` / `linear_successes_count` | Linear-graph success rate |
+| `defaults_assumed` | Cases where bot stated a default without confirmation |
+
+**Aggregation command (run weekly):**
+
+```bash
+cd /ephemeral/leasing/rag_demo_system
+python scripts/kb_gap_report.py
+```
+
+This prints:
+- KB gaps (topics clients asked about, no KB answer) ranked by frequency
+- Recurring issues (severity-tagged)
+- Operational signals: readback compliance %, change-confirm compliance %,
+  USD conversion count, EUR rejection count, linear-graph success rate,
+  stop-command respect %, profile-hygiene repeat-ask counts per field,
+  defaults-assumed incidents
+
+**Target metrics after this round:**
+- Readback compliance: ≥ 80% of calc calls should have a read-back
+- Change-confirm compliance: ≥ 90% of recalcs should have a single-field confirm
+- Linear-graph success rate: ≥ 90% (was 0% pre-deploy)
+- Stop-command respected: ≥ 85%
+- Profile repeat-asks for client_type: ≤ 1 per session (was 3-7 per session)
+- Defaults-assumed incidents: ≤ 2 per session (was high before)
+
+### 4.2 KB audit (done this round)
+
+Full report: [`docs/kb-audit-report-2026-04-16.md`](kb-audit-report-2026-04-16.md)
+
+**Summary of findings:**
+- 3 true gaps: "нагрузка" as financial term, linear/annuity explanation, Mogilev office details
+- 8 stale blocks: "минимальный аванс 30%", stale max-term numbers, "аннуитетный, классический и т.п." vague language
+- 9 partial/covered: most client questions have some KB coverage but need minor enrichment
+
+**Next step:** review the audit report with the client, apply proposed patches
+to `knowledge_base/kb_faq_ru_v2.md`, re-index:
+
+```bash
+# After patches land:
+python scripts/index_kb.py
+# Verify retrieval on the added content:
+python scripts/voice_lab.py --query "что такое нагрузка"
+python scripts/voice_lab.py --query "линейный график"
+```
+
+### 4.3 Version pinning
+
+All Python deps pinned via pip (`vllm==0.19.0`, `faster-whisper==1.2.1`,
+`silero==0.5.5`). Docker images for Jambonz all pinned to `0.9.6`.
+
+Model weights can now be pinned to specific HF commit SHAs via env vars
+`QWEN_MAIN_REVISION` and `QWEN_SESSIONAGENT_REVISION` (see section 1.3).
+Leave empty to track `main`, which is the tested default.
+
+---
+
+## 5. Known limitations (for follow-up session)
 
 Some items from the plans were scoped down to ship in this round.
 These need a follow-up session to complete:
@@ -207,7 +349,7 @@ These need a follow-up session to complete:
    `docs/calculator-api-production-spec-ru.md`. You can forward this
    to the client's developer team.
 
-## 5. Where the artifacts live
+## 6. Where the artifacts live
 
 - Specs: `docs/superpowers/specs/2026-04-16-*.md` (6 files + index)
 - Plans: `docs/superpowers/plans/2026-04-16-*.md` (5 files)
@@ -218,7 +360,7 @@ These need a follow-up session to complete:
   - `project_stt_v2_roadmap.md`
 - PROJECT_LOG.md entry: 2026-04-16 (later)
 
-## 6. Quick reference commands
+## 7. Quick reference commands
 
 ```bash
 # Tail backend log for this round's markers
@@ -234,4 +376,34 @@ grep 'defaulted' .state/backend.log
 
 # Verify currency policy is running
 grep -E 'USD->BYN|currency_policy' .state/backend.log
+
+# Run the weekly KB gap + operational-metrics aggregation
+python scripts/kb_gap_report.py
+
+# Inspect the most recent session quality report
+tail -1 .state/analysis/session_reports.jsonl | python3 -m json.tool
+
+# Quick operational counters from the last 24h of calls (one-liner)
+python3 -c "
+import json
+from pathlib import Path
+reports = Path('.state/analysis/session_reports.jsonl').read_text().splitlines()
+readback_ok = readback_skip = 0
+linear_asked = linear_ok = 0
+stop_ok = stop_skip = 0
+for line in reports:
+    try: r = json.loads(line)
+    except: continue
+    tc = r.get('tool_calls') or {}
+    if tc.get('readback_before_first_calc') is True: readback_ok += 1
+    elif tc.get('readback_before_first_calc') is False: readback_skip += 1
+    linear_asked += int(tc.get('linear_requests_count') or 0)
+    linear_ok += int(tc.get('linear_successes_count') or 0)
+    for e in (r.get('stop_command_events') or []):
+        if e.get('bot_respected'): stop_ok += 1
+        else: stop_skip += 1
+print(f'readback: {readback_ok}/{readback_ok+readback_skip}')
+print(f'linear: {linear_ok}/{linear_asked}')
+print(f'stop: {stop_ok}/{stop_ok+stop_skip}')
+"
 ```

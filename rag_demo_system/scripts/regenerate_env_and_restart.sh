@@ -11,6 +11,12 @@ MODELS_DIR="${MODELS_DIR:-$WORKSPACE/models}"
 VLLM_PORT=8787
 SESSIONAGENT_PORT=8788
 
+# Model revision pinning (override via env: QWEN_MAIN_REVISION=... QWEN_SESSIONAGENT_REVISION=...)
+QWEN_MAIN_REV_FLAG=""
+QWEN_SESSIONAGENT_REV_FLAG=""
+[ -n "${QWEN_MAIN_REVISION:-}" ] && QWEN_MAIN_REV_FLAG="--revision ${QWEN_MAIN_REVISION}"
+[ -n "${QWEN_SESSIONAGENT_REVISION:-}" ] && QWEN_SESSIONAGENT_REV_FLAG="--revision ${QWEN_SESSIONAGENT_REVISION}"
+
 # Auto-detect GPU memory and set optimal vLLM utilization for main + sessionagent
 GPU_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
 GPU_GB=$(( ${GPU_MIB:-0} / 1024 ))
@@ -33,7 +39,7 @@ if [ "$SESSIONAGENT_GPU_UTIL" = "0.00" ]; then
   SA_CMD_LINE='STACK_SESSIONAGENT_CMD=""'
 else
   SA_ENV_LINES=$'\n'"SESSIONAGENT_BASE_URL=http://127.0.0.1:${SESSIONAGENT_PORT}/v1"$'\n'"SESSIONAGENT_MODEL=Qwen/Qwen3-4B-Instruct-FP8"
-  SA_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-FP8 --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
+  SA_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-FP8 ${QWEN_SESSIONAGENT_REV_FLAG} --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
 fi
 echo "[regen] Regenerating .env from latest template..."
 
@@ -64,7 +70,7 @@ STACK_MODE=docker
 RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
-STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR}"
+STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 ${QWEN_MAIN_REV_FLAG} --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR}"
 ${SA_CMD_LINE}
 STACK_WHISPER_CMD="LD_LIBRARY_PATH=\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cublas/lib):\$(echo ./.venv-voice-oss/lib/python3.*/site-packages/nvidia/cudnn/lib):\${LD_LIBRARY_PATH:-} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"

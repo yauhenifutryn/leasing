@@ -602,13 +602,28 @@ write_env_file() {
     log "NVIDIA driver ${DRIVER_MAJOR}.x >= 570: Whisper will run on GPU"
   fi
 
+  # Model revision pinning: lock exact HF commits for reproducibility.
+  # Leave empty (default) to track `main` branch on HuggingFace. Populate with
+  # specific SHAs once tested. Overridable via env:
+  #   QWEN_MAIN_REVISION=abc123 QWEN_SESSIONAGENT_REVISION=def456 bash provision_server.sh
+  local QWEN_MAIN_REV_FLAG=""
+  local QWEN_SESSIONAGENT_REV_FLAG=""
+  if [ -n "${QWEN_MAIN_REVISION:-}" ]; then
+    QWEN_MAIN_REV_FLAG="--revision ${QWEN_MAIN_REVISION}"
+    log "Qwen main: pinned to revision ${QWEN_MAIN_REVISION}"
+  fi
+  if [ -n "${QWEN_SESSIONAGENT_REVISION:-}" ]; then
+    QWEN_SESSIONAGENT_REV_FLAG="--revision ${QWEN_SESSIONAGENT_REVISION}"
+    log "Qwen sessionagent: pinned to revision ${QWEN_SESSIONAGENT_REVISION}"
+  fi
+
   # Conditionally emit SessionAgent env + launch command. When SESSIONAGENT_GPU_UTIL=0.00
   # (small GPU), SessionAgent is disabled and backend falls back to main LLM.
   local SESSIONAGENT_ENV_LINES=""
   local SESSIONAGENT_CMD_LINE=""
   if [ "$SESSIONAGENT_GPU_UTIL" != "0.00" ]; then
     SESSIONAGENT_ENV_LINES=$'\n'"SESSIONAGENT_BASE_URL=http://127.0.0.1:${SESSIONAGENT_PORT}/v1"$'\n'"SESSIONAGENT_MODEL=Qwen/Qwen3-4B-Instruct-FP8"
-    SESSIONAGENT_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-FP8 --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
+    SESSIONAGENT_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-FP8 ${QWEN_SESSIONAGENT_REV_FLAG} --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
   else
     SESSIONAGENT_ENV_LINES=$'\n'"# SessionAgent disabled on small GPU; classifier falls back to main LLM"$'\n'"SESSIONAGENT_BASE_URL="$'\n'"SESSIONAGENT_MODEL="
     SESSIONAGENT_CMD_LINE="STACK_SESSIONAGENT_CMD=\"\""
@@ -641,7 +656,7 @@ STACK_MODE=docker
 RAG_LAUNCH_MODE=supervisor
 STACK_VOICE_PROFILE=oss_russian
 
-STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR} --enable-auto-tool-choice --tool-call-parser qwen3_xml"
+STACK_QWEN_CMD="./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.5-35B-A3B-FP8 ${QWEN_MAIN_REV_FLAG} --port ${VLLM_PORT} --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization ${GPU_UTIL} --download-dir ${MODELS_DIR} --enable-auto-tool-choice --tool-call-parser qwen3_xml"
 ${SESSIONAGENT_CMD_LINE}
 STACK_WHISPER_CMD="LD_LIBRARY_PATH=${WHISPER_CUDA_LIB_PATH} ./.venv-voice-oss/bin/python -m uvicorn services.whisper_server:app --host 0.0.0.0 --port 50002"
 STACK_SILERO_TTS_CMD="./.venv-voice-oss/bin/python -m uvicorn services.silero_tts_server:app --host 0.0.0.0 --port 50006"
