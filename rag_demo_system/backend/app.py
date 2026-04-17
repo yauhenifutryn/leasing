@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from .citations import attach_citations
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text
 from .memory import build_memory_block
+from .profile_hygiene import filter_patches
 from .consent import (
     consent_denied_response,
     consent_granted_response,
@@ -855,15 +856,19 @@ async def _stream_voice_response(
                 if _sa_parsed.get(_k) is not None:
                     _profile_patches[_k] = _sa_parsed[_k]
             if _sa_parsed.get("client_type"):
-                _ct_raw = _sa_parsed["client_type"]
-                _profile_patches["client_type"] = (
-                    "Юридическое лицо" if _ct_raw == "ИП" else _ct_raw
-                )
+                # Preserve ИП distinctly; Task 4 (tools/calculator.py) translates
+                # to "Юридическое лицо" at the calculator API boundary.
+                _profile_patches["client_type"] = _sa_parsed["client_type"]
             if _sa_name:
                 _profile_patches["name"] = _sa_name
+            # Hygiene filter before merge: drops noise, normalizes enums, validates MVP ranges.
+            _had_patches = bool(_profile_patches)
+            _profile_patches = filter_patches(_profile_patches, message or "")
             _changed = session.client_profile.apply_patches(_profile_patches)
             if _changed:
                 print(f"[Profile] patched: {_changed}", flush=True)
+            elif _had_patches and not _profile_patches:
+                print(f"[Profile] filter_patches: dropped (noise / invalid values)", flush=True)
             # Handle change_field post-confirmation
             if _sa_change_field and session.client_profile.confirmed_at:
                 session.client_profile.last_change_pending = _sa_change_field
