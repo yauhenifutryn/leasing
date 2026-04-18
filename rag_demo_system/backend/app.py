@@ -1242,7 +1242,14 @@ async def _stream_voice_response(
             if _sa_parsed.get("cost") is not None:
                 _extracted_hints["cost"] = _sa_parsed["cost"]
             if _sa_parsed.get("currency"):
-                _extracted_hints["currency"] = _sa_parsed["currency"]
+                # Fix 42a: normalize at hint extraction — classifier sometimes
+                # emits RUB for bare "рублей" (which means BYN in Belarus
+                # context). Without normalization the staging extras path
+                # uses the raw RUB hint and silently flips currency.
+                from .profile_hygiene import _normalize_currency as _norm_cur
+                _raw_cur = _sa_parsed["currency"]
+                _norm = _norm_cur(_raw_cur, message or "")
+                _extracted_hints["currency"] = _norm if _norm else _raw_cur
             if _sa_parsed.get("client_type"):
                 _extracted_hints["client_type"] = _sa_parsed["client_type"]
             # prepaid: prefer pct, fallback to amount
