@@ -834,12 +834,20 @@ async def _stream_voice_response(
     )
     print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
     if tool_schemas and not _skip:
-        # Build conversation context: last 7 turns (not just 400 chars)
-        _recent_turns = chat_session.transcript[-14:] if chat_session.transcript else []  # 7 pairs
+        # Build conversation context: last 3 turn pairs. Empirically, classifier
+        # only needs the last couple of exchanges to detect intent and extract
+        # hints; the full 7 pairs caused 1500-2300ms latency in production.
+        _recent_turns = chat_session.transcript[-6:] if chat_session.transcript else []  # 3 pairs
         _conv_lines = []
         for _turn in _recent_turns:
             _role = "Клиент" if _turn.get("role") == "user" else "Бот"
-            _conv_lines.append(f"{_role}: {_turn.get('text', '')}")
+            _text = str(_turn.get('text', '') or '')
+            # Truncate long bot responses (KB answers can be 500+ chars) to keep
+            # classifier input short. User turns are typically short, truncation
+            # rarely hits them but keeps inputs bounded.
+            if len(_text) > 200:
+                _text = _text[:200].rsplit(' ', 1)[0] + '…'
+            _conv_lines.append(f"{_role}: {_text}")
         _conv_context = "\n".join(_conv_lines) if _conv_lines else "начало разговора"
 
         _tool_history = ""
@@ -938,7 +946,7 @@ async def _stream_voice_response(
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=220,
+                max_tokens=140,
                 timeout_sec=4,
             )
             _raw = classify_resp.text.strip()
