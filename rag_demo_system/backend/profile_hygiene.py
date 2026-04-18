@@ -26,6 +26,9 @@ _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     # condition_new
     "новый", "новая", "новое",
     "бу", "б/у", "подержанный", "подержанная", "подержанное",
+    # subject (single-word slot-fill replies to "легковой или грузовой?")
+    "легковой", "грузовой", "спецтехника", "оборудование",
+    "недвижимость", "машина", "автомобиль", "авто",
 })
 
 
@@ -72,6 +75,47 @@ def utterance_has_client_type_cue(utterance: str) -> bool:
     if not utterance:
         return False
     return bool(_CLIENT_TYPE_CUE_RE.search(utterance))
+
+
+# Fix 27 — explicit-cue keywords for subject (vehicle / equipment category).
+# Same pattern as client_type: classifier was extracting "Легковой автомобиль"
+# even when user clearly said "Грузовой" (observed 2026-04-18). Reject subject
+# patches without a cue in the utterance. Orchestrator will clarify.
+_SUBJECT_CUE_RE = re.compile(
+    r"\b("
+    # Cars (легковой автомобиль)
+    r"легков\w*|седан\w*|машин\w*|автомобил\w*|авто|внедорожник\w*|кроссовер\w*|"
+    # Trucks (грузовой автомобиль)
+    r"грузов\w*|грузовик\w*|фур\w+|тягач\w*|самосвал\w*|микроавтобус\w*|"
+    # Special equipment (спецтехника)
+    r"спецтехник\w*|погрузчик\w*|экскаватор\w*|бульдозер\w*|кран\w*|каток\w*|"
+    r"трактор\w*|комбайн\w*|"
+    # Equipment (оборудование)
+    r"оборудовани\w*|станк\w+|линия|установк\w+|"
+    # Real estate (недвижимость)
+    r"недвижимост\w*|квартир\w+|дом\b|здани\w+|помещени\w+|склад\w*|офис\w*|"
+    # Other transport
+    r"транспорт\w*|автобус\w*|прицеп\w*|мотоцикл\w*|скутер\w*|"
+    # Brand names also imply a car (classifier already maps these)
+    r"bmw|mercedes|mercedes-benz|toyota|kia|hyundai|audi|volkswagen|vw|lexus|"
+    r"mazda|renault|peugeot|ford|lada|skoda|fiat|chevrolet|nissan|honda|"
+    r"мерседес|тойот\w+|киа|хендай|ауди|фольксваген|лексус|мазд\w+|фольцваген|"
+    r"рено|пежо|форд|лад\w+|уаз|камаз|шкод\w+|ниссан|хонд\w+"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def utterance_has_subject_cue(utterance: str) -> bool:
+    """Return True if the utterance explicitly names a leasing subject category.
+
+    Used by `filter_patches` to reject classifier `subject` patches that
+    aren't grounded in the user's words. Prevents "truck -> car" category
+    hallucinations observed in voice transcripts.
+    """
+    if not utterance:
+        return False
+    return bool(_SUBJECT_CUE_RE.search(utterance))
 
 
 def _normalize_currency(patch_value: Any, utterance: str) -> str | None:
@@ -152,6 +196,20 @@ def filter_patches(
             out.pop("client_type")
         else:
             out["client_type"] = ct
+
+    # Fix 27 — reject subject patches without an explicit cue.
+    # Classifier was observed extracting "Легковой автомобиль" when the user
+    # clearly said "Грузовой". Orchestrator will ask or re-read.
+    if "subject" in out:
+        _subj = out.get("subject")
+        if isinstance(_subj, str) and _subj.strip():
+            if not utterance_has_subject_cue(utterance or ""):
+                print(
+                    f"[Profile] subject cue missing — dropping inferred "
+                    f"'{_subj}' utterance='{(utterance or '')[:60]}'",
+                    flush=True,
+                )
+                out.pop("subject")
 
     # Normalize currency.
     if "currency" in out:

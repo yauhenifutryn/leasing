@@ -118,12 +118,16 @@ def test_multi_word_unchanged():
 
 
 def test_numeric_cost_with_currency_passes():
-    # "49 500 рублей" — 1 non-digit token, classifier extracts cost+currency
+    # "49 500 рублей" — 1 non-digit token, classifier extracts cost+currency.
+    # Post Fix 27: `subject` is dropped if the utterance has no subject cue
+    # ("49 500 рублей" has neither машина/авто/грузовой/etc, so any subject
+    # patch was inferred, not grounded). cost + currency are unaffected —
+    # they're numeric-answer keys and ride through the noise filter.
     patches = {"cost": 49500, "currency": "BYN", "subject": "Легковой автомобиль"}
     result = filter_patches(patches, "49 500 рублей.")
     assert result.get("cost") == 49500
     assert result.get("currency") == "BYN"
-    assert result.get("subject") == "Легковой автомобиль"
+    assert "subject" not in result, result  # Fix 27 regression guard
 
 
 def test_numeric_term_with_unit_passes():
