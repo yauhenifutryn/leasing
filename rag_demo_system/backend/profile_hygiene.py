@@ -6,6 +6,7 @@ utterances, bot-name echoes, malformed enum values, or out-of-MVP-range numbers.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 MVP_PREPAID_RANGE = (0.0, 40.0)
@@ -39,6 +40,38 @@ def _normalize_client_type(v: Any) -> str | None:
     if s in {"юрлицо", "юридическое лицо", "ооо", "оао", "зао", "организация", "компания", "юридическое"}:
         return "Юридическое лицо"
     return None
+
+
+# Fix 26 — explicit-cue keywords for client_type. A classifier `client_type`
+# patch is accepted ONLY if the utterance contains one of these words. This
+# catches the "assumes individual without asking" failure mode where the
+# classifier infers `Физическое лицо` from context (e.g. "хочу машину")
+# because prompt examples lean that way on early turns.
+#
+# The orchestrator falls back to its clarification path when no client_type
+# is captured, so the client is explicitly asked (vs being silently labelled).
+_CLIENT_TYPE_CUE_RE = re.compile(
+    r"\b("
+    r"физлиц\w*|физик\w*|физическ\w+|"
+    r"юрлиц\w*|юридическ\w+|"
+    r"ооо|оао|зао|"
+    r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|"
+    r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def utterance_has_client_type_cue(utterance: str) -> bool:
+    """Return True if the utterance explicitly names a client-type category.
+
+    Used by `filter_patches` to reject classifier `client_type` patches that
+    aren't grounded in the user's words. Prevents "assumes individual"
+    hallucinations at the start of the call.
+    """
+    if not utterance:
+        return False
+    return bool(_CLIENT_TYPE_CUE_RE.search(utterance))
 
 
 def _normalize_currency(patch_value: Any, utterance: str) -> str | None:
@@ -106,6 +139,16 @@ def filter_patches(
     if "client_type" in out:
         ct = _normalize_client_type(out["client_type"])
         if ct is None:
+            out.pop("client_type")
+        elif not utterance_has_client_type_cue(utterance or ""):
+            # Fix 26: reject classifier-inferred client_type that has no
+            # explicit keyword in the user utterance. Orchestrator will
+            # ask the client directly instead of silently labelling them.
+            print(
+                f"[Profile] client_type cue missing — dropping inferred "
+                f"'{ct}' utterance='{(utterance or '')[:60]}'",
+                flush=True,
+            )
             out.pop("client_type")
         else:
             out["client_type"] = ct
