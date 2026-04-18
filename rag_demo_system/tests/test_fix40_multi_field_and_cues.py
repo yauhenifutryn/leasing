@@ -88,6 +88,18 @@ def test_unrelated_utterance_still_drops_client_type() -> None:
     assert "client_type" not in out
 
 
+def test_mikrobiznes_single_word_accepted() -> None:
+    # Session a685ce41: "Микробизнес." was 1-word + no cue match, dropped.
+    # After hotfix: enum-slot-fill whitelist + cue regex without \b for бизнес.
+    assert utterance_has_client_type_cue("Микробизнес.") is True
+    out = filter_patches({"client_type": "ИП"}, "Микробизнес.")
+    assert out.get("client_type") == "ИП"
+
+
+def test_malyy_biznes_accepted() -> None:
+    assert utterance_has_client_type_cue("малый бизнес") is True
+
+
 # ── 40e: has_field_signal rejects change_value=0 without literal 0 ────
 
 def test_term_signal_rejects_implicit_zero() -> None:

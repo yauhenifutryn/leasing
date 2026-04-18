@@ -23,6 +23,10 @@ _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     "физлицо", "физик", "физическое",
     "юрлицо", "юридическое", "ооо", "оао", "зао", "организация", "компания",
     "ип", "ипэшник", "самозанятый",
+    # Fix 40d + hotfix: "бизнес" variants as single-word slot-fill answers to
+    # "физическое, ИП или юр.лицо?". Without this, "Микробизнес." was dropped
+    # by the <2-token noise filter (session a685ce41, 2026-04-18).
+    "бизнес", "бизнесмен", "микробизнес", "предприниматель",
     # condition_new
     "новый", "новая", "новое",
     "бу", "б/у", "подержанный", "подержанная", "подержанное",
@@ -38,9 +42,11 @@ def _normalize_client_type(v: Any) -> str | None:
     s = v.strip().lower()
     if s in {"физлицо", "физик", "физ. лицо", "физическое лицо", "физическое"}:
         return "Физическое лицо"
-    if s in {"ип", "ипэшник", "индивидуальный предприниматель", "самозанятый"}:
+    if s in {"ип", "ипэшник", "индивидуальный предприниматель", "самозанятый",
+             "предприниматель", "микробизнес"}:
         return "ИП"
-    if s in {"юрлицо", "юридическое лицо", "ооо", "оао", "зао", "организация", "компания", "юридическое", "бизнес", "бизнесмен"}:
+    if s in {"юрлицо", "юридическое лицо", "ооо", "оао", "зао", "организация",
+             "компания", "юридическое", "бизнес", "бизнесмен", "малый бизнес"}:
         return "Юридическое лицо"
     return None
 
@@ -54,16 +60,21 @@ def _normalize_client_type(v: Any) -> str | None:
 # The orchestrator falls back to its clarification path when no client_type
 # is captured, so the client is explicitly asked (vs being silently labelled).
 _CLIENT_TYPE_CUE_RE = re.compile(
-    r"\b("
+    r"(?:"
+    # Main alternatives require a leading word boundary.
+    r"\b(?:"
     r"физлиц\w*|физик\w*|физическ\w+|"
     r"юрлиц\w*|юридическ\w+|"
     r"ооо|оао|зао|"
     r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|"
-    # Fix 40d: "бизнес" / "бизнесмен" map to юр.лицо by default in Belarus
-    # context. Without this, "Нет, я бизнес." classifier-emitted client_type
-    # was dropped as cue-missing, leaving profile unset — bot re-asked.
-    r"бизнес\w*|"
-    r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+"
+    r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+|"
+    # Fix 40d: "бизнес" / "бизнесмен" map to юр.лицо in Belarus context.
+    r"бизнес\w*|предпринимат\w+"
+    r")"
+    # Also match "бизнес" inside compound words without word boundary
+    # (e.g. "Микробизнес", "малый бизнес", "бизнесмен"). Session a685ce41
+    # dropped "Микробизнес." because of the leading \b.
+    r"|бизнес"
     r")",
     re.IGNORECASE,
 )

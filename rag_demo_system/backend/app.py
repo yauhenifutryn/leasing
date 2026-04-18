@@ -1309,16 +1309,18 @@ async def _stream_voice_response(
                 if not _is_explicit_change and _field in ("prepaid_pct", "prepaid_amount"):
                     if _sa_change_field_val in ("prepaid_pct", "prepaid_amount", "prepaid"):
                         _is_explicit_change = True
-                # Fix 40a: multi-field utterance support. When user says
-                # "грузовик, юр.лицо, 50 тысяч, на 7 лет" classifier emits
-                # change_field for ONE field and patches for the other three.
-                # Those three have existing values (not first capture) and
-                # don't match change_field, so the sticky guard used to
-                # reject them. Unlock when utterance carries a real signal
-                # for this specific field value — that proves the user
-                # named it in this turn, it's not a stale echo.
+                # Fix 40a (hotfix 3): multi-field utterance support. When
+                # user says "грузовик, юр.лицо, 50 тысяч, на 7 лет" in COLLECTING,
+                # unlock patches whose field value literally appears in the
+                # utterance. In CONFIRMED / CHANGE_PENDING state do NOT apply
+                # directly — leave the hint in _extracted_hints so the
+                # staging block (_implicit_enter path) routes them through
+                # pending_change for user confirmation. Direct-apply in those
+                # states bypassed change-confirm entirely (session a685ce41,
+                # 2026-04-18 19:16: "Давай сменим всё" fired calc without prompt).
                 _has_live_signal = False
-                if not _is_first_capture and not _is_explicit_change:
+                _allow_live_unlock = _profile_current.state == ProfileState.COLLECTING
+                if _allow_live_unlock and not _is_first_capture and not _is_explicit_change:
                     try:
                         _has_live_signal = _has_signal_sticky(_field, _new_val, message or "")
                     except Exception:  # noqa: BLE001
@@ -1816,6 +1818,25 @@ async def _stream_voice_response(
                 flush=True,
             )
     elif _state_profile.state == ProfileState.CHANGE_PENDING:
+        # Fix 40 hotfix 2: when a change was STAGED this turn (classifier
+        # emitted multi-field change like "Давай сменим всё. Грузовик, 100
+        # тысяч на 7 лет, аванс 30%"), is_confirmation=true from the classifier
+        # is unreliable — "давай" at the start of the utterance triggers it
+        # even though the user hasn't heard or confirmed the change-confirm
+        # prompt yet. Force a dedicated confirmation turn.
+        if _change_staged_this_turn:
+            print(
+                f"[Orchestrator] CHANGE_PENDING staged this turn — "
+                f"emitting change-confirm regardless of is_confirm={_sa_is_confirm}",
+                flush=True,
+            )
+            await _emit_plain_assistant_response(
+                build_change_confirm_text(_state_profile.pending_change),
+                websocket, session_id,
+                backend=backend, session=session,
+            )
+            session.assistant_speaking = False
+            return
         if _sa_is_confirm:
             _state_profile.apply_pending_change()
             _state_profile.state = ProfileState.CONFIRMED
