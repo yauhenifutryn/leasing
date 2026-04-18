@@ -1027,6 +1027,10 @@ async def _stream_voice_response(
     # detection from Fix 30). Read by the always-on state gate to decide
     # whether to emit the change-confirm prompt on a non-confirm turn.
     _change_staged_this_turn = False
+    # Fix 42b: fields actually patched to the profile this turn. Used by the
+    # collect-phase clarify gate to fire deterministic "ask for next missing"
+    # prompts on CONVERSATION turns where Gate 1 (needs_tool only) wouldn't run.
+    _changed_this_turn: dict[str, Any] = {}
     # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
     _msg_stripped = message.strip().lower().rstrip(".!,?")
 
@@ -1242,7 +1246,14 @@ async def _stream_voice_response(
             if _sa_parsed.get("cost") is not None:
                 _extracted_hints["cost"] = _sa_parsed["cost"]
             if _sa_parsed.get("currency"):
-                _extracted_hints["currency"] = _sa_parsed["currency"]
+                # Fix 42a: normalize at hint extraction — classifier sometimes
+                # emits RUB for bare "рублей" (which means BYN in Belarus
+                # context). Without normalization the staging extras path
+                # uses the raw RUB hint and silently flips currency.
+                from .profile_hygiene import _normalize_currency as _norm_cur
+                _raw_cur = _sa_parsed["currency"]
+                _norm = _norm_cur(_raw_cur, message or "")
+                _extracted_hints["currency"] = _norm if _norm else _raw_cur
             if _sa_parsed.get("client_type"):
                 _extracted_hints["client_type"] = _sa_parsed["client_type"]
             # prepaid: prefer pct, fallback to amount
@@ -1376,6 +1387,7 @@ async def _stream_voice_response(
             _changed = session.client_profile.apply_patches(_profile_patches)
             if _changed:
                 print(f"[Profile] patched: {_changed}", flush=True)
+                _changed_this_turn = dict(_changed)
             elif _had_patches and not _profile_patches:
                 print(f"[Profile] filter_patches: dropped (noise / invalid values)", flush=True)
             try:
@@ -1895,6 +1907,34 @@ async def _stream_voice_response(
                 f"[Orchestrator] CHANGE_PENDING: no confirm / deny / fresh change — falling through",
                 flush=True,
             )
+
+    # ── Fix 42b: Collect-phase deterministic clarify ──
+    # Fires regardless of classifier intent when:
+    #   - state is COLLECTING
+    #   - user captured at least one profile field this turn
+    #   - profile is still incomplete
+    # Without this, CONVERSATION-intent turns that update the profile (e.g.
+    # user answering "ИП" to "физ or юр?") fall through to the LLM, which
+    # improvises and often re-asks already-captured fields.
+    _collect_profile = session.client_profile
+    if (
+        _collect_profile.state == ProfileState.COLLECTING
+        and bool(_changed_this_turn)
+        and not _collect_profile.is_complete_for_calc()
+    ):
+        _missing = _collect_profile.missing_fields()
+        print(
+            f"[Orchestrator] COLLECTING clarify: patched={list(_changed_this_turn.keys())} "
+            f"still_missing={sorted(_missing)} intent={_intent or 'CONVERSATION'}",
+            flush=True,
+        )
+        _clar = build_clarification_prompt(_missing, _collect_profile)
+        await _emit_plain_assistant_response(
+            _clar, websocket, session_id,
+            backend=backend, session=session,
+        )
+        session.assistant_speaking = False
+        return
 
     # ── Tool-intent gates (Gates 1 & 2) ──
     # Enforces server-side clarify + readback BEFORE any calculator call.
