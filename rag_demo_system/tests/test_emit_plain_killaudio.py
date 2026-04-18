@@ -104,6 +104,12 @@ def test_emit_plain_no_killaudio_without_interrupt(monkeypatch):
             if m.get("type") == "response.output_audio.delta"
         ]
         assert len(audio_deltas) == 2
-        assert all("killAudio" not in t for t in fake_ws.texts_sent)
+        # Fix 33: _emit_plain sends a preemptive killAudio at the start to
+        # flush any lingering audio from a concurrent older TTS (e.g. intro
+        # still pushing chunks when readback begins). Exactly one killAudio
+        # is expected even in the happy path. No second killAudio at the
+        # end because no interrupt fired.
+        _kills = [t for t in fake_ws.texts_sent if "killAudio" in t]
+        assert len(_kills) == 1, fake_ws.texts_sent
 
     asyncio.run(_run())

@@ -23,7 +23,11 @@ def test_numeric_term_digits_in_utterance():
 
 def test_numeric_cost_digits_with_spaces():
     assert has_field_signal("cost", 150000, "150 000 рублей") is True
-    assert has_field_signal("cost", 80000, "за 80 тысяч") is False  # "80 тысяч" missing '80000' digits
+    # Post Fix 34: "80 тысяч" is now recognised as 80000 via the Russian
+    # multiplier heuristic. This test used to assert False on the strict
+    # literal-digits rule; Fix 34 deliberately relaxes that for cost /
+    # prepaid_amount so live speech ("восемьдесят тысяч" style) works.
+    assert has_field_signal("cost", 80000, "за 80 тысяч") is True
 
 
 def test_numeric_prepaid_amount_rejected_when_not_in_utterance():

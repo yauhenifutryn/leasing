@@ -175,7 +175,32 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
             return True
         # Also check raw utterance in case the number fits a compact span
         # (rare; covered by the flat check too).
-        return v_str in utterance
+        if v_str in utterance:
+            return True
+        # Fix 34: Russian spelled multipliers. "80 тысяч" → 80000, "3 миллиона"
+        # → 3000000. Only applies to cost / prepaid_amount (big numbers).
+        # Term / prepaid_pct / age are small enough that callers say the raw
+        # digits ("36 месяцев", "20 процентов", "22 года").
+        if field in ("cost", "prepaid_amount"):
+            # N тысяч / N тыс
+            if _int % 1000 == 0:
+                _thou = _int // 1000
+                if _thou > 0 and re.search(
+                    rf"\b{_thou}\s*(?:тысяч\w*|тыс\b|k\b|к\b)",
+                    utterance,
+                    re.IGNORECASE,
+                ):
+                    return True
+            # N миллион / N млн
+            if _int % 1000000 == 0:
+                _mil = _int // 1000000
+                if _mil > 0 and re.search(
+                    rf"\b{_mil}\s*(?:миллион\w*|млн\b)",
+                    utterance,
+                    re.IGNORECASE,
+                ):
+                    return True
+        return False
     # Unknown field — conservative: require explicit value string
     return str(value) in (utterance or "")
 

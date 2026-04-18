@@ -15,6 +15,13 @@ class VoiceSession:
     stt_provider: str = "whisper"
     tts_provider: str = "silero_tts"
     assistant_speaking: bool = False
+    # Fix 33: token-based ownership of the assistant_speaking flag.
+    # Each TTS call stamps a unique token on entry; only the holder of the
+    # current token is allowed to reset `assistant_speaking=False` on exit.
+    # This fixes the intro-vs-readback race where a late-finishing
+    # `_jambonz_send_tts` (intro) wiped the True set by a concurrent
+    # `_emit_plain_assistant_response` (readback), breaking barge-in.
+    tts_speaker_token: str | None = None
     interrupted: bool = False
     active_task_id: str | None = None
     last_user_message: str = ""

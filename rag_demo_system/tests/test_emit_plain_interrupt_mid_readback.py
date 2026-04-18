@@ -161,7 +161,10 @@ def test_full_readback_without_interrupt_synthesizes_every_phrase(monkeypatch):
 
         assert len(synth_calls) >= 4  # split produces multiple phrases
         assert synth_calls[-1] == "Всё верно?"
-        # No killAudio in the happy path.
-        assert all("killAudio" not in t for t in fake_ws.texts_sent)
+        # Fix 33: _emit_plain now sends exactly one preemptive killAudio on
+        # entry (flushes any leftover audio from a prior overlapping TTS).
+        # No SECOND killAudio because no interrupt fired during chunks.
+        _kills = [t for t in fake_ws.texts_sent if "killAudio" in t]
+        assert len(_kills) == 1, fake_ws.texts_sent
 
     asyncio.run(_run())

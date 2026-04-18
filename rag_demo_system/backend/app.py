@@ -149,7 +149,18 @@ async def _emit_plain_assistant_response(
     """
     if not text:
         return
+    # Fix 33: stamp ownership token so a concurrent older TTS finishing can't
+    # wipe our `assistant_speaking=True` flag.
+    _my_token = uuid.uuid4().hex
     if session is not None:
+        session.tts_speaker_token = _my_token
+        # Kill any audio already buffered downstream from an earlier TTS
+        # (e.g. intro still pushing chunks when readback starts). Keeps the
+        # caller from hearing two overlapping TTS streams.
+        try:
+            await websocket.send_text(json.dumps({"type": "killAudio"}))
+        except Exception:  # noqa: BLE001
+            pass
         session.assistant_speaking = True
         session.interrupted = False
         # Reset VAD warmup so the 0.5s post-TTS-start deadzone restarts
@@ -188,7 +199,10 @@ async def _emit_plain_assistant_response(
                 chat_sess.transcript.append({"role": "assistant", "text": text})
         except Exception:  # noqa: BLE001
             pass
-        session.assistant_speaking = False
+        # Fix 33: only reset assistant_speaking if our token is still the
+        # current owner. If another TTS took over, let IT manage the flag.
+        if getattr(session, "tts_speaker_token", None) == _my_token:
+            session.assistant_speaking = False
     await websocket.send_json({
         "type": "response.done",
         "session_id": session_id,
@@ -1245,8 +1259,13 @@ async def _stream_voice_response(
                             "new": _pc.get("new_value"),
                         }
                     }
-                # Primary change from classifier (if any)
-                if _sa_change_field:
+                # Primary change from classifier (if any). Fix 34 guard:
+                # skip staging when classifier emitted change_field with
+                # change_value=None/empty (e.g. "ещё другая цена" — intent
+                # to change but no new value). Without this, the prompt
+                # becomes "Меняю стоимость на , остальное оставляю" with
+                # a blank hole where the new value should be.
+                if _sa_change_field and _sa_change_value not in (None, ""):
                     _primary_old = getattr(_profile_now, _sa_change_field, None)
                     _existing[_sa_change_field] = {
                         "old": _primary_old,
@@ -3072,6 +3091,12 @@ async def _jambonz_send_tts(
     text: str,
 ) -> None:
     """Synthesize text and send audio back as binary WebSocket frames."""
+    # Fix 33: stamp our ownership token. Only reset `assistant_speaking` at
+    # the end if the token still belongs to us — otherwise a newer TTS has
+    # taken over and we must not interfere with its barge-in flag.
+    _my_token = uuid.uuid4().hex
+    if session is not None:
+        session.tts_speaker_token = _my_token
     try:
         text = clean_voice_output(text)
         if not text:
@@ -3104,7 +3129,11 @@ async def _jambonz_send_tts(
         import traceback
         print(f"[Jambonz:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
 
-    session.assistant_speaking = False
+    # Fix 33: only reset `assistant_speaking` if our ownership token is
+    # still current. If a newer TTS (e.g. readback) took over, it owns the
+    # flag and we must not flip it False, or its barge-in gate breaks.
+    if getattr(session, "tts_speaker_token", None) == _my_token:
+        session.assistant_speaking = False
     session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
     await broadcast_sip_event({
         "type": "sip.tts.start",
