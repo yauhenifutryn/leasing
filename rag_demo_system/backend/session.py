@@ -45,6 +45,14 @@ class ClientProfile:
     term_months: Optional[int] = None
     type_schedule: Optional[ScheduleType] = None
 
+    # Fix 1.2 (2026-04-19) — preserve the client's pre-conversion figures so
+    # every render path (readback, calc-result voice summary, SMS body) can
+    # disclose both amounts: "20000 долларов, это 60000 белорусских рублей
+    # по курсу 3 к 1". Populated only on the Физлицо + USD direct-call path
+    # at the USD -> BYN conversion site (app.py, DirectTool block).
+    original_cost: Optional[float] = None
+    original_currency: Optional[str] = None
+
     confirmed_at: Optional[float] = None
     last_change_pending: Optional[str] = None
     locked_fields: set[str] = field(default_factory=set)

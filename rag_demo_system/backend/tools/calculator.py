@@ -435,10 +435,28 @@ class CalculatorTool(ToolDefinition):
             return None
 
         p = result["params"]
+        cur = p.get("currency", "BYN")
+
+        # Fix 1.2 (2026-04-19) — disclose both amounts when the direct-call
+        # path converted USD -> BYN for a физлицо. Without this, the SMS
+        # showed only the converted BYN figure and the client could not
+        # reconcile it with the USD amount they originally quoted.
+        cost_line: str
+        conv = result.get("currency_conversion") or {}
+        if conv.get("from") == "USD" and conv.get("amount_from") is not None:
+            rate = int(round(conv.get("rate") or 3))
+            cost_line = (
+                f"{p.get('subject', '?')}, "
+                f"{int(conv['amount_from'])} долларов "
+                f"(это {int(p.get('cost', 0))} BYN по курсу {rate}:1)"
+            )
+        else:
+            cost_line = f"{p.get('subject', '?')}, {p.get('cost', '?')} {cur}"
+
         return (
             f"Микро Лизинг: расчёт лизинга\n"
-            f"{p.get('subject', '?')}, {p.get('cost', '?')} {p.get('currency', 'BYN')}\n"
-            f"Аванс {p.get('prepaid', '?')}%: {result['advance_sum']} {p.get('currency', 'BYN')}\n"
+            f"{cost_line}\n"
+            f"Аванс {p.get('prepaid', '?')}%: {result['advance_sum']} {cur}\n"
             f"Срок: {result['num_payments']} мес.\n"
             f"Удорожание: {result['increase_percent']}%\n"
             f"График платежей: {result['url']}\n"

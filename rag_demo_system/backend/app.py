@@ -2196,6 +2196,13 @@ async def _stream_voice_response(
         _ct_policy = _direct_params.get("client_type")
         _cur_policy = _direct_params.get("currency")
         _currency_conversion = None
+        # Fix 1.2 (2026-04-19) — clear any stale USD disclosure from a
+        # previous turn before deciding whether conversion fires this turn.
+        # Without this, a client who first quoted USD and then switched to
+        # BYN would still see "(это N белорусских рублей по курсу X к 1)"
+        # in the readback.
+        _p.original_cost = None
+        _p.original_currency = None
         if _ct_policy == "Физическое лицо" and _cur_policy in ("EUR", "RUB", "RUR", "CNY"):
             # Block the direct call; emit UnsupportedCurrency fallback message via LLM
             _direct_tool_result = {
@@ -2220,6 +2227,13 @@ async def _stream_voice_response(
             }
             _direct_params["cost"] = _new_cost
             _direct_params["currency"] = "BYN"
+            # Fix 1.2 (2026-04-19) — stash the USD figures on the profile so
+            # the readback / calc-result / SMS paths can disclose both
+            # amounts to the client. Without this, downstream renders only
+            # see the converted BYN cost and the caller loses sight of the
+            # USD number they actually quoted.
+            _p.original_cost = _old_cost
+            _p.original_currency = "USD"
             print(f"[DirectTool] USD->BYN: {_old_cost} -> {_new_cost} @ {_rate}", flush=True)
 
         # Check subject restrictions for individuals before calling API.
@@ -2367,7 +2381,21 @@ async def _stream_voice_response(
                 _def_parts.append("аннуитетный график (по умолчанию)")
             if _def_parts:
                 _defaults_note = f" Параметры по умолчанию: {', '.join(_def_parts)}."
+        # Fix 1.2 (2026-04-19) — when the direct-call path converted USD to
+        # BYN for a физлицо, prepend the original-USD disclosure so the
+        # client hears "двадцать тысяч долларов, это шестьдесят тысяч
+        # рублей по курсу 3 к 1" instead of silently-converted BYN only.
+        _conv_prefix = ""
+        _conv = _direct_tool_result.get("currency_conversion") or {}
+        if _conv.get("from") == "USD" and _conv.get("amount_from") is not None:
+            _rate_disp = int(round(_conv.get("rate") or 3))
+            _conv_prefix = (
+                f"Стоимость {int(_conv['amount_from'])} долларов "
+                f"(это {int(_p.get('cost', 0))} белорусских рублей "
+                f"по курсу {_rate_disp} к 1). "
+            )
         _result_summary = (
+            f"{_conv_prefix}"
             f"Аванс {_p.get('prepaid', 30)}%: {_direct_tool_result.get('advance_sum', '?')} {_cur}. "
             f"Ежемесячный платёж: {_direct_tool_result.get('payment_min', '?')} {_cur}. "
             f"Выкупной: {_direct_tool_result.get('buyout_sum', '?')} {_cur}. "

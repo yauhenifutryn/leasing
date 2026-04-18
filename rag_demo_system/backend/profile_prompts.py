@@ -45,6 +45,28 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     return "Уточните параметры расчёта, пожалуйста."
 
 
+def _format_cost_phrase(profile: Any) -> str:
+    """Render the cost portion of the readback.
+
+    Fix 1.2 (2026-04-19): when the profile carries `original_currency="USD"`
+    (set by the direct-call USD -> BYN conversion path), speak both amounts
+    so the client can reconcile what they said with what the calculator saw.
+    TTS will convert the digits to Russian words via voice_adapters, e.g.
+    "20000 долларов" -> "двадцать тысяч долларов".
+    """
+    orig_cur = getattr(profile, "original_currency", None)
+    orig_cost = getattr(profile, "original_cost", None)
+    cost_str = f"{int(profile.cost)}" if profile.cost else "—"
+    if orig_cur == "USD" and orig_cost is not None and profile.cost:
+        rate = int(round(profile.cost / orig_cost)) if orig_cost else 3
+        return (
+            f"стоимость {int(orig_cost)} долларов "
+            f"(это {cost_str} белорусских рублей по курсу {rate} к 1)"
+        )
+    currency_str = profile.currency or ""
+    return f"стоимость {cost_str} {currency_str}".rstrip()
+
+
 def build_readback_text(profile: Any) -> str:
     """Produce the readback confirmation string listing all calculator params."""
     subj = profile.subject or "предмет лизинга"
@@ -64,12 +86,11 @@ def build_readback_text(profile: Any) -> str:
         else "линейный" if profile.type_schedule == "1"
         else "—"
     )
-    cost_str = f"{int(profile.cost)}" if profile.cost else "—"
-    currency_str = profile.currency or ""
+    cost_phrase = _format_cost_phrase(profile)
     client_type_str = profile.client_type or ""
     term_str = str(profile.term_months) if profile.term_months is not None else "—"
     return (
-        f"Давайте подтвердим параметры: {subj}, {cond}, стоимость {cost_str} {currency_str}, "
+        f"Давайте подтвердим параметры: {subj}, {cond}, {cost_phrase}, "
         f"{client_type_str}, срок {term_str} месяцев, аванс {prepaid}, "
         f"график {sched}. Всё верно?"
     )
