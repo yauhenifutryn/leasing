@@ -87,6 +87,50 @@ _FIELD_RU = {
 }
 
 
+# Human-readable translations for enum values in change-confirm prompts.
+# Calculator API uses internal codes ("0"/"1" for type_schedule, etc.); we
+# never say those codes to the caller.
+_VALUE_RU: dict[str, dict[Any, str]] = {
+    "type_schedule": {
+        "0": "аннуитетный",
+        0: "аннуитетный",
+        "1": "линейный",
+        1: "линейный",
+    },
+    "condition_new": {
+        "0": "б/у",
+        0: "б/у",
+        "1": "новый",
+        1: "новый",
+    },
+    "client_type": {
+        "Физическое лицо": "физическое лицо",
+        "ИП": "индивидуальный предприниматель",
+        "Юридическое лицо": "юридическое лицо",
+    },
+    "currency": {
+        "BYN": "белорусские рубли",
+        "USD": "доллары США",
+        "EUR": "евро",
+        "RUB": "российские рубли",
+    },
+}
+
+
+def _value_ru(field_name: str, new_value: Any) -> str:
+    """Return a human-readable label for a calculator field value.
+
+    For mapped enum fields, returns the Russian label; for unmapped fields
+    (cost, term_months, prepaid_pct), returns the raw value cast to str.
+    """
+    mapped = _VALUE_RU.get(field_name, {}).get(new_value)
+    if mapped is not None:
+        return mapped
+    if new_value is None or new_value == "":
+        return ""
+    return str(new_value)
+
+
 def build_change_confirm_text(pending_change: dict[str, Any] | None) -> str:
     """Produce the single-field change-confirm prompt."""
     if not pending_change:
@@ -94,4 +138,5 @@ def build_change_confirm_text(pending_change: dict[str, Any] | None) -> str:
     field_name = pending_change.get("field", "")
     field_ru = _FIELD_RU.get(field_name, field_name)
     new_value = pending_change.get("new_value")
-    return f"Меняю {field_ru} на {new_value}, остальное оставляю. Всё верно?"
+    new_value_ru = _value_ru(field_name, new_value)
+    return f"Меняю {field_ru} на {new_value_ru}, остальное оставляю. Всё верно?"
