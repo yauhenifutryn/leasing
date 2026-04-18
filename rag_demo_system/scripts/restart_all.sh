@@ -141,7 +141,10 @@ sleep 3
 echo ""
 echo "[restart] Step 8: Waiting for vLLM to load model..."
 ELAPSED=0
-MAX_WAIT=600
+# Fix 37 tail: first-time GDN kernel JIT compile takes ~10 min serially
+# (MAX_JOBS=2 bounds RAM but extends wall time). Subsequent restarts hit
+# the disk cache and finish in ~90 s. Give the compile room to finish.
+MAX_WAIT=1200
 while true; do
   CODE=$(curl -s --max-time 5 --connect-timeout 3 -o /dev/null -w "%{http_code}" "http://localhost:$VLLM_PORT/health" 2>/dev/null || echo "000")
   if [ "$CODE" = "200" ]; then
