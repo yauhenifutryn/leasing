@@ -52,7 +52,12 @@ class ClientProfile:
     state: ProfileState = ProfileState.COLLECTING
     readback_emitted_at: Optional[float] = None
     change_emitted_at: Optional[float] = None
-    pending_change: Optional[dict[str, Any]] = None  # {"field": str, "old_value": Any, "new_value": Any}
+    # Shape: {"field": str, "old_value": Any, "new_value": Any}  (single-field, legacy)
+    #    or: {"changes": {field_name: {"old": Any, "new": Any}, ...}}  (multi-field, Fix 28)
+    # The multi-field shape supports one turn that modifies several calculator
+    # params ("легковой за 80 тысяч" = subject + cost). A single-field payload
+    # is still accepted for backward compatibility with older call sites.
+    pending_change: Optional[dict[str, Any]] = None
 
     _CORE_FIELDS = (
         "client_type",
@@ -100,9 +105,24 @@ class ClientProfile:
         return changed
 
     def apply_pending_change(self) -> bool:
-        """Apply pending_change to the profile, clear it. Return True if applied."""
+        """Apply pending_change to the profile, clear it. Return True if applied.
+
+        Supports both single-field and multi-field pending_change shapes.
+        The `changes` multi-field dict (Fix 28) is iterated in insertion order.
+        """
         if not self.pending_change:
             return False
+        # Multi-field shape.
+        _changes = self.pending_change.get("changes")
+        if isinstance(_changes, dict) and _changes:
+            for field_name, vals in _changes.items():
+                if not hasattr(self, field_name):
+                    continue
+                new_value = vals.get("new") if isinstance(vals, dict) else vals
+                setattr(self, field_name, new_value)
+            self.pending_change = None
+            return True
+        # Legacy single-field shape.
         field_name = self.pending_change.get("field")
         new_value = self.pending_change.get("new_value")
         if field_name and hasattr(self, field_name):

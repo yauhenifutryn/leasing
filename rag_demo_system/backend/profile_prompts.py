@@ -132,9 +132,37 @@ def _value_ru(field_name: str, new_value: Any) -> str:
 
 
 def build_change_confirm_text(pending_change: dict[str, Any] | None) -> str:
-    """Produce the single-field change-confirm prompt."""
+    """Produce the change-confirm prompt.
+
+    Supports both shapes:
+      * Single-field legacy: {"field": str, "new_value": Any}
+      * Multi-field (Fix 28): {"changes": {field_name: {"old": Any, "new": Any}, ...}}
+
+    For multi-field, the prompt lists every change ("Меняю X на A и Y на B,
+    остальное оставляю. Всё верно?") so the caller hears exactly what will
+    be applied and doesn't see the bot silently tack on extra edits.
+    """
     if not pending_change:
         return "Уточните, пожалуйста, что именно нужно изменить."
+    # Explicit multi-field shape: empty `changes` dict means "the classifier
+    # flagged a change intent but gave us no new value" — prompt clarification.
+    if "changes" in pending_change and not pending_change["changes"]:
+        return "Уточните, пожалуйста, что именно нужно изменить."
+    _changes = pending_change.get("changes")
+    if isinstance(_changes, dict) and _changes:
+        parts: list[str] = []
+        for field_name, vals in _changes.items():
+            field_ru = _FIELD_RU.get(field_name, field_name)
+            new_value = vals.get("new") if isinstance(vals, dict) else vals
+            new_value_ru = _value_ru(field_name, new_value)
+            parts.append(f"{field_ru} на {new_value_ru}")
+        if len(parts) == 1:
+            return f"Меняю {parts[0]}, остальное оставляю. Всё верно?"
+        # Join with "," except for the last which gets " и "
+        head = ", ".join(parts[:-1])
+        body = f"{head} и {parts[-1]}"
+        return f"Меняю {body}, остальное оставляю. Всё верно?"
+    # Legacy single-field.
     field_name = pending_change.get("field", "")
     field_ru = _FIELD_RU.get(field_name, field_name)
     new_value = pending_change.get("new_value")

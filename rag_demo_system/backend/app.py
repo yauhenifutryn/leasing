@@ -1187,20 +1187,78 @@ async def _stream_voice_response(
                 )
             except Exception:  # noqa: BLE001
                 pass
-            # Handle change_field post-confirmation — transition to CHANGE_PENDING
-            if _sa_change_field and session.client_profile.state == ProfileState.CONFIRMED:
-                _old_value = getattr(session.client_profile, _sa_change_field, None)
-                session.client_profile.pending_change = {
-                    "field": _sa_change_field,
-                    "old_value": _old_value,
-                    "new_value": _sa_change_value,
-                }
+            # Handle change_field post-confirmation OR extra changes mid-pending.
+            # Fix 28: support multi-field change in one turn ("легковой за 80 тысяч"
+            # = subject + cost) and merging extra changes into an existing
+            # pending_change (state CHANGE_PENDING already).
+            _profile_now = session.client_profile
+            _enter_change = bool(_sa_change_field) and _profile_now.state in (
+                ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING
+            )
+            # Auto-detect: classifier may emit new calculator values WITHOUT
+            # setting change_field (observed: "легковой за 80к" primary=subject,
+            # extras cost=80000). Build a changes dict from all deltas.
+            _EXTRA_KEYS_TO_CHANGE = (
+                ("subject", "subject"),
+                ("cost", "cost"),
+                ("currency", "currency"),
+                ("client_type", "client_type"),
+                ("condition_new", "condition_new"),
+                ("term_months", "term_months"),
+                ("type_schedule", "type_schedule"),
+                ("prepaid_pct", "prepaid_pct"),
+                ("prepaid_amount", "prepaid_amount"),
+            )
+            if _enter_change:
+                # Start with existing changes dict if state is already CHANGE_PENDING
+                _existing = {}
+                _pc = _profile_now.pending_change or {}
+                if isinstance(_pc.get("changes"), dict):
+                    _existing = dict(_pc["changes"])
+                elif _pc.get("field"):
+                    _existing = {
+                        _pc["field"]: {
+                            "old": _pc.get("old_value"),
+                            "new": _pc.get("new_value"),
+                        }
+                    }
+                # Primary change from classifier
+                if _sa_change_field:
+                    _primary_old = getattr(_profile_now, _sa_change_field, None)
+                    _existing[_sa_change_field] = {
+                        "old": _primary_old,
+                        "new": _sa_change_value,
+                    }
+                # Extras: any _extracted_hints key whose value differs from
+                # the current profile AND has a valid cue (hygiene guards
+                # already enforced cue presence on problematic fields).
+                for _hint_key, _field_key in _EXTRA_KEYS_TO_CHANGE:
+                    if _field_key == _sa_change_field:
+                        continue
+                    _hint_val = _extracted_hints.get(_hint_key)
+                    if _hint_val in (None, ""):
+                        continue
+                    _cur = getattr(_profile_now, _field_key, None)
+                    if _cur == _hint_val:
+                        continue
+                    _existing[_field_key] = {
+                        "old": _cur,
+                        "new": _hint_val,
+                    }
+                session.client_profile.pending_change = {"changes": _existing}
                 session.client_profile.state = ProfileState.CHANGE_PENDING
                 import time as _time
                 session.client_profile.change_emitted_at = _time.time()
-                # Keep the legacy field in sync for any remaining consumers
-                session.client_profile.last_change_pending = _sa_change_field
-                print(f"[Profile] CHANGE_PENDING: {_sa_change_field} {_old_value} -> {_sa_change_value}", flush=True)
+                # Keep the legacy field in sync for any remaining consumers.
+                # When multi-field, point at the primary change_field; else
+                # pick any one key (doesn't really matter, it's just a marker).
+                _primary_marker = _sa_change_field or next(iter(_existing), None)
+                session.client_profile.last_change_pending = _primary_marker
+                print(
+                    f"[Profile] CHANGE_PENDING: fields={list(_existing.keys())} "
+                    f"primary={_primary_marker}",
+                    flush=True,
+                )
             # Confirmation → stamp confirmed_at
             if _sa_is_confirm:
                 if session.client_profile.last_change_pending:
@@ -1417,16 +1475,132 @@ async def _stream_voice_response(
             _guard_reason = f"pass (info_q={_has_info_q}, no_fresh_hint={_no_fresh_calc_hint}, state={session.client_profile.state.value}, failures={session.consecutive_calc_failures})"
         print(f"[RAG-Guard] decision={_guard_reason}", flush=True)
 
-    # ── Profile State-Machine Gate ──
-    # Enforces server-side readback + change-confirm BEFORE any calculator call.
-    # Only active when the classifier detected a tool intent; RAG paths pass through.
+    # ── Always-on state gates (Fix 29) ──
+    # Gates 3 (READBACK_PENDING) and 4 (CHANGE_PENDING) must run on every turn
+    # regardless of what the classifier labelled the intent. When the user
+    # denies a readback with a correction ("Нет, автомобиль грузовой"), the
+    # classifier often emits intent=CONVERSATION, which used to skip the
+    # whole gate block and let the LLM improvise a clarification — bypassing
+    # the state machine. Now the state gates fire first, and the tool-intent
+    # gates only run afterwards if control falls through.
+    _state_profile = session.client_profile
+    _STATE_DELTA_KEYS = (
+        ("subject", "subject"),
+        ("cost", "cost"),
+        ("currency", "currency"),
+        ("client_type", "client_type"),
+        ("condition_new", "condition_new"),
+        ("term_months", "term_months"),
+        ("type_schedule", "type_schedule"),
+        ("prepaid_pct", "prepaid_pct"),
+        ("prepaid_amount", "prepaid_amount"),
+    )
+    # Explicit-deny heuristic: user starts message with "Нет", "неправильно",
+    # "неверно", or "ошибка". Used to decide whether to re-prompt readback /
+    # change-confirm vs fall through (e.g. user asked an info question mid-state).
+    _DENY_PREFIX_RE = re.compile(
+        r"^\s*(нет|не\s+верно|не\s+правильно|неправильно|неверно|ошибка|ошибочн\w+)\b",
+        re.IGNORECASE,
+    )
+    _is_explicit_deny = bool(message) and bool(_DENY_PREFIX_RE.match(message))
+
+    if _state_profile.state == ProfileState.READBACK_PENDING:
+        if _sa_is_confirm:
+            _state_profile.state = ProfileState.CONFIRMED
+            if _state_profile.confirmed_at is None:
+                _state_profile.confirmed_at = time.time()
+            print(f"[Orchestrator] profile CONFIRMED (via always-on gate)", flush=True)
+            # fall through to tool orchestration
+        else:
+            # Deny-with-correction detection: did the classifier emit any
+            # field whose value differs from the current profile?
+            _deltas: dict[str, dict[str, Any]] = {}
+            for _hint_key, _field_key in _STATE_DELTA_KEYS:
+                _hint_val = _extracted_hints.get(_hint_key)
+                if _hint_val in (None, ""):
+                    continue
+                _cur = getattr(_state_profile, _field_key, None)
+                if _cur != _hint_val:
+                    _deltas[_field_key] = {"old": _cur, "new": _hint_val}
+            if _deltas:
+                _state_profile.pending_change = {"changes": _deltas}
+                _state_profile.state = ProfileState.CHANGE_PENDING
+                _state_profile.change_emitted_at = time.time()
+                print(
+                    f"[Orchestrator] READBACK deny-with-correction -> CHANGE_PENDING "
+                    f"fields={list(_deltas.keys())}",
+                    flush=True,
+                )
+                await _emit_plain_assistant_response(
+                    build_change_confirm_text(_state_profile.pending_change),
+                    websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
+            if _is_explicit_deny:
+                print(f"[Orchestrator] re-prompting readback (explicit deny, no corrections)", flush=True)
+                await _emit_plain_assistant_response(
+                    build_readback_text(_state_profile),
+                    websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
+            # No confirm, no deltas, no explicit deny — probably an info
+            # question ("а какие офисы в Минске?"). Fall through so RAG
+            # answers. State stays READBACK_PENDING.
+            print(
+                f"[Orchestrator] READBACK_PENDING: no confirm / deltas / deny — falling through",
+                flush=True,
+            )
+    elif _state_profile.state == ProfileState.CHANGE_PENDING:
+        if _sa_is_confirm:
+            _state_profile.apply_pending_change()
+            _state_profile.state = ProfileState.CONFIRMED
+            _state_profile.change_emitted_at = time.time()
+            print(
+                f"[Orchestrator] change CONFIRMED (via always-on gate), recalculating",
+                flush=True,
+            )
+            # fall through to calculator recalc
+        elif _is_explicit_deny:
+            print(f"[Orchestrator] re-prompting change-confirm (explicit deny)", flush=True)
+            await _emit_plain_assistant_response(
+                build_change_confirm_text(_state_profile.pending_change),
+                websocket, session_id,
+                backend=backend, session=session,
+            )
+            session.assistant_speaking = False
+            return
+        else:
+            # No confirm, no explicit deny — may be info question or a new
+            # change was merged into pending_change by the classifier-output
+            # block above. Re-emit change-confirm only if pending_change was
+            # modified this turn (detected by change_emitted_at == now-ish);
+            # otherwise fall through to RAG. Cheap proxy: re-emit if the
+            # merge block wrote a new pending_change this turn (_sa_change_field
+            # was set), else fall through.
+            if _sa_change_field:
+                print(f"[Orchestrator] re-prompting merged change-confirm", flush=True)
+                await _emit_plain_assistant_response(
+                    build_change_confirm_text(_state_profile.pending_change),
+                    websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
+            print(
+                f"[Orchestrator] CHANGE_PENDING: no confirm / deny / fresh change — falling through",
+                flush=True,
+            )
+
+    # ── Tool-intent gates (Gates 1 & 2) ──
+    # Enforces server-side clarify + readback BEFORE any calculator call.
+    # Only active when the classifier detected a tool intent; RAG paths skip.
     #
     # Gate 1 (COLLECTING + incomplete): ask for missing fields, skip calculator.
     # Gate 2 (COLLECTING + complete):   emit readback, transition to READBACK_PENDING.
-    # Gate 3 (READBACK_PENDING):        on is_confirm, transition to CONFIRMED and
-    #                                   fall through; otherwise re-prompt the readback.
-    # Gate 4 (CHANGE_PENDING):          on is_confirm, apply pending_change, transition
-    #                                   to CONFIRMED and fall through; otherwise re-ask.
     if needs_tool:
         _gate_profile = session.client_profile
         print(
@@ -1496,49 +1670,9 @@ async def _stream_voice_response(
             )
             session.assistant_speaking = False
             return
-        # Gate 3: awaiting confirmation of readback.
-        if _gate_profile.state == ProfileState.READBACK_PENDING:
-            if _sa_is_confirm:
-                _gate_profile.state = ProfileState.CONFIRMED
-                if _gate_profile.confirmed_at is None:
-                    _gate_profile.confirmed_at = time.time()
-                print(f"[Orchestrator] profile CONFIRMED", flush=True)
-                # fall through to deterministic tool orchestration below
-            else:
-                print(
-                    f"[Orchestrator] re-prompting readback (not yet confirmed)",
-                    flush=True,
-                )
-                await _emit_plain_assistant_response(
-                    build_readback_text(_gate_profile),
-                    websocket, session_id,
-                    backend=backend, session=session,
-                )
-                session.assistant_speaking = False
-                return
-        # Gate 4: awaiting change-confirm.
-        if _gate_profile.state == ProfileState.CHANGE_PENDING:
-            if _sa_is_confirm:
-                _gate_profile.apply_pending_change()
-                _gate_profile.state = ProfileState.CONFIRMED
-                _gate_profile.change_emitted_at = time.time()
-                print(
-                    f"[Orchestrator] change CONFIRMED, recalculating",
-                    flush=True,
-                )
-                # fall through to calculator recalc below
-            else:
-                print(
-                    f"[Orchestrator] re-prompting change-confirm",
-                    flush=True,
-                )
-                await _emit_plain_assistant_response(
-                    build_change_confirm_text(_gate_profile.pending_change),
-                    websocket, session_id,
-                    backend=backend, session=session,
-                )
-                session.assistant_speaking = False
-                return
+        # Gates 3 (READBACK_PENDING) and 4 (CHANGE_PENDING) now live in the
+        # always-on state-gate block above (Fix 29). They return early before
+        # control reaches this point, so no duplicate handling is needed here.
 
     # ── Deterministic Tool Orchestration ──
     # When classifier extracts enough data, call tools from code directly.
