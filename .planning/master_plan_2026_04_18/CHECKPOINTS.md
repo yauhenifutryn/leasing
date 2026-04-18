@@ -7,8 +7,9 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 - [~] CP-1.1 — Fix 1.1 shipped (454dac8), awaiting live verification
 - [~] CP-1.2 — Fix 1.2 shipped (4efa723), awaiting live verification
-- [~] CP-1.3 — Fix 1.3 shipped (a8f2cf3), awaiting live verification
-- [~] CP-1.4 — Fix 1.4 shipped (f4041ac), awaiting live verification
+- [x] CP-1.3 — Fix 1.3 shipped (a8f2cf3), live-verified 2026-04-19 ("БУ мотоцикл" → condition_new=0 first turn)
+- [~] CP-1.4 — Fix 1.4 shipped (f4041ac), awaiting live verification (note: adaptive successor = Section 4)
+- [~] CP-1.5b — Fix 1.5 (age_years clarify, 15536d2) shipped in response to 2026-04-19 live call regression; awaiting re-verification
 - [ ] CP-1.5 — Section closed, `stability-v1` tag pushed
 
 ## Section 2 — Structured classifier
@@ -72,5 +73,6 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP-1.4 | f4041ac | 2026-04-19 | VAD silence 500→900 across all 7 sites (kills 500/700 inconsistency) |
 | CP-1.2 | 4efa723 | 2026-04-19 | USD dual-disclosure in readback / SMS / calc summary |
 | CP-1.1 | 454dac8 | 2026-04-19 | render_calc_result extracted; [deterministic_readback] marker; lint guard |
+| CP-1.5b | 15536d2 | 2026-04-19 | Fix 1.5 — age_years clarify branch (live-call regression from Fix 1.3) |
 
 (Append rows as checkpoints complete.)
