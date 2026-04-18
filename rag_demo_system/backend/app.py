@@ -1027,6 +1027,10 @@ async def _stream_voice_response(
     # detection from Fix 30). Read by the always-on state gate to decide
     # whether to emit the change-confirm prompt on a non-confirm turn.
     _change_staged_this_turn = False
+    # Fix 42b (retry): track fields patched this turn for the collect-phase
+    # clarify gate below. Narrower than the first attempt: only fires for
+    # CONVERSATION intent (TOOL intent is handled by Gate 1 downstream).
+    _changed_this_turn: dict[str, Any] = {}
     # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
     _msg_stripped = message.strip().lower().rstrip(".!,?")
 
@@ -1383,6 +1387,7 @@ async def _stream_voice_response(
             _changed = session.client_profile.apply_patches(_profile_patches)
             if _changed:
                 print(f"[Profile] patched: {_changed}", flush=True)
+                _changed_this_turn = dict(_changed)
             elif _had_patches and not _profile_patches:
                 print(f"[Profile] filter_patches: dropped (noise / invalid values)", flush=True)
             try:
@@ -1902,6 +1907,51 @@ async def _stream_voice_response(
                 f"[Orchestrator] CHANGE_PENDING: no confirm / deny / fresh change — falling through",
                 flush=True,
             )
+
+    # ── Fix 42b (narrower retry): CONVERSATION-intent collect-clarify ──
+    # When the user answers a clarification question with a short CONVERSATION
+    # utterance (e.g. "ИП" or "Физлицо") and at least one field was captured,
+    # emit the next-missing-field prompt deterministically. Without this gate
+    # CONVERSATION turns fall through to the LLM which sometimes re-asks fields
+    # that are already in the profile (session b9e9fcfb, 2026-04-18).
+    #
+    # Narrowed vs the first attempt:
+    #   - Only fires when classifier intent == CONVERSATION (TOOL uses Gate 1).
+    #   - Skips when the message looks like a real question (contains "?", or
+    #     starts with an interrogative) so info questions still route to RAG.
+    #   - Does NOT fire if state already transitioned past COLLECTING.
+    _intent_val = str(_sa_parsed.get("intent") if isinstance(_sa_parsed, dict) else "").upper()
+    _collect_profile_42b = session.client_profile
+    _is_question = (
+        "?" in (message or "")
+        or bool(re.match(r"^\s*(как|что|какой|какие|какая|какое|где|когда|почему|зачем|сколько)\b",
+                         message or "", re.IGNORECASE))
+    )
+    if (
+        _intent_val == "CONVERSATION"
+        and _collect_profile_42b.state == ProfileState.COLLECTING
+        and bool(_changed_this_turn)
+        and not _collect_profile_42b.is_complete_for_calc()
+        and not _is_question
+    ):
+        _missing_42b = _collect_profile_42b.missing_fields()
+        print(
+            f"[Orchestrator] COLLECTING clarify: patched={list(_changed_this_turn.keys())} "
+            f"still_missing={sorted(_missing_42b)} intent=CONVERSATION",
+            flush=True,
+        )
+        try:
+            _clar_42b = build_clarification_prompt(_missing_42b, _collect_profile_42b)
+            await _emit_plain_assistant_response(
+                _clar_42b, websocket, session_id,
+                backend=backend, session=session,
+            )
+            session.assistant_speaking = False
+            return
+        except Exception as _clar_exc:
+            # Defense in depth: if the gate raises for any reason, log and
+            # fall through to LLM rather than silently killing TTS.
+            print(f"[Orchestrator] COLLECTING clarify FAILED, falling through: {_clar_exc}", flush=True)
 
     # ── Tool-intent gates (Gates 1 & 2) ──
     # Enforces server-side clarify + readback BEFORE any calculator call.
