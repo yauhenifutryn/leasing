@@ -828,14 +828,54 @@ async def _stream_voice_response(
     _sa_change_value = None
     # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
     _msg_stripped = message.strip().lower().rstrip(".!,?")
+
+    # ── Fast-path: deterministic confirmation detection in readback states ──
+    # When we're waiting for the user to confirm a readback or change-confirm
+    # (state=READBACK_PENDING or CHANGE_PENDING), the classifier's job is trivial:
+    # decide whether the utterance is a "yes" confirmation. A literal match on
+    # common confirm words handles this in microseconds, saving the ~900ms
+    # classifier round-trip on what is an extremely common turn type.
+    _CONFIRM_WORDS = frozenset({
+        "да", "верно", "правильно", "подтверждаю", "согласен", "согласна",
+        "ок", "хорошо", "конечно", "точно", "именно", "всё верно",
+        "все верно", "давайте", "давай",
+    })
+    _fast_confirm = False
+    _current_state = None
+    try:
+        _current_state = session.client_profile.state
+        if _current_state in (ProfileState.READBACK_PENDING, ProfileState.CHANGE_PENDING):
+            # Accept multi-word phrases exactly ("всё верно"), plus single-word
+            # matches among the confirm set. Cap length to avoid matching longer
+            # utterances that merely contain "да" as filler.
+            if len(message.split()) <= 3 and _msg_stripped in _CONFIRM_WORDS:
+                _fast_confirm = True
+    except Exception:  # noqa: BLE001
+        pass
+
+    if _fast_confirm:
+        needs_tool = False  # intent=CONVERSATION, is_confirmation handles the rest
+        _sa_is_confirm = True
+        print(
+            f"[Classifier] FAST-PATH: confirm in state={_current_state.value if _current_state else '?'} msg='{_msg_stripped}' session={session_id[:8]}",
+            flush=True,
+        )
+        # Skip the classifier call block entirely — downstream orchestrator
+        # Gate 3 (READBACK_PENDING) or Gate 4 (CHANGE_PENDING) will handle
+        # the state transition via _sa_is_confirm.
+
     _SKIP_CLASSIFIER = {
         "спасибо", "спасибо большое", "понял", "понятно", "ясно", "ок",
         "хорошо", "ладно", "пока", "до свидания", "всего доброго",
         "привет", "здравствуйте", "добрый день", "нет", "не надо",
         "всем пока", "это всё", "больше ничего",
     }
-    _skip = _msg_stripped in _SKIP_CLASSIFIER and not (
-        session.tool_calls_history or session.tool_calls_this_turn
+    _skip = (
+        _fast_confirm  # also cover in the existing skip flag
+        or (
+            _msg_stripped in _SKIP_CLASSIFIER
+            and not (session.tool_calls_history or session.tool_calls_this_turn)
+        )
     )
     print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
     if tool_schemas and not _skip:
