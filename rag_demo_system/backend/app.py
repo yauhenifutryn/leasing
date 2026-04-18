@@ -1455,8 +1455,17 @@ async def _stream_voice_response(
     #    — gates calc on explicit confirmation to match the no-defaults + read-back rule.
     # 3) Legacy: current-turn hints have enough for a one-shot confirmed recalc.
     _profile = session.client_profile
-    _profile_ready = _profile.is_complete_for_calc() and (
-        _profile.confirmed_at is not None or _sa_is_confirm
+    # Profile-ready fires calculator automatically. To prevent sticky re-firing
+    # on every post-confirmation turn (info questions, off-topic chat, etc.),
+    # also require a fresh signal this turn: either the classifier said this is
+    # a tool turn (needs_tool), or the user explicitly confirmed (Верно / Да on
+    # a change). Without this, once `confirmed_at` is set, every complete-profile
+    # turn retriggers the calculator — even turns where the user asked about the
+    # director, office address, or just chatted.
+    _profile_ready = (
+        _profile.is_complete_for_calc()
+        and (_profile.confirmed_at is not None or _sa_is_confirm)
+        and (needs_tool or _sa_is_confirm)
     )
     _legacy_hint_direct = (
         needs_tool
