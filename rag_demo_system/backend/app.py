@@ -868,6 +868,11 @@ async def _stream_voice_response(
     _sa_wants_readback = False
     _sa_change_field = None
     _sa_change_value = None
+    # Fix 29 helper: True when the classifier-output block staged a fresh
+    # pending_change this turn (via explicit change_field or implicit delta
+    # detection from Fix 30). Read by the always-on state gate to decide
+    # whether to emit the change-confirm prompt on a non-confirm turn.
+    _change_staged_this_turn = False
     # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
     _msg_stripped = message.strip().lower().rstrip(".!,?")
 
@@ -1283,6 +1288,7 @@ async def _stream_voice_response(
                     _primary_marker = _sa_change_field or next(iter(_existing), None)
                     session.client_profile.last_change_pending = _primary_marker
                     _origin = "explicit" if _sa_change_field else "implicit"
+                    _change_staged_this_turn = True
                     print(
                         f"[Profile] CHANGE_PENDING ({_origin}): fields={list(_existing.keys())} "
                         f"primary={_primary_marker}",
@@ -1603,15 +1609,13 @@ async def _stream_voice_response(
             session.assistant_speaking = False
             return
         else:
-            # No confirm, no explicit deny — may be info question or a new
-            # change was merged into pending_change by the classifier-output
-            # block above. Re-emit change-confirm only if pending_change was
-            # modified this turn (detected by change_emitted_at == now-ish);
-            # otherwise fall through to RAG. Cheap proxy: re-emit if the
-            # merge block wrote a new pending_change this turn (_sa_change_field
-            # was set), else fall through.
-            if _sa_change_field:
-                print(f"[Orchestrator] re-prompting merged change-confirm", flush=True)
+            # No confirm, no explicit deny. If pending_change was updated
+            # this turn (explicit change_field from classifier OR implicit
+            # change detected by Fix 30), re-emit the change-confirm so the
+            # caller hears the proposal. Otherwise it's likely an info
+            # question mid-pending — fall through and let RAG answer.
+            if _change_staged_this_turn:
+                print(f"[Orchestrator] re-prompting change-confirm (fresh staged)", flush=True)
                 await _emit_plain_assistant_response(
                     build_change_confirm_text(_state_profile.pending_change),
                     websocket, session_id,
