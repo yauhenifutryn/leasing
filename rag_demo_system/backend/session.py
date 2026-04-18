@@ -109,9 +109,17 @@ class ClientProfile:
 
         Supports both single-field and multi-field pending_change shapes.
         The `changes` multi-field dict (Fix 28) is iterated in insertion order.
+
+        Fix 42d: prepaid_pct and prepaid_amount share a semantic slot. When
+        one is set via pending_change, the other is cleared to prevent the
+        stale value from shadowing in direct-call params build (pct is
+        preferred over amount). Mirrors the sticky-patch counterpart-clear
+        logic (Fix 40c).
         """
         if not self.pending_change:
             return False
+        _applied_prepaid_pct = False
+        _applied_prepaid_amount = False
         # Multi-field shape.
         _changes = self.pending_change.get("changes")
         if isinstance(_changes, dict) and _changes:
@@ -120,6 +128,14 @@ class ClientProfile:
                     continue
                 new_value = vals.get("new") if isinstance(vals, dict) else vals
                 setattr(self, field_name, new_value)
+                if field_name == "prepaid_pct":
+                    _applied_prepaid_pct = True
+                elif field_name == "prepaid_amount":
+                    _applied_prepaid_amount = True
+            if _applied_prepaid_pct and self.prepaid_amount is not None:
+                self.prepaid_amount = None
+            elif _applied_prepaid_amount and self.prepaid_pct is not None:
+                self.prepaid_pct = None
             self.pending_change = None
             return True
         # Legacy single-field shape.
@@ -127,6 +143,10 @@ class ClientProfile:
         new_value = self.pending_change.get("new_value")
         if field_name and hasattr(self, field_name):
             setattr(self, field_name, new_value)
+            if field_name == "prepaid_pct" and self.prepaid_amount is not None:
+                self.prepaid_amount = None
+            elif field_name == "prepaid_amount" and self.prepaid_pct is not None:
+                self.prepaid_pct = None
         self.pending_change = None
         return True
 

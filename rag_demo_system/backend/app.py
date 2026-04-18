@@ -1323,23 +1323,23 @@ async def _stream_voice_response(
                 if not _is_explicit_change and _field in ("prepaid_pct", "prepaid_amount"):
                     if _sa_change_field_val in ("prepaid_pct", "prepaid_amount", "prepaid"):
                         _is_explicit_change = True
-                # Fix 40a (hotfix 3): multi-field utterance support. When
-                # user says "грузовик, юр.лицо, 50 тысяч, на 7 лет" in COLLECTING,
-                # unlock patches whose field value literally appears in the
-                # utterance. In CONFIRMED / CHANGE_PENDING state do NOT apply
-                # directly — leave the hint in _extracted_hints so the
-                # staging block (_implicit_enter path) routes them through
-                # pending_change for user confirmation. Direct-apply in those
-                # states bypassed change-confirm entirely (session a685ce41,
-                # 2026-04-18 19:16: "Давай сменим всё" fired calc without prompt).
+                # Fix 40a + 42d: in COLLECTING state, apply patches directly
+                # (first-capture, explicit_change, or live signal) so profile
+                # builds up incrementally. In CONFIRMED / CHANGE_PENDING state,
+                # DO NOT apply directly — even first_capture for a cleared
+                # counterpart (e.g. prepaid_pct=None after switching to
+                # prepaid_amount) must route through pending_change. Direct-
+                # apply in CONFIRMED bypasses change-confirm:
+                #   session a685ce41: "Давай сменим всё" fired calc without prompt
+                #   session a7b9803f: multi-field change omitted prepaid from confirm
+                _allow_direct_apply = _profile_current.state == ProfileState.COLLECTING
                 _has_live_signal = False
-                _allow_live_unlock = _profile_current.state == ProfileState.COLLECTING
-                if _allow_live_unlock and not _is_first_capture and not _is_explicit_change:
+                if _allow_direct_apply and not _is_first_capture and not _is_explicit_change:
                     try:
                         _has_live_signal = _has_signal_sticky(_field, _new_val, message or "")
                     except Exception:  # noqa: BLE001
                         _has_live_signal = False
-                if _is_first_capture or _is_explicit_change or _has_live_signal:
+                if _allow_direct_apply and (_is_first_capture or _is_explicit_change or _has_live_signal):
                     _profile_patches[_field] = _new_val
                     if _has_live_signal and not _is_explicit_change and not _is_first_capture:
                         print(
@@ -1347,6 +1347,15 @@ async def _stream_voice_response(
                             f"(was '{_current_val}', literal signal in utterance)",
                             flush=True,
                         )
+                elif not _allow_direct_apply and (_is_first_capture or _is_explicit_change):
+                    # In CONFIRMED/CHANGE_PENDING, don't apply directly — let
+                    # the staging block pick this up via _extracted_hints and
+                    # route through pending_change.
+                    print(
+                        f"[Profile] CONFIRMED-state: deferring {_field}='{_new_val}' "
+                        f"(was '{_current_val}') to staging",
+                        flush=True,
+                    )
                 elif _new_val != _current_val:
                     print(
                         f"[Profile] stale {_field} patch ignored: "
@@ -2122,6 +2131,19 @@ async def _stream_voice_response(
         _param_change_params is not None
         or _profile_ready
         or _legacy_hint_direct
+    )
+    # Fix 42c: diagnostic log to track why calc may or may not fire after
+    # a confirmed change. Catch the "Верно → no tool call" regression.
+    print(
+        f"[Orchestrator] direct_call gate: can_direct={_can_direct_call} "
+        f"profile_ready={_profile_ready} param_change={_param_change_params is not None} "
+        f"legacy_hint={_legacy_hint_direct} "
+        f"(is_complete={_profile.is_complete_for_calc()}, "
+        f"confirmed_at={'set' if _profile.confirmed_at else 'None'}, "
+        f"just_confirmed={_just_confirmed_this_turn}, "
+        f"is_confirm={_sa_is_confirm}, needs_tool={needs_tool}, "
+        f"state={_profile.state.value})",
+        flush=True,
     )
     if _can_direct_call:
         _action = _extracted_hints.get("action", "calculate")
