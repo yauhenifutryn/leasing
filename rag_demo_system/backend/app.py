@@ -77,60 +77,153 @@ async def broadcast_sip_event(event: dict[str, Any]) -> None:
             _sip_monitor_clients.discard(ws)
 
 
-async def _synthesize_and_stream_chunks(
-    phrase: str,
-    websocket: Any,
+async def _speak_tts(
+    text: str,
+    ws: Any,
     session_id: str,
-    session: Any | None,
-) -> tuple[bool, float]:
-    """Synthesize one phrase and stream its PCM in 40ms chunks with per-chunk
-    interrupt check. Returns `(interrupted, audio_duration_seconds)`.
+    session: Any,
+    *,
+    transport: str = "json",
+) -> bool:
+    """Unified interruptible TTS helper (Fix 36).
 
-    `audio_duration_seconds` = wall-clock length of the PCM that was
-    actually pushed to the websocket. The caller uses this to wait for
-    the downstream buffer (Jambonz mod_audio_fork) to finish playing
-    before flipping `assistant_speaking` back to False.
+    Single implementation of the TTS pattern for every path that emits
+    server-side speech: orchestrator read-back / clarification / change-
+    confirm (via _emit_plain_assistant_response), Jambonz consent + intro
+    + repeats (via _jambonz_send_tts). Bakes in all the barge-in lessons
+    from Fix 25 / 33 / 35:
 
-    Shared helper for sentence-level interruptible TTS.
+      1. Token ownership (Fix 33): each call stamps a fresh token on the
+         session. Only the current token-holder is allowed to reset
+         `assistant_speaking=False` at the end — stops an older TTS's
+         late-finish from wiping a newer TTS's flag.
+
+      2. Preemptive killAudio (Fix 33): on entry, send killAudio so any
+         lingering PCM from an overlapping older TTS is flushed before we
+         start pushing our own chunks.
+
+      3. Sentence chunking (Fix 25): text is split on . ! ? … , : ; via
+         `split_for_tts_streaming`. Silero synth runs per phrase (~200-
+         500 ms each), so barge-in bounds to "next phrase boundary" worst
+         case instead of "end of a 15 s monolithic synth".
+
+      4. Per-chunk interrupt check: 1920-byte chunks (40 ms @ 24 kHz
+         16-bit mono), `session.interrupted` re-read before each push.
+
+      5. Playback wait (Fix 35): after all chunks are pushed, await the
+         accumulated audio duration while polling `session.interrupted`.
+         The downstream (Jambonz mod_audio_fork / FreeSWITCH / browser
+         audio element) has 10-15 s of buffered PCM — releasing the
+         speaking flag as soon as the last `send_json` returns means
+         the barge-in gate flips off while the caller is STILL hearing
+         the tail of the TTS. That's the bug Fix 35 exists to kill.
+
+      6. killAudio on interrupt: flushes downstream buffer when the
+         user barges in, so the caller doesn't hear a 300-500 ms tail.
+
+    `transport` picks the wire format:
+      - "json"  → `ws.send_json({type: response.output_audio.delta, ...})`
+                  for the orchestrator (browser or `_JambonzWebSocketShim`).
+      - "bytes" → `ws.send_bytes(chunk)` direct to a raw Jambonz audio WS.
+        Used by consent / intro / repeat that run BEFORE the shim exists.
+
+    Returns True if the call was interrupted by the user.
     """
     import base64 as _b64
 
-    if session is not None and session.interrupted:
-        return True, 0.0
-    try:
-        audio_resp = await asyncio.to_thread(synthesize_audio, phrase, session_id)
-    except Exception:  # noqa: BLE001
-        return False, 0.0
-    audio_b64 = audio_resp.get("audio_b64") or ""
-    if not audio_b64:
-        return False, 0.0
-    if session is not None and session.interrupted:
-        # Session flipped while Silero was blocking. Drop the freshly-synth'd
-        # audio rather than playing it — this is the bug Fix 25 exists to fix.
-        return True, 0.0
-    pcm = _b64.b64decode(audio_b64)
-    sample_rate = audio_resp.get("sample_rate_hz") or 24000
-    chunk_size = 1920  # 40ms @ 24kHz 16-bit mono
-    # Duration = bytes / (sample_rate * 2 bytes/sample)  (16-bit mono)
-    _pushed_bytes = 0
-    for i in range(0, len(pcm), chunk_size):
+    if not text:
+        return False
+    _my_token = uuid.uuid4().hex
+    if session is not None:
+        session.tts_speaker_token = _my_token
+        try:
+            await ws.send_text(json.dumps({"type": "killAudio"}))
+        except Exception:  # noqa: BLE001
+            pass
+        session.assistant_speaking = True
+        session.interrupted = False
+        session._tts_start_time = 0
+
+    phrases = split_for_tts_streaming(text) or [text]
+    was_interrupted = False
+    _push_start = asyncio.get_event_loop().time()
+    _total_audio_duration = 0.0
+
+    for phrase in phrases:
         if session is not None and session.interrupted:
+            was_interrupted = True
             break
         try:
-            _end = min(i + chunk_size, len(pcm))
-            await websocket.send_json({
-                "type": "response.output_audio.delta",
-                "session_id": session_id,
-                "delta": _b64.b64encode(pcm[i:_end]).decode(),
-                "sample_rate_hz": sample_rate,
-            })
-            _pushed_bytes += (_end - i)
+            audio_resp = await asyncio.to_thread(synthesize_audio, phrase, session_id)
         except Exception:  # noqa: BLE001
-            if session is not None:
-                session.interrupted = True
-            return True, _pushed_bytes / float(sample_rate * 2)
-    _duration = _pushed_bytes / float(sample_rate * 2)
-    return (bool(session is not None and session.interrupted), _duration)
+            continue
+        audio_b64 = audio_resp.get("audio_b64") or ""
+        if not audio_b64:
+            continue
+        if session is not None and session.interrupted:
+            was_interrupted = True
+            break
+        pcm = _b64.b64decode(audio_b64)
+        sample_rate = audio_resp.get("sample_rate_hz") or 24000
+        chunk_size = 1920  # 40 ms @ 24 kHz 16-bit mono
+        _phrase_pushed = 0
+        _phrase_interrupted = False
+        for i in range(0, len(pcm), chunk_size):
+            if session is not None and session.interrupted:
+                _phrase_interrupted = True
+                break
+            _end = min(i + chunk_size, len(pcm))
+            _chunk = pcm[i:_end]
+            try:
+                if transport == "bytes":
+                    await ws.send_bytes(_chunk)
+                else:
+                    await ws.send_json({
+                        "type": "response.output_audio.delta",
+                        "session_id": session_id,
+                        "delta": _b64.b64encode(_chunk).decode(),
+                        "sample_rate_hz": sample_rate,
+                    })
+                _phrase_pushed += (_end - i)
+            except Exception:  # noqa: BLE001
+                if session is not None:
+                    session.interrupted = True
+                _phrase_interrupted = True
+                break
+        _total_audio_duration += _phrase_pushed / float(sample_rate * 2)
+        if _phrase_interrupted:
+            was_interrupted = True
+            break
+
+    # Playback wait: downstream buffer plays for real-time seconds even
+    # though we pushed the bytes in milliseconds. Keep assistant_speaking
+    # True until the actual audio duration has elapsed (or user barges in).
+    if not was_interrupted and _total_audio_duration > 0:
+        _deadline = _push_start + _total_audio_duration
+        while True:
+            _now = asyncio.get_event_loop().time()
+            if _now >= _deadline:
+                break
+            if session is not None and session.interrupted:
+                was_interrupted = True
+                break
+            await asyncio.sleep(0.05)
+
+    if was_interrupted:
+        try:
+            await ws.send_text(json.dumps({"type": "killAudio"}))
+        except Exception:  # noqa: BLE001
+            pass
+
+    if session is not None:
+        if getattr(session, "tts_speaker_token", None) == _my_token:
+            session.assistant_speaking = False
+            try:
+                session._tts_finished_at = asyncio.get_event_loop().time()
+            except Exception:  # noqa: BLE001
+                pass
+
+    return was_interrupted
 
 
 async def _emit_plain_assistant_response(
@@ -143,84 +236,22 @@ async def _emit_plain_assistant_response(
 ) -> None:
     """Send a plain assistant text + TTS audio response through the websocket.
 
-    Splits `text` into short phrases (sentence + clause boundaries) and
-    synthesizes each one separately, so barge-in via VAD (flipping
-    `session.interrupted` True) stops audio within ~300-500ms instead of
-    blocking on one 3-4s Silero call covering the whole readback.
-
-    Used by the orchestrator state-machine gate (clarification / readback /
-    change-confirm / refusal / skip-RAG greeting) to bypass the LLM while
-    still supporting interruption at the same per-sentence granularity as
-    the main LLM path (tts_consumer).
+    Thin wrapper over `_speak_tts` that also emits the text-delta
+    (monitor / browser UI) and response.done envelope events expected by
+    orchestrator callers. Barge-in behavior is identical to main LLM TTS
+    and Jambonz consent TTS — all three paths share `_speak_tts`.
     """
     if not text:
         return
-    # Fix 33: stamp ownership token so a concurrent older TTS finishing can't
-    # wipe our `assistant_speaking=True` flag.
-    _my_token = uuid.uuid4().hex
-    if session is not None:
-        session.tts_speaker_token = _my_token
-        # Kill any audio already buffered downstream from an earlier TTS
-        # (e.g. intro still pushing chunks when readback starts). Keeps the
-        # caller from hearing two overlapping TTS streams.
-        try:
-            await websocket.send_text(json.dumps({"type": "killAudio"}))
-        except Exception:  # noqa: BLE001
-            pass
-        session.assistant_speaking = True
-        session.interrupted = False
-        # Reset VAD warmup so the 0.5s post-TTS-start deadzone restarts
-        # cleanly for this new deterministic TTS. Parity with the main-LLM
-        # path which resets `_tts_start_time` before the consumer task.
-        session._tts_start_time = 0
-    # Monitor / browser UI gets the full intended text up-front — same
-    # behavior as before. Per-phrase text deltas would fragment the monitor.
     await websocket.send_json({
         "type": "response.output_text.delta",
         "session_id": session_id,
         "delta": text,
     })
-    phrases = split_for_tts_streaming(text) or [text]
-    was_interrupted = False
-    _push_start = asyncio.get_event_loop().time()
-    _total_audio_duration = 0.0
-    for phrase in phrases:
-        if session is not None and session.interrupted:
-            was_interrupted = True
-            break
-        _interrupted, _phrase_duration = await _synthesize_and_stream_chunks(
-            phrase, websocket, session_id, session,
-        )
-        _total_audio_duration += _phrase_duration
-        if _interrupted:
-            was_interrupted = True
-            break
-    # Fix 35: chunks are pushed into the WS send buffer much faster than the
-    # downstream plays them (Jambonz mod_audio_fork / browser audio element
-    # have 10-15s of buffered PCM). If we flip assistant_speaking=False right
-    # now, the barge-in gate takes the NORMAL STT branch for any user speech
-    # while the caller is still HEARING the readback — no barge-in marker,
-    # no TTS stop. Mirror `_jambonz_send_tts`: wait for the actual audio
-    # duration while polling `session.interrupted`, then return.
-    if not was_interrupted and _total_audio_duration > 0:
-        _deadline = _push_start + _total_audio_duration
-        while True:
-            _now = asyncio.get_event_loop().time()
-            if _now >= _deadline:
-                break
-            if session is not None and session.interrupted:
-                was_interrupted = True
-                break
-            await asyncio.sleep(0.05)
-    if was_interrupted:
-        # Flush any PCM buffered downstream (FreeSWITCH mod_audio_fork on
-        # Jambonz, browser Audio element buffer) so the caller stops
-        # hearing the readback tail immediately.
-        try:
-            await websocket.send_text(json.dumps({"type": "killAudio"}))
-        except Exception:  # noqa: BLE001
-            pass
-    # Append to transcript for memory continuity.
+    await _speak_tts(
+        text, websocket, session_id, session,
+        transport="json",
+    )
     if session is not None:
         try:
             chat_sess = state.get(session_id)
@@ -228,10 +259,6 @@ async def _emit_plain_assistant_response(
                 chat_sess.transcript.append({"role": "assistant", "text": text})
         except Exception:  # noqa: BLE001
             pass
-        # Fix 33: only reset assistant_speaking if our token is still the
-        # current owner. If another TTS took over, let IT manage the flag.
-        if getattr(session, "tts_speaker_token", None) == _my_token:
-            session.assistant_speaking = False
     await websocket.send_json({
         "type": "response.done",
         "session_id": session_id,
@@ -3119,51 +3146,29 @@ async def _jambonz_send_tts(
     session_id: str,
     text: str,
 ) -> None:
-    """Synthesize text and send audio back as binary WebSocket frames."""
-    # Fix 33: stamp our ownership token. Only reset `assistant_speaking` at
-    # the end if the token still belongs to us — otherwise a newer TTS has
-    # taken over and we must not interfere with its barge-in flag.
-    _my_token = uuid.uuid4().hex
-    if session is not None:
-        session.tts_speaker_token = _my_token
+    """Synthesize text and send audio to a raw Jambonz audio WebSocket.
+
+    Fix 36: thin wrapper around the unified `_speak_tts` helper. Consent,
+    intro, and repeat TTS now get the exact same barge-in behavior as the
+    orchestrator readback and the main LLM path — token ownership,
+    sentence chunking, playback wait, killAudio on interrupt. The only
+    Jambonz-specific bits left here are the `clean_voice_output` call
+    (abbreviation expansion), the wire format (`transport='bytes'` so
+    PCM goes out via `ws.send_bytes` instead of JSON deltas), and the
+    `sip.tts.start` broadcast to the monitor.
+    """
+    text = clean_voice_output(text)
+    if not text:
+        return
+    print(f"[Jambonz:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
     try:
-        text = clean_voice_output(text)
-        if not text:
-            return
-        print(f"[Jambonz:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
-        audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
-        audio_b64 = audio_resp.get("audio_b64") or ""
-        if audio_b64:
-            import base64 as _b64
-            pcm_24k = _b64.b64decode(audio_b64)
-            # Send in 20ms chunks (960 samples * 2 bytes = 1920 bytes at 24kHz)
-            # Sending all at once overwhelms mod_audio_fork and disconnects
-            chunk_size = 1920
-            for i in range(0, len(pcm_24k), chunk_size):
-                chunk = pcm_24k[i : i + chunk_size]
-                await ws.send_bytes(chunk)
-            # Wait for FreeSWITCH to finish playing (audio duration)
-            # 24kHz * 2 bytes = 48000 bytes/sec
-            audio_duration = len(pcm_24k) / 48000.0
-            print(f"[Jambonz:{session_id[:8]}] TTS sent {len(pcm_24k)} bytes PCM 24kHz ({len(pcm_24k) // chunk_size} chunks, {audio_duration:.1f}s)", flush=True)
-            # Wait for playback, but stop early if interrupted
-            _wait_start = asyncio.get_event_loop().time()
-            while asyncio.get_event_loop().time() - _wait_start < audio_duration:
-                if session.interrupted:
-                    break
-                await asyncio.sleep(0.1)
-        else:
-            print(f"[Jambonz:{session_id[:8]}] TTS returned empty audio", flush=True)
+        await _speak_tts(text, ws, session_id, session, transport="bytes")
     except Exception as exc:  # noqa: BLE001
         import traceback
-        print(f"[Jambonz:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}", flush=True)
-
-    # Fix 33: only reset `assistant_speaking` if our ownership token is
-    # still current. If a newer TTS (e.g. readback) took over, it owns the
-    # flag and we must not flip it False, or its barge-in gate breaks.
-    if getattr(session, "tts_speaker_token", None) == _my_token:
-        session.assistant_speaking = False
-    session._tts_finished_at = asyncio.get_event_loop().time()  # type: ignore[attr-defined]
+        print(
+            f"[Jambonz:{session_id[:8]}] TTS error: {exc}\n{traceback.format_exc()}",
+            flush=True,
+        )
     await broadcast_sip_event({
         "type": "sip.tts.start",
         "call_id": session_id,
