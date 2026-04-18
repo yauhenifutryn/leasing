@@ -679,6 +679,14 @@ TRANSFORMERS_OFFLINE=1
 CUDA_HOME=/usr/local/cuda
 PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Fix 37: cap parallel ninja / nvcc compilation jobs to avoid OOM kill during
+# vLLM's GDN prefill kernel JIT. On a 64 GB box each nvcc invocation takes
+# ~500 MB, and the default --threads=1 plus unlimited ninja parallelism runs
+# 30+ concurrent nvcc processes on first launch -> OOM killer shoots ninja ->
+# GDN kernel falls back to a slow path, causing a ~10 s first-token stall on
+# long prompts. MAX_JOBS=2 keeps compile RAM under 2 GB.
+MAX_JOBS=2
+
 # ── Tool Use: Calculator API ──
 # Picked up from the shell env at provision time. Export before running
 # provision and these will be filled in automatically.
@@ -909,10 +917,17 @@ main() {
   install_all_venvs          # Step 4+5: 2 venvs (backend+vLLM, voice-oss)
   download_models            # Step 6: HF model + Silero VAD download
   start_qdrant               # Step 7: Qdrant vector DB
-  write_env_file             # Step 8: generate .env
+  write_env_file             # Step 8: generate .env (includes MAX_JOBS=2, Fix 37)
   install_turn_server        # Step 9: coturn for WebRTC relay
   setup_sip_notice           # Step 9b: SIP telephony notice (Jambonz deployed separately)
-  start_stack                # Step 10: launch supervisor stack
+  # Step 10a: tune vLLM kernels (Fix 37 cache-clear + Fix 38 MoE config).
+  # Fix 37 part A already applied via write_env_file (MAX_JOBS=2 in .env);
+  # part B (stale cache clear) and Fix 38 (MoE tune) run here. Non-fatal:
+  # if tuning fails vLLM still runs, just with default MoE routing.
+  log "=== Tuning vLLM kernels (Fix 37 + Fix 38) ==="
+  bash "$APP_DIR/scripts/tune_vllm_kernels.sh" || \
+    log "WARNING: kernel tuning returned non-zero. vLLM will run with default MoE config."
+  start_stack                # Step 10b: launch supervisor stack
 
   log "=== Provisioning complete ==="
   echo ""
