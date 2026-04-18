@@ -118,6 +118,68 @@ def utterance_has_subject_cue(utterance: str) -> bool:
     return bool(_SUBJECT_CUE_RE.search(utterance))
 
 
+# Fix 31 — currency and enum cues for use by `has_field_signal`.
+_CURRENCY_CUE_RE = re.compile(
+    r"\b(рубл\w*|руб\b|byn|blr|доллар\w*|usd|евро|eur|российск\w+|rub)\b",
+    re.IGNORECASE,
+)
+_CONDITION_NEW_CUE_RE = re.compile(
+    r"\b(нов\w+|подержан\w+|б/у|бу|бывш\w+)\b",
+    re.IGNORECASE,
+)
+_TYPE_SCHEDULE_CUE_RE = re.compile(
+    r"\b(аннуитет\w*|линейн\w+|дифференциров\w+|убыва\w+|равн\w+)\b",
+    re.IGNORECASE,
+)
+
+
+def has_field_signal(field: str, value: Any, utterance: str) -> bool:
+    """Return True if `utterance` carries an explicit signal for `field=value`.
+
+    Used by the orchestrator when deciding whether a classifier-extracted
+    hint is a real user intent or a leak from history / calc context.
+    For numeric fields we require the digits of `value` to appear in the
+    utterance; for enum fields we require a category cue.
+
+    This is a stricter check than the hygiene cue guards (which only ask
+    whether a category was named). It prevents Fix 28's multi-field change-
+    confirm from listing derived fields the user never mentioned (e.g.
+    `prepaid_amount=16000` echoed from a prior calc result).
+    """
+    if utterance is None:
+        return False
+    if value is None or value == "":
+        return False
+    if field == "subject":
+        return utterance_has_subject_cue(utterance)
+    if field == "client_type":
+        return utterance_has_client_type_cue(utterance)
+    if field == "currency":
+        return bool(_CURRENCY_CUE_RE.search(utterance))
+    if field == "condition_new":
+        return bool(_CONDITION_NEW_CUE_RE.search(utterance))
+    if field == "type_schedule":
+        return bool(_TYPE_SCHEDULE_CUE_RE.search(utterance))
+    if field in ("cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years"):
+        # Numeric: the digits of the value must appear literally in the
+        # utterance. Handles integer and float-with-trailing-zero cases.
+        try:
+            _int = int(value)
+        except (TypeError, ValueError):
+            return False
+        v_str = str(_int)
+        # Permit digit grouping like "150 000" — strip spaces/commas from
+        # utterance before checking.
+        _flat = re.sub(r"[\s,_]+", "", utterance)
+        if v_str in _flat:
+            return True
+        # Also check raw utterance in case the number fits a compact span
+        # (rare; covered by the flat check too).
+        return v_str in utterance
+    # Unknown field — conservative: require explicit value string
+    return str(value) in (utterance or "")
+
+
 def _normalize_currency(patch_value: Any, utterance: str) -> str | None:
     if not isinstance(patch_value, str):
         return None

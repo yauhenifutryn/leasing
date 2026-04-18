@@ -1188,16 +1188,10 @@ async def _stream_voice_response(
             except Exception:  # noqa: BLE001
                 pass
             # Handle change_field post-confirmation OR extra changes mid-pending.
-            # Fix 28: support multi-field change in one turn ("легковой за 80 тысяч"
-            # = subject + cost) and merging extra changes into an existing
-            # pending_change (state CHANGE_PENDING already).
+            # Fix 28 (multi-field) + Fix 30 (implicit change detection on
+            # CONFIRMED) + Fix 31 (require cue + literal signal for extras).
+            from .profile_hygiene import has_field_signal as _has_field_signal
             _profile_now = session.client_profile
-            _enter_change = bool(_sa_change_field) and _profile_now.state in (
-                ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING
-            )
-            # Auto-detect: classifier may emit new calculator values WITHOUT
-            # setting change_field (observed: "легковой за 80к" primary=subject,
-            # extras cost=80000). Build a changes dict from all deltas.
             _EXTRA_KEYS_TO_CHANGE = (
                 ("subject", "subject"),
                 ("cost", "cost"),
@@ -1209,6 +1203,30 @@ async def _stream_voice_response(
                 ("prepaid_pct", "prepaid_pct"),
                 ("prepaid_amount", "prepaid_amount"),
             )
+            # Fix 30: detect implicit change on CONFIRMED state when the
+            # classifier emitted at least one hint that differs from the
+            # profile AND carries a real utterance signal. Without this, an
+            # utterance like "всё-таки легковой автомобиль за 80 тысяч рублей"
+            # produced no `change_field` from the classifier, and the stale-
+            # patch guard correctly rejected the subject/cost patches — so
+            # profile stayed stale and the calculator re-ran old params.
+            _implicit_enter = False
+            if not _sa_change_field and _profile_now.state == ProfileState.CONFIRMED:
+                for _hint_key, _field_key in _EXTRA_KEYS_TO_CHANGE:
+                    _hv = _extracted_hints.get(_hint_key)
+                    if _hv in (None, ""):
+                        continue
+                    _cur = getattr(_profile_now, _field_key, None)
+                    if _cur == _hv:
+                        continue
+                    if not _has_field_signal(_field_key, _hv, message or ""):
+                        continue
+                    _implicit_enter = True
+                    break
+            _enter_change = bool(_sa_change_field) and _profile_now.state in (
+                ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING
+            )
+            _enter_change = _enter_change or _implicit_enter
             if _enter_change:
                 # Start with existing changes dict if state is already CHANGE_PENDING
                 _existing = {}
@@ -1222,16 +1240,18 @@ async def _stream_voice_response(
                             "new": _pc.get("new_value"),
                         }
                     }
-                # Primary change from classifier
+                # Primary change from classifier (if any)
                 if _sa_change_field:
                     _primary_old = getattr(_profile_now, _sa_change_field, None)
                     _existing[_sa_change_field] = {
                         "old": _primary_old,
                         "new": _sa_change_value,
                     }
-                # Extras: any _extracted_hints key whose value differs from
-                # the current profile AND has a valid cue (hygiene guards
-                # already enforced cue presence on problematic fields).
+                # Fix 31: for extras, require a real utterance signal so the
+                # change-confirm prompt only lists fields the user actually
+                # mentioned. Without this, derived values echoed back by the
+                # classifier (e.g. prepaid_amount=16000 from a prior calc)
+                # would end up in "Меняю X на A и сумму аванса на 16000".
                 for _hint_key, _field_key in _EXTRA_KEYS_TO_CHANGE:
                     if _field_key == _sa_change_field:
                         continue
@@ -1241,24 +1261,33 @@ async def _stream_voice_response(
                     _cur = getattr(_profile_now, _field_key, None)
                     if _cur == _hint_val:
                         continue
+                    if not _has_field_signal(_field_key, _hint_val, message or ""):
+                        print(
+                            f"[Profile] extras: dropping {_field_key}={_hint_val!r} "
+                            f"(no literal signal in utterance)",
+                            flush=True,
+                        )
+                        continue
                     _existing[_field_key] = {
                         "old": _cur,
                         "new": _hint_val,
                     }
-                session.client_profile.pending_change = {"changes": _existing}
-                session.client_profile.state = ProfileState.CHANGE_PENDING
-                import time as _time
-                session.client_profile.change_emitted_at = _time.time()
-                # Keep the legacy field in sync for any remaining consumers.
-                # When multi-field, point at the primary change_field; else
-                # pick any one key (doesn't really matter, it's just a marker).
-                _primary_marker = _sa_change_field or next(iter(_existing), None)
-                session.client_profile.last_change_pending = _primary_marker
-                print(
-                    f"[Profile] CHANGE_PENDING: fields={list(_existing.keys())} "
-                    f"primary={_primary_marker}",
-                    flush=True,
-                )
+                if not _existing:
+                    # Defensive: ran into the block with nothing real to stage.
+                    pass
+                else:
+                    session.client_profile.pending_change = {"changes": _existing}
+                    session.client_profile.state = ProfileState.CHANGE_PENDING
+                    import time as _time
+                    session.client_profile.change_emitted_at = _time.time()
+                    _primary_marker = _sa_change_field or next(iter(_existing), None)
+                    session.client_profile.last_change_pending = _primary_marker
+                    _origin = "explicit" if _sa_change_field else "implicit"
+                    print(
+                        f"[Profile] CHANGE_PENDING ({_origin}): fields={list(_existing.keys())} "
+                        f"primary={_primary_marker}",
+                        flush=True,
+                    )
             # Confirmation → stamp confirmed_at
             if _sa_is_confirm:
                 if session.client_profile.last_change_pending:
