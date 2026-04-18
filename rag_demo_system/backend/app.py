@@ -1050,30 +1050,48 @@ async def _stream_voice_response(
             # ── Apply to ClientProfile (single source of truth) ──
             _profile_patches: dict[str, Any] = {}
             _profile_current = session.client_profile
-
-            # Non-identity fields (can change freely — cost, term, prepaid, etc.)
-            for _k in ("cost", "age_years", "prepaid_pct", "prepaid_amount",
-                       "term_months", "type_schedule"):
-                if _sa_parsed.get(_k) is not None:
-                    _profile_patches[_k] = _sa_parsed[_k]
-
-            # Currency can change; user may switch USD → BYN.
-            if _sa_parsed.get("currency"):
-                _profile_patches["currency"] = _sa_parsed["currency"]
-
-            # ── Identity fields with stale-patch protection ──
-            # These shouldn't silently flip mid-session (classifier hallucination).
-            # Accept changes only when (a) the field is unset OR (b) user's
-            # explicit change_field matches this field name.
-            _STICKY_IDENTITY_FIELDS = ("client_type", "subject", "condition_new")
             _sa_change_field_val = _sa_parsed.get("change_field")
-            for _field in _STICKY_IDENTITY_FIELDS:
+
+            # ── Sticky-patch protection: both identity + numeric fields ──
+            # Once any calculator-relevant field is captured, the classifier
+            # must not silently overwrite it mid-session. The classifier
+            # sometimes re-emits stale values from its context window (values
+            # from an earlier, already-confirmed calculation) on short turns
+            # such as "А можно ли физическое лицо?", which would regress the
+            # whole profile back to the older values.
+            #
+            # Accept a new value only when:
+            #   (a) current value is unset (first capture), OR
+            #   (b) user's explicit change_field matches this field, OR
+            #   (c) new value equals current (no-op re-emit).
+            #
+            # Fix 21 — identity fields (client_type, subject, condition_new):
+            # prevents classifier drift between types (Физ↔Юр, Легк↔Груз).
+            # Fix 24 — numeric + currency fields: prevents Phase-A numeric
+            # values from regressing over Phase-B values on classifier
+            # re-emission turns (see session e4eb325c postmortem).
+            _STICKY_IDENTITY_FIELDS = ("client_type", "subject", "condition_new")
+            _STICKY_NUMERIC_FIELDS = (
+                "cost", "age_years", "prepaid_pct", "prepaid_amount",
+                "term_months", "type_schedule", "currency",
+            )
+            for _field in _STICKY_IDENTITY_FIELDS + _STICKY_NUMERIC_FIELDS:
                 _new_val = _sa_parsed.get(_field)
                 if _new_val is None or _new_val == "":
                     continue
                 _current_val = getattr(_profile_current, _field, None)
                 _is_first_capture = _current_val in (None, "")
                 _is_explicit_change = (_sa_change_field_val == _field)
+                # prepaid_pct and prepaid_amount share semantic slot "prepaid":
+                # a user-requested change via change_field="prepaid_pct" should
+                # also unlock prepaid_amount emission on the same turn, and
+                # vice-versa. Without this, switching "на 20 процентов" while
+                # classifier also emits prepaid_amount=null gets fine but
+                # switching "на 14000 рублей" with change_field="prepaid_amount"
+                # would still block a concurrent prepaid_pct recompute.
+                if not _is_explicit_change and _field in ("prepaid_pct", "prepaid_amount"):
+                    if _sa_change_field_val in ("prepaid_pct", "prepaid_amount", "prepaid"):
+                        _is_explicit_change = True
                 if _is_first_capture or _is_explicit_change:
                     _profile_patches[_field] = _new_val
                 elif _new_val != _current_val:
