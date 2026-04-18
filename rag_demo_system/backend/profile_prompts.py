@@ -42,6 +42,16 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
             parts.append("тип графика (аннуитет или линейный)")
         return "Подскажите " + ", ".join(parts) + "."
 
+    # Fix 1.5 (2026-04-19) — age_years only joins missing_fields() when
+    # condition_new == 0 (б/у). Without this branch the orchestrator falls
+    # through to the generic "Уточните параметры расчёта" prompt, which is
+    # useless to the LLM — observed 2026-04-19 to loop forever once Fix 1.3
+    # started reliably extracting condition_new=0 from "бэу/бу" variants.
+    if "age_years" in fields:
+        return (
+            "Сколько лет вашему транспорту? Для б/у техники это обязательный параметр."
+        )
+
     return "Уточните параметры расчёта, пожалуйста."
 
 
