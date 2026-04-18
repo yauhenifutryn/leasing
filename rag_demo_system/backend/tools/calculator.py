@@ -22,6 +22,104 @@ class IncompleteProfileError(Exception):
         )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Range validation
+# ──────────────────────────────────────────────────────────────────────
+
+TERM_MIN, TERM_MAX = 12, 84
+PREPAID_PCT_MIN, PREPAID_PCT_MAX = 0.0, 40.0
+COST_MIN, COST_MAX = 1.0, 100_000_000.0
+AGE_MIN, AGE_MAX = 0, 30
+
+
+def validate_calc_inputs(params: dict[str, Any]) -> list[str]:
+    """Return a list of 'param_out_of_range:...' markers for any violations.
+
+    Each marker encodes the field, the offending value, and the allowed range
+    so the orchestrator can surface a specific user-facing message. Non-
+    numeric / non-finite values are flagged as 'bad_type' markers.
+
+    Empty list = all inputs are in range.
+    """
+    violations: list[str] = []
+
+    def _num(key: str) -> float | None:
+        v = params.get(key)
+        if v in (None, ""):
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            violations.append(f"param_bad_type:{key}={v!r}")
+            return None
+        if f != f or f in (float("inf"), float("-inf")):  # NaN / inf
+            violations.append(f"param_bad_type:{key}={v!r}")
+            return None
+        return f
+
+    cost = _num("cost")
+    if cost is not None and not (COST_MIN <= cost <= COST_MAX):
+        violations.append(
+            f"param_out_of_range:cost={cost}:min={COST_MIN}:max={COST_MAX}"
+        )
+
+    # Term may arrive as 'term' (API key) or 'term_months' (profile key)
+    term_raw = params.get("term") if params.get("term") not in (None, "") else params.get("term_months")
+    if term_raw not in (None, ""):
+        try:
+            term_i = int(term_raw)
+        except (TypeError, ValueError):
+            violations.append(f"param_bad_type:term={term_raw!r}")
+        else:
+            if not (TERM_MIN <= term_i <= TERM_MAX):
+                violations.append(
+                    f"param_out_of_range:term={term_i}:min={TERM_MIN}:max={TERM_MAX}"
+                )
+
+    # prepaid: either 'prepaid' (API) / 'prepaid_pct' (profile) as pct, or 'prepaid_amount' in currency.
+    prepaid_pct_raw = params.get("prepaid")
+    if prepaid_pct_raw in (None, ""):
+        prepaid_pct_raw = params.get("prepaid_pct")
+    if prepaid_pct_raw not in (None, ""):
+        try:
+            pp = float(prepaid_pct_raw)
+        except (TypeError, ValueError):
+            violations.append(f"param_bad_type:prepaid_pct={prepaid_pct_raw!r}")
+        else:
+            if not (PREPAID_PCT_MIN <= pp <= PREPAID_PCT_MAX):
+                violations.append(
+                    f"param_out_of_range:prepaid_pct={pp}:min={PREPAID_PCT_MIN}:max={PREPAID_PCT_MAX}"
+                )
+
+    prepaid_amount = _num("prepaid_amount")
+    if prepaid_amount is not None:
+        if prepaid_amount <= 0:
+            violations.append(
+                f"param_out_of_range:prepaid_amount={prepaid_amount}:min=1:max=cost"
+            )
+        elif cost is not None and prepaid_amount > cost:
+            violations.append(
+                f"param_out_of_range:prepaid_amount={prepaid_amount}:min=1:max={cost}"
+            )
+
+    # Age only checked when condition_new==0 (used equipment)
+    cn = params.get("condition_new")
+    if cn == 0 or cn == "0":
+        age_raw = params.get("age") if params.get("age") not in (None, "") else params.get("age_years")
+        if age_raw not in (None, ""):
+            try:
+                age_i = int(age_raw)
+            except (TypeError, ValueError):
+                violations.append(f"param_bad_type:age={age_raw!r}")
+            else:
+                if not (AGE_MIN <= age_i <= AGE_MAX):
+                    violations.append(
+                        f"param_out_of_range:age={age_i}:min={AGE_MIN}:max={AGE_MAX}"
+                    )
+
+    return violations
+
+
 class UnsupportedCurrencyError(Exception):
     """Raised when a currency is not allowed for a client type (MVP: EUR/RUB for Физ лицо)."""
 
@@ -168,6 +266,14 @@ class CalculatorTool(ToolDefinition):
         if _ct:
             params["client_type"] = self._CLIENT_TYPE_MAP.get(_ct.lower().strip(), _ct)
 
+        # ── Range validation: raises BEFORE any derivation or API call ──
+        # Checks cost, term, prepaid_pct, prepaid_amount vs cost, age (when бу).
+        # See validate_calc_inputs for markers; orchestrator parses them to
+        # produce a user-facing Russian message ("срок должен быть от 12 до 84").
+        _violations = validate_calc_inputs(params)
+        if _violations:
+            raise IncompleteProfileError(missing=_violations)
+
         # ── Prepaid: accept pct or amount, derive pct for API. ──
         if params.get("prepaid") in (None, ""):
             if params.get("prepaid_pct") not in (None, ""):
@@ -175,14 +281,10 @@ class CalculatorTool(ToolDefinition):
             elif params.get("prepaid_amount") not in (None, ""):
                 cost = float(params["cost"])
                 amount = float(params["prepaid_amount"])
-                if cost <= 0:
-                    raise IncompleteProfileError(missing=["cost"])
+                # Both guarded by validate_calc_inputs above; defensive assert.
+                assert cost > 0, "cost must be > 0 after validate_calc_inputs"
                 params["prepaid"] = round((amount / cost) * 100.0, 2)
         prepaid_pct = float(params["prepaid"])
-        if prepaid_pct < 0 or prepaid_pct > 40:
-            raise IncompleteProfileError(
-                missing=[f"prepaid_pct_out_of_range:{prepaid_pct}"]
-            )
 
         # Age may arrive as 'age' (legacy) or 'age_years' (new profile key)
         if params.get("age") in (None, "") and params.get("age_years") not in (None, ""):

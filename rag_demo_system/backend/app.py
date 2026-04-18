@@ -448,6 +448,83 @@ def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> Non
         session.transcript = session.transcript[-limit:]
 
 
+def _sticky_calc_ready(profile: Any, sa_is_confirm: bool, needs_tool: bool) -> bool:
+    """Return True when the sticky-calc direct-call path should fire.
+
+    Fix 39: is_confirmation=true from the classifier only unlocks recalc when
+    the state is READBACK_PENDING or CHANGE_PENDING. On plain CONFIRMED with
+    no pending change, utterances like "Хорошо." / "Ладно, спасибо." get
+    classifier is_confirmation=true but are just acknowledgments — they must
+    NOT re-fire the calculator. Session aba110a8 (2026-04-18) showed three
+    extra calculator calls from this exact pattern.
+    """
+    try:
+        state = profile.state
+    except AttributeError:
+        return False
+    confirm_unlocks = bool(sa_is_confirm) and state in (
+        ProfileState.READBACK_PENDING,
+        ProfileState.CHANGE_PENDING,
+    )
+    return (
+        profile.is_complete_for_calc()
+        and (profile.confirmed_at is not None or confirm_unlocks)
+        and (bool(needs_tool) or confirm_unlocks)
+    )
+
+
+def _format_invalid_params_msg(markers: list[str]) -> str | None:
+    """Translate calculator param_out_of_range / param_bad_type markers to
+    a single user-facing Russian message.
+
+    Returns None if no OOR / bad_type markers are present (markers from
+    IncompleteProfileError may also include plain missing-field names).
+    """
+    if not markers:
+        return None
+    parts: list[str] = []
+    _FIELD_RU = {
+        "cost": "стоимость",
+        "term": "срок",
+        "prepaid_pct": "аванс",
+        "prepaid_amount": "сумма аванса",
+        "age": "возраст предмета",
+    }
+    for m in markers:
+        if not isinstance(m, str):
+            continue
+        if m.startswith("param_out_of_range:"):
+            body = m.split(":", 1)[1]
+            field_part, *rest = body.split(":")
+            field_name = field_part.split("=")[0]
+            ru = _FIELD_RU.get(field_name, field_name)
+            mins = next((r.split("=", 1)[1] for r in rest if r.startswith("min=")), None)
+            maxs = next((r.split("=", 1)[1] for r in rest if r.startswith("max=")), None)
+            if field_name == "term":
+                parts.append(f"срок должен быть от {mins} до {maxs} месяцев")
+            elif field_name == "prepaid_pct":
+                parts.append(f"аванс должен быть от {mins} до {maxs} процентов")
+            elif field_name == "cost":
+                parts.append(f"стоимость должна быть положительной (до {maxs})")
+            elif field_name == "prepaid_amount":
+                if maxs == "cost" or not maxs.replace(".", "", 1).isdigit():
+                    parts.append("сумма аванса должна быть больше нуля и меньше стоимости")
+                else:
+                    parts.append(f"сумма аванса не может превышать стоимость ({maxs})")
+            elif field_name == "age":
+                parts.append(f"возраст предмета должен быть от {mins} до {maxs} лет")
+            else:
+                parts.append(f"{ru} вне допустимого диапазона ({mins}-{maxs})")
+        elif m.startswith("param_bad_type:"):
+            body = m.split(":", 1)[1]
+            field_name = body.split("=", 1)[0]
+            ru = _FIELD_RU.get(field_name, field_name)
+            parts.append(f"{ru}: не распознано как число")
+    if not parts:
+        return None
+    return "; ".join(parts)
+
+
 def _selected_backend(requested: str | None) -> str:
     return "our_rag"
 
@@ -1111,9 +1188,15 @@ async def _stream_voice_response(
                     "БИЗНЕС-ПРАВИЛА:\n"
                     "- Физлица: только легковой автомобиль и прочий транспорт. Грузовые, спецтехника, "
                     "оборудование, недвижимость только для ИП/юрлиц.\n"
-                    "- prepaid_pct: допустимый диапазон 0-40. Не ставь invalid_param на граничные значения — "
-                    "API сам валидирует.\n"
-                    "- term_months: допустимый диапазон 12-84.\n"
+                    "- Рекомендуемые диапазоны: prepaid_pct 0-40; term_months 12-84.\n"
+                    "- КРИТИЧЕСКИ ВАЖНО: term_months, prepaid_pct, prepaid_amount, cost, age_years "
+                    "всегда извлекай ТОЧНО как назвал клиент в НОВОМ сообщении, даже если значение "
+                    "вне рекомендуемого диапазона. НЕ подменяй, НЕ округляй, НЕ кламповай к границам. "
+                    "Если клиент сказал '5 месяцев' -> term_months=5, НЕ 12 и НЕ 60. "
+                    "Если сказал '110 процентов' -> prepaid_pct=110, НЕ 40. "
+                    "Если сказал '200 месяцев' -> term_months=200, НЕ 84. "
+                    "Если сказал 'минус сто тысяч' -> cost=-100000. "
+                    "Валидация диапазонов и сообщение клиенту — задача кода, не твоя.\n"
                     "- Если клиент хочет расчёт, но client_type неизвестен из всего диалога, "
                     "ставь action='clarify'.\n\n"
                     "Только JSON, никаких пояснений."
@@ -1856,11 +1939,7 @@ async def _stream_voice_response(
     # a change). Without this, once `confirmed_at` is set, every complete-profile
     # turn retriggers the calculator — even turns where the user asked about the
     # director, office address, or just chatted.
-    _profile_ready = (
-        _profile.is_complete_for_calc()
-        and (_profile.confirmed_at is not None or _sa_is_confirm)
-        and (needs_tool or _sa_is_confirm)
-    )
+    _profile_ready = _sticky_calc_ready(_profile, _sa_is_confirm, needs_tool)
     _legacy_hint_direct = (
         needs_tool
         and _extracted_hints.get("subject")
@@ -1971,11 +2050,14 @@ async def _stream_voice_response(
                 try:
                     _direct_tool_result = await asyncio.to_thread(calc_tool.execute, _direct_params, {})
                 except _IncProf as _inc_exc:
-                    # Profile incomplete: emit a missing-field prompt via LLM fallback.
+                    # Profile incomplete OR params out of range / bad type.
                     print(f"[DirectTool] IncompleteProfile: {_inc_exc.missing}", flush=True)
                     _direct_tool_result = None
-                    # Hint to LLM which fields are missing
                     _extracted_hints["_missing_profile_fields"] = _inc_exc.missing
+                    _oor_msg = _format_invalid_params_msg(_inc_exc.missing)
+                    if _oor_msg:
+                        _extracted_hints["_invalid_params_msg"] = _oor_msg
+                        print(f"[DirectTool] OOR user msg: {_oor_msg}", flush=True)
                 if _direct_tool_result is not None:
                     _tool_ok = _direct_tool_result.get("ok", False)
                     # Attach conversion disclosure to result for presentation layer
@@ -2113,6 +2195,23 @@ async def _stream_voice_response(
                 f"Калькулятор вернул ошибку: {_err_explanation}\n"
                 f"Сообщение клиента: {message}\n\n"
                 "Объясни кратко (1-2 предложения). Предложи альтернативу или уточни параметры."
+            )},
+        ]
+        tool_schemas = []
+    elif _extracted_hints.get("_invalid_params_msg"):
+        # Fix 39: one or more calculator params out of allowed range. Surface the
+        # specific range to the client instead of letting the LLM improvise a
+        # number ("60 максимально" hallucination observed 2026-04-18).
+        _oor_message = _extracted_hints["_invalid_params_msg"]
+        print(f"[DirectTool] OOR branch: {_oor_message[:80]}", flush=True)
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Клиент запросил параметр вне допустимого диапазона: {_oor_message}.\n"
+                f"Сообщение клиента: {message}\n\n"
+                "Скажи клиенту ТОЛЬКО указанный диапазон (одной короткой фразой) "
+                "и спроси, какое значение в этом диапазоне он выбирает. "
+                "НЕ называй других чисел, НЕ предлагай 'типичные' значения."
             )},
         ]
         tool_schemas = []

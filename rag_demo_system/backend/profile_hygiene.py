@@ -306,21 +306,21 @@ def filter_patches(
         else:
             out["currency"] = cur
 
-    # Prepaid range.
+    # Prepaid type check only.
+    # Fix 39: do NOT silently drop out-of-range values. Forward them so the
+    # calculator's validate_calc_inputs can surface a specific user-facing
+    # message ("аванс должен быть от 0 до 40 процентов") instead of hygiene
+    # eating them and the bot improvising.
     if "prepaid_pct" in out:
         try:
-            p = float(out["prepaid_pct"])
-            if not (MVP_PREPAID_RANGE[0] <= p <= MVP_PREPAID_RANGE[1]):
-                out.pop("prepaid_pct")
+            float(out["prepaid_pct"])
         except (TypeError, ValueError):
             out.pop("prepaid_pct")
 
-    # Term range.
+    # Term type check only (range validation moved to calculator).
     if "term_months" in out:
         try:
-            t = int(out["term_months"])
-            if not (MVP_TERM_RANGE[0] <= t <= MVP_TERM_RANGE[1]):
-                out.pop("term_months")
+            int(out["term_months"])
         except (TypeError, ValueError):
             out.pop("term_months")
 

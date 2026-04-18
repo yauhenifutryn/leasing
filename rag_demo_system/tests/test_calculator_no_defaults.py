@@ -118,7 +118,8 @@ def test_execute_raises_on_out_of_range_prepaid() -> None:
     )
     with pytest.raises(IncompleteProfileError) as exc:
         tool.execute(params, {})
-    assert any("prepaid_pct_out_of_range" in m for m in exc.value.missing)
+    # Fix 39: marker format is now 'param_out_of_range:prepaid_pct=X:min=...:max=...'
+    assert any(m.startswith("param_out_of_range:prepaid_pct=") for m in exc.value.missing)
 
 
 def test_execute_forwards_type_schedule_linear() -> None:

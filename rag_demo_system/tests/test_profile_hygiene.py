@@ -51,9 +51,12 @@ def test_currency_russian_rubles_is_rub():
     assert out.get("currency") == "RUB"
 
 
-def test_prepaid_out_of_range_is_dropped():
+def test_prepaid_out_of_range_is_forwarded():
+    # Fix 39: hygiene no longer silently drops OOR values. The calculator's
+    # validate_calc_inputs raises on them so the bot can tell the client the
+    # exact allowed range.
     out = filter_patches({"prepaid_pct": 50}, "аванс пятьдесят процентов")
-    assert "prepaid_pct" not in out
+    assert out.get("prepaid_pct") == 50
 
 
 def test_prepaid_in_range_is_kept():
@@ -61,9 +64,21 @@ def test_prepaid_in_range_is_kept():
     assert out.get("prepaid_pct") == 20
 
 
-def test_term_out_of_range_is_dropped():
+def test_term_out_of_range_is_forwarded():
+    # Fix 39: term=300 passes through to the calculator where it is rejected
+    # as param_out_of_range.
     out = filter_patches({"term_months": 300}, "триста месяцев")
+    assert out.get("term_months") == 300
+
+
+def test_term_non_numeric_is_dropped():
+    out = filter_patches({"term_months": "много"}, "много месяцев")
     assert "term_months" not in out
+
+
+def test_prepaid_non_numeric_is_dropped():
+    out = filter_patches({"prepaid_pct": "чуть-чуть"}, "чуть-чуть")
+    assert "prepaid_pct" not in out
 
 
 def test_single_word_annuity_passes():
@@ -165,9 +180,10 @@ def test_noise_utterance_still_dropped_despite_name():
     assert result == {}
 
 
-def test_numeric_out_of_range_still_filtered():
-    # Numeric answer passes the noise filter, but MVP-range normalizer
-    # still drops out-of-range values (prepaid must be 0-40).
+def test_numeric_out_of_range_now_forwarded():
+    # Fix 39: hygiene forwards OOR numeric values. The calculator layer
+    # (validate_calc_inputs) is responsible for rejecting them with a
+    # user-facing range message.
     patches = {"prepaid_pct": 99}
     result = filter_patches(patches, "99 процентов")
-    assert "prepaid_pct" not in result
+    assert result.get("prepaid_pct") == 99
