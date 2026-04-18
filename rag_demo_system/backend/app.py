@@ -114,8 +114,10 @@ async def _emit_plain_assistant_response(
             pcm = _b64.b64decode(audio_b64)
             sample_rate = audio_resp.get("sample_rate_hz")
             chunk_size = 1920  # 40ms @ 24kHz 16-bit mono
+            _was_interrupted = False
             for i in range(0, len(pcm), chunk_size):
                 if session is not None and session.interrupted:
+                    _was_interrupted = True
                     break
                 chunk = pcm[i : i + chunk_size]
                 await websocket.send_json({
@@ -124,6 +126,16 @@ async def _emit_plain_assistant_response(
                     "delta": _b64.b64encode(chunk).decode(),
                     "sample_rate_hz": sample_rate,
                 })
+            if _was_interrupted:
+                # Tell downstream transport (mod_audio_fork for Jambonz) to drop
+                # any PCM already buffered after the last chunk we sent. Without
+                # this, FreeSWITCH continues playing the 100-500ms tail even
+                # though we stopped producing new audio.
+                try:
+                    import json as _json
+                    await websocket.send_text(_json.dumps({"type": "killAudio"}))
+                except Exception:  # noqa: BLE001
+                    pass
     except Exception:  # noqa: BLE001
         pass
     # Append to transcript for memory continuity.
