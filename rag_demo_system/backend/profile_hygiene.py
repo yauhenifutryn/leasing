@@ -69,17 +69,27 @@ def filter_patches(
     if not patches:
         return {}
 
-    # Noise filter: drop everything when utterance is truly short noise.
-    # EXCEPTION: single-word enum slot-fill answers ("Аннуитет", "Физлицо",
-    # "Новый" …) are valid replies to clarification questions and must
-    # survive so the profile state machine can reach CONFIRMED.
+    # Noise filter: drop everything when the utterance is too short to carry info.
+    # EXCEPTIONS (value-carrying answers that pass even with <2 non-digit tokens):
+    #   1. Enum slot-fill: "Аннуитет", "Физлицо", "Новый" etc.
+    #   2. Numeric-field answer: "49 500 рублей", "сто тысяч", "36 месяцев" etc.
+    #      Classifier reliably extracts cost/term/prepaid numbers from these
+    #      utterances even though the only non-digit token is the unit word.
     tokens = [t for t in (utterance or "").strip().split() if not t.isdigit()]
+    _NUMERIC_FIELD_KEYS = frozenset({
+        "cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years",
+    })
     if len(tokens) < 2:
         _stripped = (utterance or "").strip().lower().rstrip(".!,?;:")
         _is_enum_fill = _stripped in _ENUM_SLOT_FILL_WORDS
-        if not _is_enum_fill:
+        _has_numeric_answer = any(k in patches for k in _NUMERIC_FIELD_KEYS)
+        if not _is_enum_fill and not _has_numeric_answer:
             return {}
-        print(f"[Profile] single-word enum patch accepted: '{_stripped}' patches={list(patches.keys())}", flush=True)
+        if _is_enum_fill:
+            print(f"[Profile] single-word enum patch accepted: '{_stripped}' patches={list(patches.keys())}", flush=True)
+        elif _has_numeric_answer:
+            _numeric_keys = [k for k in _NUMERIC_FIELD_KEYS if k in patches]
+            print(f"[Profile] numeric-answer patch accepted: '{_stripped[:40]}' numeric_fields={_numeric_keys}", flush=True)
 
     out: dict[str, Any] = dict(patches)
 

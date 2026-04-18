@@ -98,3 +98,55 @@ def test_multi_word_unchanged():
     patches = {"prepaid_pct": 20}
     result = filter_patches(patches, "аванс двадцать процентов")
     assert result == {"prepaid_pct": 20}
+
+
+def test_numeric_cost_with_currency_passes():
+    # "49 500 рублей" — 1 non-digit token, classifier extracts cost+currency
+    patches = {"cost": 49500, "currency": "BYN", "subject": "Легковой автомобиль"}
+    result = filter_patches(patches, "49 500 рублей.")
+    assert result.get("cost") == 49500
+    assert result.get("currency") == "BYN"
+    assert result.get("subject") == "Легковой автомобиль"
+
+
+def test_numeric_term_with_unit_passes():
+    # "36 месяцев" — 1 non-digit token, classifier extracts term_months
+    patches = {"term_months": 36}
+    result = filter_patches(patches, "36 месяцев")
+    assert result.get("term_months") == 36
+
+
+def test_numeric_prepaid_percent_passes():
+    # "10 процентов" — 1 non-digit token
+    patches = {"prepaid_pct": 10}
+    result = filter_patches(patches, "10 процентов.")
+    assert result.get("prepaid_pct") == 10
+
+
+def test_numeric_amount_passes():
+    # "14 тысяч рублей" — 2 non-digit tokens, already fine; but verify
+    patches = {"prepaid_amount": 14000, "currency": "BYN"}
+    result = filter_patches(patches, "14 тысяч рублей")
+    assert result.get("prepaid_amount") == 14000
+
+
+def test_numeric_cost_standalone_number_passes():
+    # Just "100000" — 0 non-digit tokens, but classifier extracted cost
+    patches = {"cost": 100000}
+    result = filter_patches(patches, "100000")
+    assert result.get("cost") == 100000
+
+
+def test_noise_utterance_still_dropped_despite_name():
+    # "э" with patch {name: ...} — no enum match, no numeric field — drop
+    patches = {"name": "Э"}
+    result = filter_patches(patches, "э")
+    assert result == {}
+
+
+def test_numeric_out_of_range_still_filtered():
+    # Numeric answer passes the noise filter, but MVP-range normalizer
+    # still drops out-of-range values (prepaid must be 0-40).
+    patches = {"prepaid_pct": 99}
+    result = filter_patches(patches, "99 процентов")
+    assert "prepaid_pct" not in result
