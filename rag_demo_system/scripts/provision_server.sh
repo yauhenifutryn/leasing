@@ -530,8 +530,12 @@ start_qdrant() {
 # ---------------------------------------------------------------------------
 write_env_file() {
   # Always regenerate .env to ensure paths and flags are current.
-  # Tool credentials (CALCULATOR_API_TOKEN, SMS_*) will be blank and
-  # must be filled in manually after provisioning.
+  # Tool credentials (CALCULATOR_API_TOKEN, SMS_*) are left blank here;
+  # export them and run `bash scripts/set_tokens.sh` afterwards. That
+  # helper patches .env in place and restarts the backend only (no vLLM
+  # reload). Shell env vars ARE read as a safety net if you happened to
+  # export them before running provision, but the canonical flow is to
+  # export afterwards per the hint printed at the end of this script.
   if [ -f "$APP_DIR/.env" ]; then
     log "Overwriting existing .env (paths/flags may have changed)"
   fi
@@ -676,17 +680,16 @@ CUDA_HOME=/usr/local/cuda
 PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # ── Tool Use: Calculator API ──
-# IMPORTANT: Get bearer token from client's developer (Maxim).
+# Picked up from the shell env at provision time. Export before running
+# provision and these will be filled in automatically.
 # Server IP must be whitelisted by client before these will work.
-# NOTE: Quote values with special characters (brackets, etc.) in single quotes.
-CALCULATOR_API_BASE_URL='https://personal.mikro-leasing.by/calculator/api'
-CALCULATOR_API_TOKEN=''
+CALCULATOR_API_BASE_URL='${CALCULATOR_API_BASE_URL:-https://personal.mikro-leasing.by/calculator/api}'
+CALCULATOR_API_TOKEN='${CALCULATOR_API_TOKEN:-}'
 
 # ── Tool Use: SMS (sms-assistent.by) ──
-# IMPORTANT: Server IP must be whitelisted by client before these will work.
-SMS_API_LOGIN=''
-SMS_API_PASSWORD=''
-SMS_SENDER_NAME='MikroLizing'
+SMS_API_LOGIN='${SMS_API_LOGIN:-}'
+SMS_API_PASSWORD='${SMS_API_PASSWORD:-}'
+SMS_SENDER_NAME='${SMS_SENDER_NAME:-MikroLizing}'
 
 # ── Tool Use: CRM Webhook (phase 2, not needed yet) ──
 CRM_WEBHOOK_URL=
@@ -707,24 +710,35 @@ ENVEOF
     log "MODELS_DIR=$MODELS_DIR has ${models_avail_gb}GB free (OK)"
   fi
 
+  # Detect whether tool tokens landed in .env or are still blank.
+  local calc_set sms_set
+  calc_set="$(grep -E "^CALCULATOR_API_TOKEN=" "$APP_DIR/.env" | grep -vE "=''$|=$" || true)"
+  sms_set="$(grep -E "^SMS_API_LOGIN=" "$APP_DIR/.env" | grep -vE "=''$|=$" || true)"
+
   log ""
   log "╔══════════════════════════════════════════════════════════════╗"
-  log "║  TOOL USE SETUP REQUIRED                                    ║"
+  log "║  TOOL USE SETUP                                              ║"
   log "║                                                              ║"
-  log "║  1. Add this server's IP to client's whitelist:              ║"
-  log "║     Run: curl -s ifconfig.me                                 ║"
-  log "║     Send the IP to client (Ilya) for whitelisting            ║"
+  log "║  1. Whitelist server IP with client (Ilya):                  ║"
+  log "║     curl -s ifconfig.me                                      ║"
+  if [ -n "$calc_set" ] && [ -n "$sms_set" ]; then
+    log "║                                                              ║"
+    log "║  2. Tool tokens ALREADY in .env (exported pre-provision).    ║"
+    log "║     Skip step 3, go straight to smoke test.                  ║"
+  else
+    log "║                                                              ║"
+    log "║  2. Tool tokens NOT in .env. Export + apply them:            ║"
+    log "║     export CALCULATOR_API_TOKEN='...'                        ║"
+    log "║     export SMS_API_LOGIN='...'                               ║"
+    log "║     export SMS_API_PASSWORD='...'                            ║"
+    log "║     bash scripts/set_tokens.sh   # patches .env + restarts   ║"
+  fi
   log "║                                                              ║"
-  log "║  2. Fill in .env credentials:                                ║"
-  log "║     CALCULATOR_API_TOKEN=...                                 ║"
-  log "║     SMS_API_LOGIN=...                                        ║"
-  log "║     SMS_API_PASSWORD=...                                     ║"
+  log "║  3. Smoke test:                                              ║"
+  log "║     bash scripts/smoke_test.sh                               ║"
   log "║                                                              ║"
-  log "║  3. Test API access:                                         ║"
-  log "║     source .env                                              ║"
-  log "║     curl -H 'Authorization: Bearer \$CALCULATOR_API_TOKEN'   ║"
-  log "║       '\$CALCULATOR_API_BASE_URL/1.0/subjects/'              ║"
-  log "║     Expected: HTTP 200 with JSON (not 403)                   ║"
+  log "║  4. Deploy SIP telephony:                                    ║"
+  log "║     bash scripts/deploy_jambonz.sh                           ║"
   log "╚══════════════════════════════════════════════════════════════╝"
   log ""
 }
@@ -903,13 +917,27 @@ main() {
   log "=== Provisioning complete ==="
   echo ""
   echo "════════════════════════════════════════════════════════════"
-  echo "  Next steps (run in order):"
+  echo "  Canonical fresh-server flow (you are on step 4):"
   echo ""
-  echo "  1. bash scripts/smoke_test.sh"
-  echo "     Waits for vLLM/Whisper/TTS, indexes KB, verifies chat"
+  echo "  1. ssh -i ~/.ssh/jarvislabs sesterce@<IP>"
+  echo "  2. export HF_TOKEN='hf_...'                (for model download)"
+  echo "  3. git clone https://github.com/yauhenifutryn/leasing.git"
+  echo "     cd leasing && git checkout feature/voice-pipeline"
+  echo "     cd rag_demo_system"
+  echo "  4. bash scripts/provision_server.sh       ← DONE"
   echo ""
-  echo "  2. bash scripts/deploy_jambonz.sh"
-  echo "     Deploys SIP telephony, creates accounts, restarts backend"
+  echo "  Next (do these now, in order):"
+  echo ""
+  echo "  5. Export tool credentials + apply them:"
+  echo "       export CALCULATOR_API_TOKEN='...' \\"
+  echo "              SMS_API_LOGIN='...' SMS_API_PASSWORD='...'"
+  echo "       bash scripts/set_tokens.sh"
+  echo "  6. bash scripts/smoke_test.sh"
+  echo "  7. bash scripts/deploy_jambonz.sh"
+  echo ""
+  echo "  Later — to pull new code on this already-provisioned server:"
+  echo "    cd /ephemeral/leasing && git pull"
+  echo "    cd rag_demo_system && bash scripts/restart_all.sh"
   echo "════════════════════════════════════════════════════════════"
   echo ""
 }
