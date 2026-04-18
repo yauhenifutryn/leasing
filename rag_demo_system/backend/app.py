@@ -397,7 +397,7 @@ async def _warmup() -> None:
     except Exception:  # noqa: BLE001
         pass
     try:
-        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+        silence_ms = int(os.getenv("VAD_SILENCE_MS", "900"))
         _shared_vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
     except Exception:  # noqa: BLE001
         pass
@@ -3225,7 +3225,7 @@ async def voice_ws(websocket: WebSocket) -> None:
         # RTC VAD only detects speech for interruption, never dispatches STT.
         _rtc_barge_vad: SileroVAD | None = None
         if _shared_vad is not None:
-            silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+            silence_ms = int(os.getenv("VAD_SILENCE_MS", "900"))
             _rtc_barge_vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
 
         _barge_cb_count = 0
@@ -3720,7 +3720,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
         voice_sessions[session_id] = session
 
         # 3. Create VAD (16kHz native)
-        silence_ms = int(os.getenv("VAD_SILENCE_MS", "500"))
+        silence_ms = int(os.getenv("VAD_SILENCE_MS", "900"))
         vad = SileroVAD(sample_rate=16000, silence_ms=silence_ms)
 
         # 4. Consent collection via DTMF (press 1 to accept, 2 to decline)

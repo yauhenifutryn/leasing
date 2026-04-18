@@ -302,7 +302,7 @@ def load_settings(path: Path | None = None) -> Settings:
             usd_byn_rate=float(os.getenv("USD_BYN_RATE", "").strip() or tools_cfg.get("usd_byn_rate", 3.0)),
         ),
         turn_taking=TurnTakingConfig(
-            vad_silence_ms=int(os.getenv("VAD_SILENCE_MS", "700")),
+            vad_silence_ms=int(os.getenv("VAD_SILENCE_MS", "900")),
             pre_response_hold_ms=int(os.getenv("PRE_RESPONSE_HOLD_MS", "300")),
             listen_mode_timeout_sec=float(os.getenv("LISTEN_MODE_TIMEOUT_SEC", "3.0")),
             listen_mode_vad_rms=int(os.getenv("LISTEN_MODE_VAD_RMS", "180")),
