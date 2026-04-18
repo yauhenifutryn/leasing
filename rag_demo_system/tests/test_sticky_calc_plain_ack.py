@@ -73,6 +73,34 @@ def test_no_confirm_no_tool_on_confirmed_does_not_fire() -> None:
     assert _sticky_calc_ready(profile, sa_is_confirm=False, needs_tool=False) is False
 
 
+# ── just_confirmed_this_turn: gate transition happens BEFORE calc gate ─
+
+def test_just_confirmed_this_turn_unlocks_after_state_transition() -> None:
+    # Gates 3/4 transition READBACK_PENDING -> CONFIRMED and set
+    # confirmed_at BEFORE _sticky_calc_ready runs. Without this flag,
+    # the first calc after readback confirm would be blocked because
+    # state is already CONFIRMED when the gate checks.
+    profile = _complete_profile(ProfileState.CONFIRMED, confirmed=True)
+    assert _sticky_calc_ready(
+        profile,
+        sa_is_confirm=True,
+        needs_tool=False,
+        just_confirmed_this_turn=True,
+    ) is True
+
+
+def test_plain_ack_without_transition_still_blocked() -> None:
+    # Same CONFIRMED state + is_confirm=true, but NO transition this turn
+    # (the hint is False) — plain acknowledgment, must not re-fire calc.
+    profile = _complete_profile(ProfileState.CONFIRMED, confirmed=True)
+    assert _sticky_calc_ready(
+        profile,
+        sa_is_confirm=True,
+        needs_tool=False,
+        just_confirmed_this_turn=False,
+    ) is False
+
+
 # ── Incomplete profile never fires regardless ─────────────────────────
 
 def test_incomplete_profile_never_fires() -> None:

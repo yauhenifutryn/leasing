@@ -448,23 +448,30 @@ def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> Non
         session.transcript = session.transcript[-limit:]
 
 
-def _sticky_calc_ready(profile: Any, sa_is_confirm: bool, needs_tool: bool) -> bool:
+def _sticky_calc_ready(
+    profile: Any,
+    sa_is_confirm: bool,
+    needs_tool: bool,
+    just_confirmed_this_turn: bool = False,
+) -> bool:
     """Return True when the sticky-calc direct-call path should fire.
 
-    Fix 39: is_confirmation=true from the classifier only unlocks recalc when
-    the state is READBACK_PENDING or CHANGE_PENDING. On plain CONFIRMED with
-    no pending change, utterances like "Хорошо." / "Ладно, спасибо." get
-    classifier is_confirmation=true but are just acknowledgments — they must
-    NOT re-fire the calculator. Session aba110a8 (2026-04-18) showed three
-    extra calculator calls from this exact pattern.
+    is_confirmation=true unlocks recalc in two situations:
+      1. State is READBACK_PENDING or CHANGE_PENDING (user about to confirm).
+      2. State has JUST transitioned to CONFIRMED this turn (gates 3/4 fired).
+
+    On plain CONFIRMED with no pending change and no transition this turn,
+    utterances like "Хорошо." / "Ладно, спасибо." get classifier
+    is_confirmation=true but are just acknowledgments — they must NOT
+    re-fire the calculator (Fix 39 regression guard).
     """
     try:
         state = profile.state
     except AttributeError:
         return False
-    confirm_unlocks = bool(sa_is_confirm) and state in (
-        ProfileState.READBACK_PENDING,
-        ProfileState.CHANGE_PENDING,
+    confirm_unlocks = bool(sa_is_confirm) and (
+        state in (ProfileState.READBACK_PENDING, ProfileState.CHANGE_PENDING)
+        or bool(just_confirmed_this_turn)
     )
     return (
         profile.is_complete_for_calc()
@@ -1750,11 +1757,19 @@ async def _stream_voice_response(
     )
     _is_explicit_deny = bool(message) and bool(_DENY_PREFIX_RE.match(message))
 
+    # Fix 40 hotfix: track state transitions so _sticky_calc_ready can
+    # distinguish "state was pending AND user confirmed this turn" (should
+    # fire calc) from "state is already CONFIRMED and user just said 'Хорошо'"
+    # (should NOT fire calc). Without this, READBACK_PENDING → CONFIRMED
+    # transition below bricks the first calc call.
+    _just_confirmed_this_turn = False
+
     if _state_profile.state == ProfileState.READBACK_PENDING:
         if _sa_is_confirm:
             _state_profile.state = ProfileState.CONFIRMED
             if _state_profile.confirmed_at is None:
                 _state_profile.confirmed_at = time.time()
+            _just_confirmed_this_turn = True
             print(f"[Orchestrator] profile CONFIRMED (via always-on gate)", flush=True)
             # fall through to tool orchestration
         else:
@@ -1805,6 +1820,7 @@ async def _stream_voice_response(
             _state_profile.apply_pending_change()
             _state_profile.state = ProfileState.CONFIRMED
             _state_profile.change_emitted_at = time.time()
+            _just_confirmed_this_turn = True
             print(
                 f"[Orchestrator] change CONFIRMED (via always-on gate), recalculating",
                 flush=True,
@@ -1992,7 +2008,12 @@ async def _stream_voice_response(
     # a change). Without this, once `confirmed_at` is set, every complete-profile
     # turn retriggers the calculator — even turns where the user asked about the
     # director, office address, or just chatted.
-    _profile_ready = _sticky_calc_ready(_profile, _sa_is_confirm, needs_tool)
+    _profile_ready = _sticky_calc_ready(
+        _profile,
+        _sa_is_confirm,
+        needs_tool,
+        just_confirmed_this_turn=_just_confirmed_this_turn,
+    )
     _legacy_hint_direct = (
         needs_tool
         and _extracted_hints.get("subject")
