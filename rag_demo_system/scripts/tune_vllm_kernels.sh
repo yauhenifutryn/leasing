@@ -181,9 +181,22 @@ SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
 SUPERVISOR_CONF="$APP_DIR/scripts/supervisord.conf"
 if [ -x "$SUPERVISORCTL" ] && [ -f "$SUPERVISOR_CONF" ]; then
   if "$SUPERVISORCTL" -c "$SUPERVISOR_CONF" status qwen 2>/dev/null | grep -q RUNNING; then
-    log "qwen supervisor is running — restarting so MAX_JOBS takes effect"
-    "$SUPERVISORCTL" -c "$SUPERVISOR_CONF" restart qwen || \
-      log "WARNING: qwen restart failed; manual restart required"
+    log "qwen is running — doing a GPU-safe full restart so MAX_JOBS and the"
+    log "new MoE config both take effect. A plain 'supervisorctl restart qwen'"
+    log "SIGTERMs the V1 engine, which leaks GPU memory on this vLLM version;"
+    log "the new qwen process then fails with 'Free memory less than desired'."
+    log "restart_all.sh has the SIGTERM + wait + pkill sequence that releases"
+    log "GPU memory cleanly before starting qwen again."
+    if [ -x "$APP_DIR/scripts/restart_all.sh" ]; then
+      log "Calling scripts/restart_all.sh (takes ~3-5 min, reloads the 35B model)"
+      bash "$APP_DIR/scripts/restart_all.sh" || \
+        log "WARNING: restart_all.sh returned non-zero; check GPU memory + logs"
+    else
+      log "WARNING: scripts/restart_all.sh not found — falling back to naive restart."
+      log "If it fails with GPU OOM, run: pkill -9 -f vllm; sleep 20; bash scripts/restart_all.sh"
+      "$SUPERVISORCTL" -c "$SUPERVISOR_CONF" restart qwen || \
+        log "WARNING: qwen restart failed; manual restart required"
+    fi
     log "Watch the compile with: tail -f .state/qwen.log | grep -iE 'GDN|kernel|warmup'"
   else
     log "qwen not running — skipping restart (provision flow will start stack)"
