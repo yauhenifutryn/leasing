@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from .citations import attach_citations
 from .grounding_validator import replace_ungrounded
-from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text
+from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text, split_for_tts_streaming
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
 from .rag_skip import should_skip_rag
@@ -77,6 +77,56 @@ async def broadcast_sip_event(event: dict[str, Any]) -> None:
             _sip_monitor_clients.discard(ws)
 
 
+async def _synthesize_and_stream_chunks(
+    phrase: str,
+    websocket: Any,
+    session_id: str,
+    session: Any | None,
+) -> bool:
+    """Synthesize one phrase and stream its PCM in 40ms chunks with per-chunk
+    interrupt check. Returns True if the session was interrupted during
+    streaming (caller should break its outer loop).
+
+    Shared helper for sentence-level interruptible TTS. Matches the barge-in
+    granularity that the main-LLM `tts_consumer` already has for free from
+    its sentence-queue pattern. Safe to call concurrently with the barge-in
+    VAD loop: it only reads `session.interrupted` and writes to the websocket.
+    """
+    import base64 as _b64
+
+    if session is not None and session.interrupted:
+        return True
+    try:
+        audio_resp = await asyncio.to_thread(synthesize_audio, phrase, session_id)
+    except Exception:  # noqa: BLE001
+        return False
+    audio_b64 = audio_resp.get("audio_b64") or ""
+    if not audio_b64:
+        return False
+    if session is not None and session.interrupted:
+        # Session flipped while Silero was blocking. Drop the freshly-synth'd
+        # audio rather than playing it — this is the bug Fix 25 exists to fix.
+        return True
+    pcm = _b64.b64decode(audio_b64)
+    sample_rate = audio_resp.get("sample_rate_hz")
+    chunk_size = 1920  # 40ms @ 24kHz 16-bit mono
+    for i in range(0, len(pcm), chunk_size):
+        if session is not None and session.interrupted:
+            return True
+        try:
+            await websocket.send_json({
+                "type": "response.output_audio.delta",
+                "session_id": session_id,
+                "delta": _b64.b64encode(pcm[i : i + chunk_size]).decode(),
+                "sample_rate_hz": sample_rate,
+            })
+        except Exception:  # noqa: BLE001
+            if session is not None:
+                session.interrupted = True
+            return True
+    return False
+
+
 async def _emit_plain_assistant_response(
     text: str,
     websocket: Any,
@@ -87,57 +137,49 @@ async def _emit_plain_assistant_response(
 ) -> None:
     """Send a plain assistant text + TTS audio response through the websocket.
 
-    Replicates the inline pattern used in the refusal path: emits
-    `response.output_text.delta`, synthesizes audio, then streams audio in
-    40 ms chunks (1920 bytes @ 24kHz 16-bit mono) so that barge-in via VAD
-    can interrupt mid-playback by flipping `session.interrupted` True.
-    Used by the orchestrator state-machine gate (clarification / readback /
-    change-confirm prompts) to bypass the LLM while still supporting
-    interruption.
-    """
-    import base64 as _b64
+    Splits `text` into short phrases (sentence + clause boundaries) and
+    synthesizes each one separately, so barge-in via VAD (flipping
+    `session.interrupted` True) stops audio within ~300-500ms instead of
+    blocking on one 3-4s Silero call covering the whole readback.
 
+    Used by the orchestrator state-machine gate (clarification / readback /
+    change-confirm / refusal / skip-RAG greeting) to bypass the LLM while
+    still supporting interruption at the same per-sentence granularity as
+    the main LLM path (tts_consumer).
+    """
     if not text:
         return
     if session is not None:
         session.assistant_speaking = True
         session.interrupted = False
+        # Reset VAD warmup so the 0.5s post-TTS-start deadzone restarts
+        # cleanly for this new deterministic TTS. Parity with the main-LLM
+        # path which resets `_tts_start_time` before the consumer task.
+        session._tts_start_time = 0
+    # Monitor / browser UI gets the full intended text up-front — same
+    # behavior as before. Per-phrase text deltas would fragment the monitor.
     await websocket.send_json({
         "type": "response.output_text.delta",
         "session_id": session_id,
         "delta": text,
     })
-    try:
-        audio_resp = await asyncio.to_thread(synthesize_audio, text, session_id)
-        audio_b64 = audio_resp.get("audio_b64") or ""
-        if audio_b64:
-            pcm = _b64.b64decode(audio_b64)
-            sample_rate = audio_resp.get("sample_rate_hz")
-            chunk_size = 1920  # 40ms @ 24kHz 16-bit mono
-            _was_interrupted = False
-            for i in range(0, len(pcm), chunk_size):
-                if session is not None and session.interrupted:
-                    _was_interrupted = True
-                    break
-                chunk = pcm[i : i + chunk_size]
-                await websocket.send_json({
-                    "type": "response.output_audio.delta",
-                    "session_id": session_id,
-                    "delta": _b64.b64encode(chunk).decode(),
-                    "sample_rate_hz": sample_rate,
-                })
-            if _was_interrupted:
-                # Tell downstream transport (mod_audio_fork for Jambonz) to drop
-                # any PCM already buffered after the last chunk we sent. Without
-                # this, FreeSWITCH continues playing the 100-500ms tail even
-                # though we stopped producing new audio.
-                try:
-                    import json as _json
-                    await websocket.send_text(_json.dumps({"type": "killAudio"}))
-                except Exception:  # noqa: BLE001
-                    pass
-    except Exception:  # noqa: BLE001
-        pass
+    phrases = split_for_tts_streaming(text) or [text]
+    was_interrupted = False
+    for phrase in phrases:
+        if session is not None and session.interrupted:
+            was_interrupted = True
+            break
+        if await _synthesize_and_stream_chunks(phrase, websocket, session_id, session):
+            was_interrupted = True
+            break
+    if was_interrupted:
+        # Flush any PCM buffered downstream (FreeSWITCH mod_audio_fork on
+        # Jambonz, browser Audio element buffer) so the caller stops
+        # hearing the readback tail immediately.
+        try:
+            await websocket.send_text(json.dumps({"type": "killAudio"}))
+        except Exception:  # noqa: BLE001
+            pass
     # Append to transcript for memory continuity.
     if session is not None:
         try:

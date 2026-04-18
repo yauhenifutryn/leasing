@@ -4,6 +4,27 @@ import re
 from collections.abc import Iterable, Iterator
 
 
+# Sentence / clause boundary split for interruptible TTS streaming.
+# Splits on hard sentence terminators (. ! ? …) AND soft clause separators
+# (, : ;) so a long readback synthesizes as short phrases instead of one
+# 3-4s blocking Silero call. Every phrase boundary becomes an interrupt
+# checkpoint, matching the sentence-level granularity that `tts_consumer`
+# already has for the main LLM path.
+_TTS_SPLIT_RE = re.compile(r"(?<=[.!?…,:;])\s+")
+
+
+def split_for_tts_streaming(text: str) -> list[str]:
+    """Split text into phrases for sentence-level interruptible TTS.
+
+    Preserves trailing punctuation on each phrase so Silero produces natural
+    prosody. Drops empty / punctuation-only fragments.
+    """
+    if not text or not text.strip():
+        return []
+    parts = _TTS_SPLIT_RE.split(text.strip())
+    return [p.strip() for p in parts if p.strip() and any(ch.isalnum() for ch in p)]
+
+
 _STOP_WORD_PATTERN = re.compile(
     r"\b("
     r"стоп|стопе|стопой|"
