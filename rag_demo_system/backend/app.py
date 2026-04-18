@@ -26,6 +26,7 @@ from .profile_prompts import (
     build_change_confirm_text,
     build_clarification_prompt,
     build_readback_text,
+    render_calc_result,
 )
 from .session import ProfileState
 from .consent import (
@@ -2364,45 +2365,16 @@ async def _stream_voice_response(
         ]
         tool_schemas = []
     elif _direct_tool_result and _direct_tool_result.get("ok"):
-        # Tool executed successfully: LLM only presents the result
-        _p = _direct_tool_result.get("params", {})
-        _cur = _p.get("currency", "BYN")
-        _defaulted = set(_direct_tool_result.get("defaulted", []))
-        _defaults_note = ""
-        if _defaulted:
-            _def_parts = []
-            if "prepaid" in _defaulted:
-                _def_parts.append(f"аванс {_p.get('prepaid', 30)}% (по умолчанию)")
-            if "term" in _defaulted:
-                _def_parts.append(f"срок {_p.get('term', 36)} мес. (по умолчанию)")
-            if "client_type" in _defaulted:
-                _def_parts.append(f"тип клиента: {_p.get('client_type', '?')} (по умолчанию)")
-            if "type_schedule" in _defaulted:
-                _def_parts.append("аннуитетный график (по умолчанию)")
-            if _def_parts:
-                _defaults_note = f" Параметры по умолчанию: {', '.join(_def_parts)}."
-        # Fix 1.2 (2026-04-19) — when the direct-call path converted USD to
-        # BYN for a физлицо, prepend the original-USD disclosure so the
-        # client hears "двадцать тысяч долларов, это шестьдесят тысяч
-        # рублей по курсу 3 к 1" instead of silently-converted BYN only.
-        _conv_prefix = ""
-        _conv = _direct_tool_result.get("currency_conversion") or {}
-        if _conv.get("from") == "USD" and _conv.get("amount_from") is not None:
-            _rate_disp = int(round(_conv.get("rate") or 3))
-            _conv_prefix = (
-                f"Стоимость {int(_conv['amount_from'])} долларов "
-                f"(это {int(_p.get('cost', 0))} белорусских рублей "
-                f"по курсу {_rate_disp} к 1). "
-            )
-        _result_summary = (
-            f"{_conv_prefix}"
-            f"Аванс {_p.get('prepaid', 30)}%: {_direct_tool_result.get('advance_sum', '?')} {_cur}. "
-            f"Ежемесячный платёж: {_direct_tool_result.get('payment_min', '?')} {_cur}. "
-            f"Выкупной: {_direct_tool_result.get('buyout_sum', '?')} {_cur}. "
-            f"Общая сумма: {_direct_tool_result.get('total', '?')} {_cur}. "
-            f"Удорожание: {_direct_tool_result.get('increase_percent', '?')}%. "
-            f"Срок: {_direct_tool_result.get('num_payments', '?')} мес."
-            f"{_defaults_note}"
+        # Tool executed successfully: LLM only presents the result.
+        # Fix 1.1 (2026-04-19) — all numeric fields come from the deterministic
+        # renderer in profile_prompts; the LLM below paraphrases tone, never
+        # synthesises figures. session_analyzer greps [deterministic_readback]
+        # to confirm this path drove the voiced output.
+        _result_summary = render_calc_result(_direct_tool_result)
+        print(
+            f"[deterministic_readback] source=render_calc_result "
+            f"session={session_id[:8]} chars={len(_result_summary)}",
+            flush=True,
         )
         print(f"[DirectTool] presenting: {_result_summary[:100]}", flush=True)
         llm_messages = [

@@ -96,6 +96,63 @@ def build_readback_text(profile: Any) -> str:
     )
 
 
+def render_calc_result(result: dict[str, Any]) -> str:
+    """Render the post-calculator voice summary deterministically.
+
+    Fix 1.1 (2026-04-19) — extracted from the inline f-string that lived in
+    app.py's direct-call presentation block. All monetary numbers come
+    straight from the calculator result; the LLM downstream is asked only
+    to paraphrase tone, never to synthesise figures. A companion
+    `[deterministic_readback]` log marker is emitted by the caller so
+    session_analyzer can confirm this path drove the spoken result.
+
+    When the direct-call path carried a USD->BYN conversion (Fix 1.2), the
+    result dict contains `currency_conversion` and the summary is prefixed
+    with "Стоимость N долларов (это M белорусских рублей по курсу X к 1)."
+    so the client reconciles their quoted USD against the converted BYN.
+    """
+    params = result.get("params", {}) or {}
+    currency = params.get("currency", "BYN")
+
+    # Defaults note (for fields the calculator stamped with stand-ins).
+    defaulted = set(result.get("defaulted", []) or [])
+    defaults_note = ""
+    if defaulted:
+        parts: list[str] = []
+        if "prepaid" in defaulted:
+            parts.append(f"аванс {params.get('prepaid', 30)}% (по умолчанию)")
+        if "term" in defaulted:
+            parts.append(f"срок {params.get('term', 36)} мес. (по умолчанию)")
+        if "client_type" in defaulted:
+            parts.append(f"тип клиента: {params.get('client_type', '?')} (по умолчанию)")
+        if "type_schedule" in defaulted:
+            parts.append("аннуитетный график (по умолчанию)")
+        if parts:
+            defaults_note = f" Параметры по умолчанию: {', '.join(parts)}."
+
+    # Fix 1.2 prefix — disclose original USD amount alongside BYN equivalent.
+    conv_prefix = ""
+    conv = result.get("currency_conversion") or {}
+    if conv.get("from") == "USD" and conv.get("amount_from") is not None:
+        rate_disp = int(round(conv.get("rate") or 3))
+        conv_prefix = (
+            f"Стоимость {int(conv['amount_from'])} долларов "
+            f"(это {int(params.get('cost', 0))} белорусских рублей "
+            f"по курсу {rate_disp} к 1). "
+        )
+
+    return (
+        f"{conv_prefix}"
+        f"Аванс {params.get('prepaid', 30)}%: {result.get('advance_sum', '?')} {currency}. "
+        f"Ежемесячный платёж: {result.get('payment_min', '?')} {currency}. "
+        f"Выкупной: {result.get('buyout_sum', '?')} {currency}. "
+        f"Общая сумма: {result.get('total', '?')} {currency}. "
+        f"Удорожание: {result.get('increase_percent', '?')}%. "
+        f"Срок: {result.get('num_payments', '?')} мес."
+        f"{defaults_note}"
+    )
+
+
 _FIELD_RU = {
     "term_months": "срок",
     "prepaid_pct": "аванс",
