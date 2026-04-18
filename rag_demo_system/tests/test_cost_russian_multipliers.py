@@ -53,11 +53,17 @@ def test_prepaid_amount_also_accepts_тысяч():
     assert has_field_signal("prepaid_amount", 16000, "16 тысяч") is True
 
 
-def test_term_months_still_requires_literal_digits():
-    # Term is small enough that callers say raw digits; don't apply the
-    # multiplier shortcut here.
+def test_term_months_accepts_digits_or_years():
+    # Fix 40b: term now accepts both "48 месяцев" and "4 года" (years-to-months
+    # conversion). Without the years path, multi-field changes like
+    # "грузовик за 50 тысяч на 7 лет" dropped the term patch because "84"
+    # was never in the utterance.
     assert has_field_signal("term_months", 48, "48 месяцев") is True
-    assert has_field_signal("term_months", 48, "срок на 4 года") is False
+    assert has_field_signal("term_months", 48, "срок на 4 года") is True
+    # Wrong year count still rejects
+    assert has_field_signal("term_months", 48, "срок на 3 года") is False
+    # Non-whole-year months still require literal digits
+    assert has_field_signal("term_months", 30, "срок на 2 года") is False  # 24 != 30
 
 
 def test_prepaid_pct_still_requires_literal_digits():

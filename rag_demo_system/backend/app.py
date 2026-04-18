@@ -1287,6 +1287,7 @@ async def _stream_voice_response(
                 "cost", "age_years", "prepaid_pct", "prepaid_amount",
                 "term_months", "type_schedule", "currency",
             )
+            from .profile_hygiene import has_field_signal as _has_signal_sticky
             for _field in _STICKY_IDENTITY_FIELDS + _STICKY_NUMERIC_FIELDS:
                 _new_val = _sa_parsed.get(_field)
                 if _new_val is None or _new_val == "":
@@ -1297,15 +1298,32 @@ async def _stream_voice_response(
                 # prepaid_pct and prepaid_amount share semantic slot "prepaid":
                 # a user-requested change via change_field="prepaid_pct" should
                 # also unlock prepaid_amount emission on the same turn, and
-                # vice-versa. Without this, switching "на 20 процентов" while
-                # classifier also emits prepaid_amount=null gets fine but
-                # switching "на 14000 рублей" with change_field="prepaid_amount"
-                # would still block a concurrent prepaid_pct recompute.
+                # vice-versa.
                 if not _is_explicit_change and _field in ("prepaid_pct", "prepaid_amount"):
                     if _sa_change_field_val in ("prepaid_pct", "prepaid_amount", "prepaid"):
                         _is_explicit_change = True
-                if _is_first_capture or _is_explicit_change:
+                # Fix 40a: multi-field utterance support. When user says
+                # "грузовик, юр.лицо, 50 тысяч, на 7 лет" classifier emits
+                # change_field for ONE field and patches for the other three.
+                # Those three have existing values (not first capture) and
+                # don't match change_field, so the sticky guard used to
+                # reject them. Unlock when utterance carries a real signal
+                # for this specific field value — that proves the user
+                # named it in this turn, it's not a stale echo.
+                _has_live_signal = False
+                if not _is_first_capture and not _is_explicit_change:
+                    try:
+                        _has_live_signal = _has_signal_sticky(_field, _new_val, message or "")
+                    except Exception:  # noqa: BLE001
+                        _has_live_signal = False
+                if _is_first_capture or _is_explicit_change or _has_live_signal:
                     _profile_patches[_field] = _new_val
+                    if _has_live_signal and not _is_explicit_change and not _is_first_capture:
+                        print(
+                            f"[Profile] multi-field unlock {_field}='{_new_val}' "
+                            f"(was '{_current_val}', literal signal in utterance)",
+                            flush=True,
+                        )
                 elif _new_val != _current_val:
                     print(
                         f"[Profile] stale {_field} patch ignored: "
@@ -1313,6 +1331,22 @@ async def _stream_voice_response(
                         f"no explicit change_field={_sa_change_field_val!r})",
                         flush=True,
                     )
+
+            # Fix 40c: prepaid slot sharing — when user switches between
+            # percentage and absolute amount (or vice versa), the counterpart
+            # field must be cleared so direct-call params don't shadow the
+            # fresh value with the stale one. Without this, user says
+            # "аванс 80 тысяч рублей" → profile now has prepaid_amount=80000
+            # but prepaid_pct=20 (old) is still set, and direct-call prefers
+            # prepaid_pct, so the calc uses 20% instead of 80000 BYN.
+            # apply_patches ignores None values, so null the counterpart
+            # directly on the profile object before merging the new value.
+            if "prepaid_pct" in _profile_patches and getattr(_profile_current, "prepaid_amount", None) is not None:
+                print(f"[Profile] clearing prepaid_amount (prepaid_pct={_profile_patches['prepaid_pct']} takes over)", flush=True)
+                _profile_current.prepaid_amount = None
+            elif "prepaid_amount" in _profile_patches and getattr(_profile_current, "prepaid_pct", None) is not None:
+                print(f"[Profile] clearing prepaid_pct (prepaid_amount={_profile_patches['prepaid_amount']} takes over)", flush=True)
+                _profile_current.prepaid_pct = None
 
             # Stale-name guard: once profile.name is set, ignore further name
             # patches (classifier hallucinates names from nouns in mid-call).
@@ -1335,11 +1369,16 @@ async def _stream_voice_response(
             try:
                 _p = session.client_profile
                 _ts = _p.type_schedule if _p.type_schedule is not None else '-'
+                # Fix 40f: use explicit `is not None` checks so 0/empty string
+                # don't render as '-'. Prior `or '-'` hid term=0 as '-', which
+                # masked a real bug for days.
+                _fmt = lambda v: v if v is not None else '-'  # noqa: E731
                 print(
-                    f"[Profile] snapshot: state={_p.state.value} name={_p.name or '-'} "
-                    f"subj={_p.subject or '-'} cost={_p.cost or '-'} {_p.currency or '-'} "
-                    f"client_type={_p.client_type or '-'} cond_new={_p.condition_new if _p.condition_new is not None else '-'} "
-                    f"term={_p.term_months or '-'} prepaid={_p.prepaid_pct if _p.prepaid_pct is not None else '-'}% "
+                    f"[Profile] snapshot: state={_p.state.value} name={_fmt(_p.name)} "
+                    f"subj={_fmt(_p.subject)} cost={_fmt(_p.cost)} {_fmt(_p.currency)} "
+                    f"client_type={_fmt(_p.client_type)} cond_new={_fmt(_p.condition_new)} "
+                    f"term={_fmt(_p.term_months)} prepaid={_fmt(_p.prepaid_pct)}% "
+                    f"prepaid_amt={_fmt(_p.prepaid_amount)} "
                     f"graph={_ts} missing={sorted(_p.missing_fields())}",
                     flush=True,
                 )
@@ -1400,11 +1439,25 @@ async def _stream_voice_response(
                     }
                 # Primary change from classifier (if any). Fix 34 guard:
                 # skip staging when classifier emitted change_field with
-                # change_value=None/empty (e.g. "ещё другая цена" — intent
-                # to change but no new value). Without this, the prompt
-                # becomes "Меняю стоимость на , остальное оставляю" with
-                # a blank hole where the new value should be.
-                if _sa_change_field and _sa_change_value not in (None, ""):
+                # change_value=None/empty.
+                # Fix 40e: for numeric fields, also require a literal signal
+                # in the utterance. Classifier sometimes emits change_value=0
+                # (or other values) on non-numeric turns — without this guard
+                # term_months gets silently set to 0, corrupting the profile.
+                _NUMERIC_CHANGE_FIELDS = {
+                    "cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years",
+                }
+                _primary_value_ok = _sa_change_value not in (None, "")
+                if _primary_value_ok and _sa_change_field in _NUMERIC_CHANGE_FIELDS:
+                    if not _has_field_signal(_sa_change_field, _sa_change_value, message or ""):
+                        print(
+                            f"[Profile] change_value signal missing — rejecting "
+                            f"{_sa_change_field}={_sa_change_value!r} "
+                            f"utterance='{(message or '')[:60]}'",
+                            flush=True,
+                        )
+                        _primary_value_ok = False
+                if _sa_change_field and _primary_value_ok:
                     _primary_old = getattr(_profile_now, _sa_change_field, None)
                     _existing[_sa_change_field] = {
                         "old": _primary_old,

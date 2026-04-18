@@ -40,7 +40,7 @@ def _normalize_client_type(v: Any) -> str | None:
         return "Физическое лицо"
     if s in {"ип", "ипэшник", "индивидуальный предприниматель", "самозанятый"}:
         return "ИП"
-    if s in {"юрлицо", "юридическое лицо", "ооо", "оао", "зао", "организация", "компания", "юридическое"}:
+    if s in {"юрлицо", "юридическое лицо", "ооо", "оао", "зао", "организация", "компания", "юридическое", "бизнес", "бизнесмен"}:
         return "Юридическое лицо"
     return None
 
@@ -59,6 +59,10 @@ _CLIENT_TYPE_CUE_RE = re.compile(
     r"юрлиц\w*|юридическ\w+|"
     r"ооо|оао|зао|"
     r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|"
+    # Fix 40d: "бизнес" / "бизнесмен" map to юр.лицо by default in Belarus
+    # context. Without this, "Нет, я бизнес." classifier-emitted client_type
+    # was dropped as cue-missing, leaving profile unset — bot re-asked.
+    r"бизнес\w*|"
     r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+"
     r")",
     re.IGNORECASE,
@@ -200,6 +204,27 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
                     re.IGNORECASE,
                 ):
                     return True
+        # Fix 40b: years-to-months conversion for term_months.
+        # User says "на 7 лет" → classifier emits term_months=84.
+        # The digits "84" never appear in the utterance, so require the
+        # whole-year equivalent to match.
+        if field == "term_months":
+            if _int > 0 and _int % 12 == 0:
+                _years = _int // 12
+                if re.search(
+                    rf"\b{_years}\s*(?:лет\b|год\w*|года\b)",
+                    utterance,
+                    re.IGNORECASE,
+                ):
+                    return True
+            # Half-year ("полтора года" → 18, "полгода" → 6)
+            if _int == 18 and re.search(r"полтора\s*года", utterance, re.IGNORECASE):
+                return True
+            if _int == 6 and re.search(r"\bполгода\b", utterance, re.IGNORECASE):
+                return True
+            # Single-word "год" without number → 12
+            if _int == 12 and re.search(r"\b(один\s+)?год\b", utterance, re.IGNORECASE):
+                return True
         return False
     # Unknown field — conservative: require explicit value string
     return str(value) in (utterance or "")
