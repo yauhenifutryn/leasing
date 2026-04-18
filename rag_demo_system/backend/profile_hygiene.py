@@ -29,7 +29,8 @@ _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     "бизнес", "бизнесмен", "микробизнес", "предприниматель",
     # condition_new
     "новый", "новая", "новое",
-    "бу", "б/у", "подержанный", "подержанная", "подержанное",
+    "бу", "б/у", "бэу", "б-у", "подержанный", "подержанная", "подержанное",
+    "старый", "старая", "старое",
     # subject (single-word slot-fill replies to "легковой или грузовой?")
     "легковой", "грузовой", "спецтехника", "оборудование",
     "недвижимость", "машина", "автомобиль", "авто",
@@ -142,8 +143,18 @@ _CURRENCY_CUE_RE = re.compile(
     r"\b(рубл\w*|руб\b|byn|blr|доллар\w*|usd|евро|eur|российск\w+|rub)\b",
     re.IGNORECASE,
 )
+# Fix 1.3 (2026-04-19) — expanded condition_new cue set to cover phonetic /
+# colloquial variants the classifier was missing: бэу (phonetic spelling),
+# б-у (dash variant), с пробегом, не новый, старый. Client complaint:
+# "не понимает слово б/у".
 _CONDITION_NEW_CUE_RE = re.compile(
-    r"\b(нов\w+|подержан\w+|б/у|бу|бывш\w+)\b",
+    r"\b("
+    r"нов\w+|подержан\w+|бывш\w+|"
+    r"б/у|б-у|бу|бэу|"
+    r"пробег\w*|"
+    r"не\s+нов\w+|"
+    r"стар(?:ый|ая|ое|ые)"
+    r")\b",
     re.IGNORECASE,
 )
 _TYPE_SCHEDULE_CUE_RE = re.compile(
