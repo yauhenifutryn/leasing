@@ -1031,6 +1031,14 @@ async def _stream_voice_response(
     # clarify gate below. Narrower than the first attempt: only fires for
     # CONVERSATION intent (TOOL intent is handled by Gate 1 downstream).
     _changed_this_turn: dict[str, Any] = {}
+    # Fix 42e: initialize classifier-parse result at function scope. When the
+    # fast-path confirm fires (state=READBACK_PENDING + "да"/"верно"/etc.),
+    # the classifier block is skipped, which previously left `_sa_parsed`
+    # undefined. Downstream references (Fix 42b uses it for intent check)
+    # then raised NameError, aborting the turn silently — so the "Всё верно"
+    # confirmation never reached _sticky_calc_ready and calc didn't fire
+    # (session bd150fd3, 2026-04-18 20:15).
+    _sa_parsed: dict[str, Any] = {}
     # Fast skip: obvious non-tool messages bypass the classifier entirely (~300ms saved)
     _msg_stripped = message.strip().lower().rstrip(".!,?")
 
@@ -1223,7 +1231,7 @@ async def _stream_voice_response(
             _raw = classify_resp.text.strip()
             _js_start = _raw.find("{")
             _js_end = _raw.rfind("}") + 1
-            _sa_parsed: dict[str, Any] = {}
+            _sa_parsed = {}
             if _js_start >= 0 and _js_end > _js_start:
                 import json as _json_classify
                 try:
