@@ -93,9 +93,14 @@ def filter_patches(
 
     out: dict[str, Any] = dict(patches)
 
-    # Drop bot name echoed as user name.
-    if isinstance(out.get("name"), str) and out["name"].strip().lower() == bot_name.lower():
-        out.pop("name")
+    # Drop bot name (or bot name + patronymic) echoed as user name.
+    # Classifier sometimes captures "Ксения Николаевна" from formal user
+    # address — we reject anything whose first token matches bot_name.
+    _raw_name = out.get("name")
+    if isinstance(_raw_name, str):
+        _name_tokens = _raw_name.strip().lower().split()
+        if _name_tokens and _name_tokens[0] == bot_name.lower():
+            out.pop("name")
 
     # Normalize / validate client_type.
     if "client_type" in out:

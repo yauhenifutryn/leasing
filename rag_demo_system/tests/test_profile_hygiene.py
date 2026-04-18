@@ -18,6 +18,23 @@ def test_drops_bot_name_as_user_name():
     assert "name" not in out
 
 
+def test_drops_bot_name_with_patronymic():
+    # Classifier sometimes captures "Ксения Николаевна" when user/TTS uses
+    # formal address. First-token match against bot_name must reject it.
+    out = filter_patches({"name": "Ксения Николаевна"}, "Ксения Николаевна, подскажите", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_bot_name_lowercase_with_patronymic():
+    out = filter_patches({"name": "ксения ивановна"}, "ксения ивановна спасибо", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_keeps_real_user_name_matching_different_first_token():
+    out = filter_patches({"name": "Николай"}, "меня зовут Николай", bot_name="Ксения")
+    assert out.get("name") == "Николай"
+
+
 def test_ipeshnik_preserved_as_ip():
     # Classifier emits "ИП" — filter should preserve it
     out = filter_patches({"client_type": "ИП"}, "я ипэшник", bot_name="Ксения")
