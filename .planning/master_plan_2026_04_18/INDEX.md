@@ -25,13 +25,17 @@ Where N is one of: 1, 2, 3, 4, 5, 6. Claude should:
 | # | File | Status | Prereqs | Effort | Priority |
 |---|---|---|---|---|---|
 | 1 | [01_pre_refactor_stability.md](01_pre_refactor_stability.md) | pending | none | ~1 day | HIGH — client-facing wins |
-| 2 | [02_structured_classifier.md](02_structured_classifier.md) | pending | none (runs in parallel to 1 if desired) | ~1 day | MEDIUM — enables 3 |
+| 2 | [02_structured_classifier.md](02_structured_classifier.md) | pending | none (parallel to 1 OK) | ~1 day | MEDIUM — enables 3 |
 | 3 | [03_architecture_refactor.md](03_architecture_refactor.md) | pending | 2 done | ~2-3 days | MEDIUM — structural |
 | 4 | [04_natural_turn_taking.md](04_natural_turn_taking.md) | pending | ideally after 3 | ~2 days | HIGH — UX polish |
-| 5 | [05_deferred_speaker_mode.md](05_deferred_speaker_mode.md) | deferred | — | ~1 day | LOW |
-| 6 | [06_deferred_self_improvement.md](06_deferred_self_improvement.md) | deferred | — | ~0.5 day | LOW |
+| 5 | [05_speaker_mode_adaptive_vad.md](05_speaker_mode_adaptive_vad.md) | pending | after 4 | ~1 day | MEDIUM — experimental |
+| 6 | [06_final_docs_and_self_improvement.md](06_final_docs_and_self_improvement.md) | pending | all above + client UAT | ~1 day | FINAL — close out plan |
 
-**Recommended execution order**: 1 → 2 → 3 → 4. Section 1 ships visible client wins fast while 2-3 cook the deeper fix.
+**Recommended execution order**: 1 → 2 → 3 → 4 → 5 → 6.
+
+- Section 1 ships visible client wins fast while 2-3 cook the deeper fix.
+- Section 5 (speaker mode) is experimental — isolated session recommended, easy-revert via env var.
+- Section 6 is the verification + docs + self-improvement close-out. It has a **verification gate** as its first phase that must pass before any docs work.
 
 ## Rollback
 
@@ -42,27 +46,26 @@ git reset --hard mvp-2026-04-18
 git push --force-with-lease origin feature/voice-pipeline
 ```
 
-Every section documents its own rollback procedure at the bottom of its file.
+Every section documents its own scoped rollback procedure at the bottom of its file.
 
 ## Skill framework choice
 
 The user decided (see memory `feedback_skill_framework_superpowers.md`):
 - **Main loop: superpowers** (brainstorming, writing-plans, executing-plans, TDD, systematic-debugging, verification-before-completion)
-- **Borrow from GSD at the right moments**: `gsd-thread` for cross-session context threads, `gsd-ship` for PR+review at merge, `gsd-map-codebase` for initial deep mapping, `gsd-forensics` if something breaks badly, `gsd-verify-work` for UAT
+- **Borrow from GSD at the right moments**: `gsd-thread`, `gsd-ship`, `gsd-map-codebase`, `gsd-forensics`, `gsd-verify-work`, `gsd-docs-update` (in Section 6)
 
 Each section specifies which skills to invoke and when.
 
 ## Client feedback tracking
 
-All sections reference `project_client_feedback_fixes.md` and ongoing client complaints. When a section closes out a specific client complaint, mark it in that memory file.
-
-## Deferred items
-
-Sections 5 and 6 are parked. Don't start them unless explicitly asked — they don't unblock anything else.
+All sections reference `project_client_feedback_fixes.md` and ongoing client complaints. Section 6's Phase 0 verification gate runs through the full complaint list against implemented fixes before docs are touched.
 
 ## Done criterion for the whole plan
 
-- Sections 1-4 all `completed` in CHECKPOINTS.md
-- Client UAT test pass (run by user, not Claude)
+- Sections 1-5 all `completed` in CHECKPOINTS.md
+- Section 6 Phase 0 verification gate: all rows PASS
+- Section 6 full UAT scenario passes live (client-tested, not just Claude)
+- Docs refreshed (README, PROJECT_LOG, session_analyzer)
 - PR merged to main
-- Memory `project_mvp_complete_2026_04_18.md` superseded by `project_v1_complete_<date>.md`
+- Final tag pushed
+- Memory `project_mvp_complete_2026_04_18.md` archived; `project_v1_complete_<date>.md` written

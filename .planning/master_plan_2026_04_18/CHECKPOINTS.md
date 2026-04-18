@@ -40,9 +40,26 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 - [ ] CP-4.5 — Pre-speech delay
 - [ ] CP-4.6 — Section closed, `turn-taking-v1` tag pushed
 
-## Sections 5 & 6
+## Section 5 — Speaker mode adaptive VAD
 
-Deferred — not tracked until explicitly picked up.
+- [ ] CP-5.0 — Multipliers validated on pilot handset+speaker call
+- [ ] CP-5.1 — `derive_rms_floor` + `SPEAKER_RMS_HEURISTIC_ENABLED` knob with unit tests
+- [ ] CP-5.2 — Ambient RMS measurement wired; per-session log line present
+- [ ] CP-5.3 — Test A (handset regression) passes — ≥10 BARGE-IN, zero ignored speech
+- [ ] CP-5.4 — Test B (speaker mode) passes — reliable barge-in, no echo false positives
+- [ ] CP-5.5 — Section closed, `speaker-mode-v1` tag pushed
+
+## Section 6 — Final: verification, docs, self-improvement
+
+- [ ] CP-6.0 — Verification gate: VERIFICATION.md committed, all rows PASS
+- [ ] CP-6.1 — Full UAT scenario passes live; `uat_<date>.log` archived
+- [ ] CP-6.2 — README.md architecture section updated
+- [ ] CP-6.3 — PROJECT_LOG.md appended with section entries
+- [ ] CP-6.4 — Deploy runbook updated (if needed)
+- [ ] CP-6.5 — session_analyzer.py extended with new fix signals
+- [ ] CP-6.6 — kb_gap_report extended
+- [ ] CP-6.7 — Obsolete memories archived; `project_v1_complete_*.md` written
+- [ ] CP-6.8 — Final tag pushed; PR opened to main
 
 ---
 
