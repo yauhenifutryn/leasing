@@ -48,8 +48,14 @@ async def _auto_exit_loop(session: Any, websocket: Any, session_id: str) -> None
             # spawned by the hybrid gate when re-entry happens.
             return
 
-        # Clear flag BEFORE emitting so re-entry is possible.
+        # Clear flags BEFORE emitting so re-entry is possible AND so the
+        # audio chunks actually play. Note: session.interrupted was set True
+        # when listen_mode was entered (to kill the then-current TTS). The
+        # Jambonz shim's chunk loop (since Fix 6) honors that flag and will
+        # drop our "Слушаю Вас" audio if we don't reset it here.
         session.listen_mode = False
+        session.interrupted = False
+        session.assistant_speaking = True  # we're about to speak
 
         # Emit "Слушаю Вас." through the same inline TTS pattern used by the
         # rest of the voice path: clean_voice_output -> synthesize_audio ->
@@ -103,6 +109,12 @@ async def _auto_exit_loop(session: Any, websocket: Any, session_id: str) -> None
                 "timings": {},
             })
         except Exception:
+            pass
+
+        # Mark us as done speaking so barge-in / VAD work correctly on the next turn.
+        try:
+            session.assistant_speaking = False
+        except Exception:  # noqa: BLE001
             pass
 
         print(
