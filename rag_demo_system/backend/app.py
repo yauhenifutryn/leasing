@@ -1049,15 +1049,41 @@ async def _stream_voice_response(
             _sa_name = _sa_parsed.get("name")
             # ── Apply to ClientProfile (single source of truth) ──
             _profile_patches: dict[str, Any] = {}
-            for _k in ("subject", "cost", "currency", "condition_new",
-                       "age_years", "prepaid_pct", "prepaid_amount",
+            _profile_current = session.client_profile
+
+            # Non-identity fields (can change freely — cost, term, prepaid, etc.)
+            for _k in ("cost", "age_years", "prepaid_pct", "prepaid_amount",
                        "term_months", "type_schedule"):
                 if _sa_parsed.get(_k) is not None:
                     _profile_patches[_k] = _sa_parsed[_k]
-            if _sa_parsed.get("client_type"):
-                # Preserve ИП distinctly; Task 4 (tools/calculator.py) translates
-                # to "Юридическое лицо" at the calculator API boundary.
-                _profile_patches["client_type"] = _sa_parsed["client_type"]
+
+            # Currency can change; user may switch USD → BYN.
+            if _sa_parsed.get("currency"):
+                _profile_patches["currency"] = _sa_parsed["currency"]
+
+            # ── Identity fields with stale-patch protection ──
+            # These shouldn't silently flip mid-session (classifier hallucination).
+            # Accept changes only when (a) the field is unset OR (b) user's
+            # explicit change_field matches this field name.
+            _STICKY_IDENTITY_FIELDS = ("client_type", "subject", "condition_new")
+            _sa_change_field_val = _sa_parsed.get("change_field")
+            for _field in _STICKY_IDENTITY_FIELDS:
+                _new_val = _sa_parsed.get(_field)
+                if _new_val is None or _new_val == "":
+                    continue
+                _current_val = getattr(_profile_current, _field, None)
+                _is_first_capture = _current_val in (None, "")
+                _is_explicit_change = (_sa_change_field_val == _field)
+                if _is_first_capture or _is_explicit_change:
+                    _profile_patches[_field] = _new_val
+                elif _new_val != _current_val:
+                    print(
+                        f"[Profile] stale {_field} patch ignored: "
+                        f"'{_new_val}' (already have '{_current_val}', "
+                        f"no explicit change_field={_sa_change_field_val!r})",
+                        flush=True,
+                    )
+
             # Stale-name guard: once profile.name is set, ignore further name
             # patches (classifier hallucinates names from nouns in mid-call).
             if _sa_name and not (session.client_profile.name or "").strip():
