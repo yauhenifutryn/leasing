@@ -35,10 +35,12 @@ def test_keeps_real_user_name_matching_different_first_token():
     assert out.get("name") == "Николай"
 
 
-def test_ipeshnik_preserved_as_ip():
-    # Classifier emits "ИП" — filter should preserve it
+def test_ipeshnik_collapsed_to_yur_litso():
+    # Fix 41a: ИП / ипэшник / самозанятый / микробизнес all collapse to
+    # "Юридическое лицо" so readback says "юр.лицо" consistent with the
+    # API mapping (Mikro Leasing accepts only Физ/Юр).
     out = filter_patches({"client_type": "ИП"}, "я ипэшник", bot_name="Ксения")
-    assert out.get("client_type") == "ИП"
+    assert out.get("client_type") == "Юридическое лицо"
 
 
 def test_currency_bare_rubli_in_belarus_is_byn():
@@ -99,10 +101,12 @@ def test_single_word_physical_passes():
     assert result == {"client_type": "Физическое лицо"}
 
 
-def test_single_word_ip_passes():
+def test_single_word_ip_collapses_to_yur_litso():
+    # Fix 41a: single-word "ИП" still passes the noise filter (enum slot-fill
+    # whitelist) but the normalized result is "Юридическое лицо".
     patches = {"client_type": "ИП"}
     result = filter_patches(patches, "ИП")
-    assert result == {"client_type": "ИП"}
+    assert result == {"client_type": "Юридическое лицо"}
 
 
 def test_single_word_new_passes():

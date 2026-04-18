@@ -76,11 +76,12 @@ def test_biznes_normalized_to_yur_litso() -> None:
     assert out.get("client_type") == "Юридическое лицо"
 
 
-def test_biznes_from_ip_classifier_still_accepted() -> None:
-    # Classifier may emit ИП for "бизнес"; cue now matches, so hygiene accepts.
+def test_biznes_from_ip_classifier_collapses_to_yur_litso() -> None:
+    # Fix 41a: classifier may emit "ИП" for "бизнесмен"; hygiene accepts
+    # the cue match and normalizes the result to Юр.лицо (single source of
+    # truth, matches what the calculator API expects).
     out = filter_patches({"client_type": "ИП"}, "Нет, я бизнесмен.")
-    # Accepted because cue matches — exact normalization is per classifier.
-    assert "client_type" in out
+    assert out.get("client_type") == "Юридическое лицо"
 
 
 def test_unrelated_utterance_still_drops_client_type() -> None:
@@ -91,13 +92,25 @@ def test_unrelated_utterance_still_drops_client_type() -> None:
 def test_mikrobiznes_single_word_accepted() -> None:
     # Session a685ce41: "Микробизнес." was 1-word + no cue match, dropped.
     # After hotfix: enum-slot-fill whitelist + cue regex without \b for бизнес.
+    # Fix 41a: normalized result is Юр.лицо (ИП collapsed).
     assert utterance_has_client_type_cue("Микробизнес.") is True
     out = filter_patches({"client_type": "ИП"}, "Микробизнес.")
-    assert out.get("client_type") == "ИП"
+    assert out.get("client_type") == "Юридическое лицо"
 
 
 def test_malyy_biznes_accepted() -> None:
     assert utterance_has_client_type_cue("малый бизнес") is True
+
+
+def test_samozanyaty_collapses_to_yur_litso() -> None:
+    # Fix 41a: самозанятый was previously ИП; now Юр.лицо (single source).
+    out = filter_patches({"client_type": "ИП"}, "я самозанятый")
+    assert out.get("client_type") == "Юридическое лицо"
+
+
+def test_predprinimatel_collapses_to_yur_litso() -> None:
+    out = filter_patches({"client_type": "ИП"}, "я предприниматель")
+    assert out.get("client_type") == "Юридическое лицо"
 
 
 # ── 40e: has_field_signal rejects change_value=0 without literal 0 ────

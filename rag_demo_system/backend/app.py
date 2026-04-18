@@ -1169,8 +1169,11 @@ async def _stream_voice_response(
                     "НЕ угадывай из контекста (например, 'хочу машину' НЕ значит 'Физическое лицо'). "
                     "Если явного слова нет — ставь null.\n"
                     "  Явные триггеры: 'физлицо/физическое' -> 'Физическое лицо'; "
-                    "'ИП/индивидуальный предприниматель/самозанятый' -> 'ИП'; "
-                    "'юрлицо/юридическое/ООО/ОАО/ЗАО/организация/компания/от компании/на компанию' -> 'Юридическое лицо'.\n"
+                    "все остальные юридические формы — ИП / индивидуальный предприниматель / "
+                    "самозанятый / юрлицо / юридическое / ООО / ОАО / ЗАО / организация / "
+                    "компания / от компании / на компанию / бизнес / бизнесмен / микробизнес / "
+                    "предприниматель -> 'Юридическое лицо'. "
+                    "Калькулятор принимает только два типа: 'Физическое лицо' и 'Юридическое лицо'.\n"
                     "- condition_new: 'новый/новая' -> 1; 'б/у/подержанный/с пробегом' -> 0.\n"
                     "- age_years: при 'б/у' + число лет (например, '2018 года' -> сколько лет сейчас).\n"
                     "- prepaid_pct: если клиент назвал процент (например, '20 процентов', 'двадцать процентов').\n"
@@ -1453,10 +1456,27 @@ async def _stream_voice_response(
                 # in the utterance. Classifier sometimes emits change_value=0
                 # (or other values) on non-numeric turns — without this guard
                 # term_months gets silently set to 0, corrupting the profile.
+                # Fix 41b: reject change_field values that aren't real profile
+                # fields. Classifier sometimes emits change_field="all" or
+                # similar bucket names which leaked into "Меняю all на ..."
+                # in the readback. Only whitelisted field names allowed.
+                _VALID_CHANGE_FIELDS = {
+                    "subject", "cost", "currency", "client_type", "condition_new",
+                    "age_years", "term_months", "type_schedule", "prepaid_pct",
+                    "prepaid_amount", "prepaid",
+                }
                 _NUMERIC_CHANGE_FIELDS = {
                     "cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years",
                 }
                 _primary_value_ok = _sa_change_value not in (None, "")
+                if _sa_change_field and _sa_change_field not in _VALID_CHANGE_FIELDS:
+                    print(
+                        f"[Profile] rejecting unknown change_field={_sa_change_field!r} "
+                        f"(not a valid profile field)",
+                        flush=True,
+                    )
+                    _primary_value_ok = False
+                    _sa_change_field = None  # prevent downstream use
                 if _primary_value_ok and _sa_change_field in _NUMERIC_CHANGE_FIELDS:
                     if not _has_field_signal(_sa_change_field, _sa_change_value, message or ""):
                         print(
@@ -2211,7 +2231,7 @@ async def _stream_voice_response(
                 f"{memory_block}"
                 f"Клиент хочет рассчитать лизинг. {_reason}. "
                 "Если сообщение клиента действительно связано с расчётом, "
-                "спроси КРАТКО тип клиента: физическое лицо, ИП или юридическое лицо. "
+                "спроси КРАТКО тип клиента: физическое или юридическое лицо. "
                 "Если сообщение не про расчёт, просто ответь на вопрос клиента.\n\n"
                 f"Сообщение клиента: {message}"
             )},

@@ -15,11 +15,11 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     if fields & {"client_type", "subject"}:
         if "client_type" in fields and "subject" in fields:
             return (
-                "Подскажите, пожалуйста, тип клиента, физическое лицо, ИП или юридическое, "
+                "Подскажите, пожалуйста, тип клиента: физическое или юридическое лицо, "
                 "и что именно хотите в лизинг: машину, оборудование или что-то ещё?"
             )
         if "client_type" in fields:
-            return "Вы физическое лицо, ИП или юридическое лицо?"
+            return "Вы физическое или юридическое лицо?"
         return "Что планируете брать в лизинг, машину, оборудование, спецтехнику или что-то другое?"
 
     if fields & {"cost", "currency", "condition_new"}:
