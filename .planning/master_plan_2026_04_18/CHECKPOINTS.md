@@ -5,10 +5,10 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 ## Section 1 — Pre-refactor stability
 
-- [ ] CP-1.1 — Fix 1.1 (deterministic numeric rendering) shipped + live-verified
-- [ ] CP-1.2 — Fix 1.2 (USD disclosure) shipped + live-verified
-- [ ] CP-1.3 — Fix 1.3 (б/у robustness) shipped + live-verified
-- [ ] CP-1.4 — Fix 1.4 (VAD bump 500→900) shipped + live-verified
+- [~] CP-1.1 — Fix 1.1 shipped (454dac8), awaiting live verification
+- [~] CP-1.2 — Fix 1.2 shipped (4efa723), awaiting live verification
+- [~] CP-1.3 — Fix 1.3 shipped (a8f2cf3), awaiting live verification
+- [~] CP-1.4 — Fix 1.4 shipped (f4041ac), awaiting live verification
 - [ ] CP-1.5 — Section closed, `stability-v1` tag pushed
 
 ## Section 2 — Structured classifier
@@ -68,5 +68,9 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP | Commit SHA | Date | Notes |
 |---|---|---|---|
 | baseline | a20aa4f | 2026-04-18 | MVP stable; tag `mvp-2026-04-18` |
+| CP-1.3 | a8f2cf3 | 2026-04-19 | б/у variant recognition — regex + classifier prompt + Whisper vocab |
+| CP-1.4 | f4041ac | 2026-04-19 | VAD silence 500→900 across all 7 sites (kills 500/700 inconsistency) |
+| CP-1.2 | 4efa723 | 2026-04-19 | USD dual-disclosure in readback / SMS / calc summary |
+| CP-1.1 | 454dac8 | 2026-04-19 | render_calc_result extracted; [deterministic_readback] marker; lint guard |
 
 (Append rows as checkpoints complete.)
