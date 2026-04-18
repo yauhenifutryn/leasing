@@ -36,8 +36,13 @@ def test_classifier_max_tokens_bound():
     # (the SessionAgent prompt itself is ~4500 chars; add headroom for the
     # call_openai_compatible args block that follows).
     block = src[idx : idx + 8000]
-    assert "max_tokens=140" in block, (
-        "Fix 18 regression: classifier max_tokens is not 140. "
+    # max_tokens must stay <=180 to keep latency bounded. 160 is the current
+    # safe value (full JSON ~140 tokens + 20 headroom).
+    import re as _re
+    m = _re.search(r"max_tokens\s*=\s*(\d+)", block)
+    assert m, "max_tokens line missing in classifier block"
+    assert int(m.group(1)) <= 180, (
+        f"Fix 18 regression: classifier max_tokens={m.group(1)} exceeds 180 cap. "
         "Larger cap allows longer generations that hurt latency."
     )
 

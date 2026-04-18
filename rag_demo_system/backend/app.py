@@ -226,10 +226,15 @@ class _JambonzWebSocketShim:
             # actually hears (e.g. "улица" instead of "ул."). Upstream producers
             # emit whole sentences/phrases here (not per-token), so abbreviation
             # expansion works correctly on each delta.
+            _monitor_text = clean_voice_output(data.get("delta", "") or "")
+            # Strip trailing TTS-pause artifacts that look ugly in written form:
+            # stray commas/ellipsis at the end (from LLM pauses or interrupt-
+            # truncated sentences). Spoken audio is unaffected.
+            _monitor_text = re.sub(r"[,…\s]+$", "", _monitor_text)
             await broadcast_sip_event({
                 "type": "sip.llm.sentence",
                 "call_id": self._session_id,
-                "text": clean_voice_output(data.get("delta", "") or ""),
+                "text": _monitor_text,
             })
             return
 
@@ -946,7 +951,7 @@ async def _stream_voice_response(
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=140,
+                max_tokens=160,
                 timeout_sec=4,
             )
             _raw = classify_resp.text.strip()
