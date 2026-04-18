@@ -1207,7 +1207,8 @@ async def _stream_voice_response(
     # --- Await RAG retrieval (started before classifier, should be done by now) ---
     retrieval = await _rag_task
     t_retrieval_done = time.time()
-    print(f"[Latency:{session_id[:8]}] RAG: {(t_retrieval_done - _t_rag_start)*1000:.0f}ms (parallel)", flush=True)
+    _t_rag_ms = (t_retrieval_done - _t_rag_start) * 1000
+    print(f"[Latency:{session_id[:8]}] RAG: {_t_rag_ms:.0f}ms (parallel)", flush=True)
     timings: dict[str, Any] = dict(retrieval.get("timings") or {})
     final_chunks = retrieval.get("final") or []
     context_block = "\n\n".join(
@@ -2129,6 +2130,42 @@ async def _stream_voice_response(
         state.update(chat_session)
         session.turn_count += 1
         print(f"[Jambonz:{session_id[:8]}] Transcript saved ({len(all_sentences)} sentences{', interrupted' if session.interrupted else ''})", flush=True)
+
+    # ── Per-turn latency breakdown ──
+    # Grep-friendly single-line summary for outlier analysis. One line per turn.
+    try:
+        _t_now = time.time()
+        _lat_classifier_ms = int(_t_classify_ms) if '_t_classify_ms' in locals() and _t_classify_ms is not None else -1
+        _lat_rag_ms = int(_t_rag_ms) if '_t_rag_ms' in locals() and _t_rag_ms is not None else -1
+        _lat_llm_first_ms = (
+            int((t_llm_first_token - t_speech_stopped) * 1000)
+            if t_llm_first_token is not None else -1
+        )
+        _lat_tts_first_ms = (
+            int((t_tts_first_chunk - t_speech_stopped) * 1000)
+            if t_tts_first_chunk is not None else -1
+        )
+        _lat_total_e2e_ms = int((_t_now - t_speech_stopped) * 1000)
+        _lat_user_len = len(llm_messages[-1].get("content", "")) if llm_messages else 0
+        _lat_out_tokens = sum(1 for _s in all_sentences for _ in _s.split())  # approximate
+        _lat_path = (
+            "rag" if (not tool_schemas or not needs_tool) and _direct_tool_result is None
+            else ("direct" if _direct_tool_result is not None else "tool")
+        )
+        print(
+            f"[LATENCY:{session_id[:8]}] "
+            f"classifier_ms={_lat_classifier_ms} "
+            f"rag_ms={_lat_rag_ms} "
+            f"llm_first_ms={_lat_llm_first_ms} "
+            f"tts_first_ms={_lat_tts_first_ms} "
+            f"total_e2e_ms={_lat_total_e2e_ms} "
+            f"user_len={_lat_user_len} "
+            f"out_tokens={_lat_out_tokens} "
+            f"path={_lat_path}",
+            flush=True,
+        )
+    except Exception as _lat_exc:  # noqa: BLE001
+        print(f"[LATENCY:{session_id[:8]}] log failed: {_lat_exc}", flush=True)
     # Wait for FreeSWITCH to finish playing buffered audio
     # Jambonz shim tracks bytes sent; 24kHz * 2 = 48000 bytes/sec
     if hasattr(websocket, 'audio_bytes_sent') and websocket.audio_bytes_sent > 0 and not session.interrupted:
