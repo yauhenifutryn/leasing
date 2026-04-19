@@ -156,6 +156,21 @@ def _format_cost_phrase(profile: Any) -> str:
     return f"стоимость {cost_str} {currency_str}".rstrip()
 
 
+def _age_noun(n: int) -> str:
+    """Russian numeric agreement for "год": 1 год / 2-4 года / 5+ лет.
+
+    Handles teens correctly (11-14 use "лет", not "год"/"года")."""
+    last_two = n % 100
+    last = n % 10
+    if 10 <= last_two <= 20:
+        return "лет"
+    if last == 1:
+        return "год"
+    if 2 <= last <= 4:
+        return "года"
+    return "лет"
+
+
 def build_readback_text(profile: Any) -> str:
     """Produce the readback confirmation string listing all calculator params."""
     subj = profile.subject or "предмет лизинга"
@@ -164,6 +179,15 @@ def build_readback_text(profile: Any) -> str:
         else "б/у" if profile.condition_new == 0
         else "—"
     )
+    # Fix 1.11 (2026-04-19) — when condition_new=0, age_years is a required
+    # calculator input. Live call 22028754 exposed that the readback
+    # omitted it: client confirmed "Верно" on a parameter set they never
+    # heard (age=5 was in the profile, never spoken). Audit-critical
+    # because "no silent inputs to the calculator before confirmation".
+    cond_phrase = cond
+    if profile.condition_new == 0 and profile.age_years is not None:
+        age_n = int(profile.age_years)
+        cond_phrase = f"{cond}, возраст {age_n} {_age_noun(age_n)}"
     if profile.prepaid_pct is not None:
         prepaid = f"{int(profile.prepaid_pct)}%"
     elif profile.prepaid_amount is not None:
@@ -179,7 +203,7 @@ def build_readback_text(profile: Any) -> str:
     client_type_str = profile.client_type or ""
     term_str = str(profile.term_months) if profile.term_months is not None else "—"
     return (
-        f"Давайте подтвердим параметры: {subj}, {cond}, {cost_phrase}, "
+        f"Давайте подтвердим параметры: {subj}, {cond_phrase}, {cost_phrase}, "
         f"{client_type_str}, срок {term_str} месяцев, аванс {prepaid}, "
         f"график {sched}. Всё верно?"
     )
