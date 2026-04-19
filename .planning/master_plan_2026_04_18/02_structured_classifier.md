@@ -68,6 +68,15 @@ Note `condition_new=1` (new car) — age is not even relevant to the calculator 
 
 **Implication for this section's scope:** Pydantic schema as specced in 2.1 constrains enum sets and numeric ranges but does NOT prevent hallucinated-yet-schema-valid extraction. A second layer is needed.
 
+**E-Codex — additional prompt-contract drift, surfaced by independent review 2026-04-19.**
+
+- The classifier prompt's `client_type` schema at `rag_demo_system/backend/app.py:1146-1147` still advertises `"ИП"` as a valid value, while the extraction rule at lines 1181-1189 tells the model to collapse all business forms (ИП, самозанятый, etc.) to `"Юридическое лицо"`. `ClientProfile` accepts `"ИП"` as a `ClientType` literal (`session.py:15`). That's three sources of truth, all disagreeing. Pydantic will reify whichever one Claude encodes into `ClassifierOutput`, but the prompt the model reads is self-contradictory. **2.1 must pick one answer** — recommended: drop ИП from both the schema and the ClientType literal, keep only "Физическое лицо" and "Юридическое лицо" (matches calculator payload).
+- The classifier prompt's `action` enum at `app.py:1159` lists only `"calculate"|"recalculate"|"sms"|"clarify"|"confirm"`, but downstream orchestrator branches at `app.py:1592-1594` and `2321-2339` require `"change_param"`, `"clarify_client_type"`, and `"invalid_param"`. Model cannot emit what it isn't told about. **2.1 must list the full downstream vocabulary** or **2.1's design must consciously fold the missing actions back into the 5 advertised ones** and document the fold.
+
+**E-Codex-2 — READBACK_PENDING deny-with-correction leaks ungrounded hints.**
+
+The staging path at `rag_demo_system/backend/app.py:1830-1843` takes raw classifier hints that differ from profile and pushes them into `pending_change` without running through `has_field_signal(...)`. This is a second ingress for hallucinated fields, **independent from** the implicit-change bug Claude called out (E1/E4). If Section 2 ships with schema-grounded output but this path still consumes raw hints, it's still vulnerable. **Requirement:** every state gate must consume only schema-grounded output post-2.3b — no raw `_sa_parsed.get(...)` reads remain in app.py's state-gate regions.
+
 ## Scope
 
 ### 2.1 — Define `ClassifierOutput` Pydantic model

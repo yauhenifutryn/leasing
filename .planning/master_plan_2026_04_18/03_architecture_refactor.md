@@ -101,6 +101,8 @@ Move these to `backend/profile_state.py` (pure, no side effects, no I/O):
 - State-gate decisions (current: gates 3/4 inline)
 - Completeness checks (current: `is_complete_for_calc`) — already on ClientProfile, keep
 
+**Target block (Codex review 2026-04-19):** the always-on state-gate body at `rag_demo_system/backend/app.py:1785-1917` is the specific code region `apply_turn` subsumes. It owns READBACK denial, CHANGE_PENDING confirmation, and the `_just_confirmed_this_turn` / `_change_staged_this_turn` bookkeeping flags that the original orchestrator-refactor memo flagged as code smell. The existing Section 3 scope says "state machine drives the action, not side effects of gate ordering" but did not name the block — naming it here removes ambiguity during the refactor and makes it trivial to verify on completion (`grep -n "_just_confirmed_this_turn" backend/app.py` must return 0, `grep -n "apply_turn" backend/app.py` must return 1).
+
 Each function gets unit tests that lock in current behavior. Run full regression before moving to 3.B.
 
 ### Phase 3.B — Define `TurnResult` action ADT
