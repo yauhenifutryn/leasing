@@ -5,12 +5,12 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 ## Section 1 — Pre-refactor stability
 
-- [~] CP-1.1 — Fix 1.1 shipped (454dac8), awaiting live verification
-- [~] CP-1.2 — Fix 1.2 shipped (4efa723), awaiting live verification
-- [x] CP-1.3 — Fix 1.3 shipped (a8f2cf3), live-verified 2026-04-19 ("БУ мотоцикл" → condition_new=0 first turn)
-- [~] CP-1.4 — Fix 1.4 shipped (f4041ac), awaiting live verification (note: adaptive successor = Section 4)
-- [~] CP-1.5b — Fix 1.5 (age_years clarify, 15536d2) shipped in response to 2026-04-19 live call regression; awaiting re-verification
-- [ ] CP-1.5 — Section closed, `stability-v1` tag pushed
+- [x] CP-1.1 — Fix 1.1 (454dac8), [deterministic_readback] marker confirmed on calls 205add5a, 674e3957, 1e30bfee, 22028754, 743c1a0e, 9ec50128
+- [x] CP-1.2 — Fix 1.2 (4efa723), SMS body USD disclosure verified on call 1e30bfee; post-calc summary verified (with expected E3 LLM-paraphrase caveat)
+- [x] CP-1.3 — Fix 1.3 (a8f2cf3), "БУ мотоцикл" / "бэу-машину" → condition_new=0 first turn, calls c422f14b + 9ec50128
+- [x] CP-1.4 — Fix 1.4 (f4041ac), VAD 900ms live (Section 4 is the adaptive successor)
+- [x] CP-1.5b — Fix 1.5 + 1.11 + 1.12 + 1.13 (15536d2, c630fa8, 0ed4b2e), all live-verified on call 9ec50128 (age clarify fires, readback includes age, no raw field names)
+- [x] CP-1.5 — Section closed, `stability-v1` tag pushed 2026-04-19 at commit 0ed4b2e
 
 ## Section 2 — Structured classifier
 
