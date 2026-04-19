@@ -70,6 +70,52 @@ def test_byn_only_readback_unchanged() -> None:
     assert txt.count("60000") == 1
 
 
+def test_usd_readback_pre_conversion_discloses_both() -> None:
+    """Fix 1.6 — client quoted USD, DirectTool hasn't fired yet. Readback
+    must still speak both amounts so the caller knows BYN will be used
+    downstream. Observed 2026-04-19 live call: bare "120000 USD" in
+    readback confused the caller who did not realise conversion was
+    coming."""
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=120000.0,         # still USD here, DirectTool not fired
+        currency="USD",
+        condition_new=1,
+        term_months=36,
+        type_schedule="0",
+        prepaid_pct=30.0,
+        # original_cost / original_currency intentionally None at this stage
+    )
+    txt = build_readback_text(p)
+    assert "120000" in txt
+    assert "долларов" in txt
+    # 120000 * 3 = 360000 is the MVP-rate BYN equivalent.
+    assert "360000" in txt, f"BYN equivalent missing: {txt}"
+    assert "рубл" in txt
+    assert "3 к 1" in txt or "курсу 3" in txt
+
+
+def test_usd_readback_legal_entity_stays_usd() -> None:
+    """Юрлицо can settle in USD directly — no conversion happens, no
+    dual-disclosure should appear."""
+    p = ClientProfile(
+        client_type="Юридическое лицо",
+        subject="Легковой автомобиль",
+        cost=120000.0,
+        currency="USD",
+        condition_new=1,
+        term_months=36,
+        type_schedule="0",
+        prepaid_pct=30.0,
+    )
+    txt = build_readback_text(p)
+    # Should say USD, should NOT invent a BYN conversion the caller isn't
+    # going to see on the invoice.
+    assert "USD" in txt or "долларов" in txt
+    assert "рубл" not in txt, f"юрлицо readback leaked BYN disclosure: {txt}"
+
+
 def test_sms_body_usd_disclosure() -> None:
     result = {
         "ok": True,

@@ -55,24 +55,57 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     return "Уточните параметры расчёта, пожалуйста."
 
 
+# MVP hardcoded USD->BYN rate; must stay in sync with settings.tools.usd_byn_rate
+# and the classifier prompt at app.py:~1176. When this rate is ever pulled from
+# a real FX source (see project_calculator_production_backlog memory), move
+# this constant to settings and thread through here.
+_USD_BYN_RATE_MVP = 3
+
+
 def _format_cost_phrase(profile: Any) -> str:
     """Render the cost portion of the readback.
 
-    Fix 1.2 (2026-04-19): when the profile carries `original_currency="USD"`
-    (set by the direct-call USD -> BYN conversion path), speak both amounts
-    so the client can reconcile what they said with what the calculator saw.
+    Dual-disclosure rules for USD cost (Физическое лицо flow):
+
+      1. Post-conversion (the DirectTool USD->BYN branch already ran and
+         populated `profile.original_cost` + `profile.original_currency`):
+         speak both amounts using the actual applied rate.
+      2. Pre-conversion (classifier just captured cost=N, currency='USD'
+         but the profile is not yet at CONFIRMED so DirectTool has not
+         fired): speak both amounts using the MVP hardcoded 3:1 rate so
+         the readback itself discloses the conversion the client is about
+         to confirm. Observed 2026-04-19 live call: without this, readback
+         said bare "120000 USD" and the caller did not realise BYN figures
+         would be used for the calculation.
+
     TTS will convert the digits to Russian words via voice_adapters, e.g.
     "20000 долларов" -> "двадцать тысяч долларов".
     """
     orig_cur = getattr(profile, "original_currency", None)
     orig_cost = getattr(profile, "original_cost", None)
-    cost_str = f"{int(profile.cost)}" if profile.cost else "—"
+
+    # 1) Post-conversion readback (cost is already BYN, originals on the profile).
     if orig_cur == "USD" and orig_cost is not None and profile.cost:
-        rate = int(round(profile.cost / orig_cost)) if orig_cost else 3
+        rate = int(round(profile.cost / orig_cost)) if orig_cost else _USD_BYN_RATE_MVP
+        cost_str = f"{int(profile.cost)}"
         return (
             f"стоимость {int(orig_cost)} долларов "
             f"(это {cost_str} белорусских рублей по курсу {rate} к 1)"
         )
+
+    # 2) Pre-conversion readback (Физ лицо + USD, DirectTool hasn't run yet).
+    is_phys = (profile.client_type or "") == "Физическое лицо"
+    if is_phys and (profile.currency or "") == "USD" and profile.cost:
+        rate = _USD_BYN_RATE_MVP
+        usd = int(profile.cost)
+        byn = usd * rate
+        return (
+            f"стоимость {usd} долларов "
+            f"(это {byn} белорусских рублей по курсу {rate} к 1)"
+        )
+
+    # Legacy single-currency path (BYN-only, or юрлицо with any currency).
+    cost_str = f"{int(profile.cost)}" if profile.cost else "—"
     currency_str = profile.currency or ""
     return f"стоимость {cost_str} {currency_str}".rstrip()
 
