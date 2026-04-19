@@ -49,6 +49,47 @@ def apply_turn(
 - State machine drives the action, not side effects of gate ordering
 - Orchestrator becomes: call classifier → call apply_turn → execute action → log
 
+## Evidence from live calls 2026-04-19 (Section 1 testing)
+
+Session `205add5a` exposed two structural failures this refactor must close, both unfixable with more gate-patches and both outside Section 1's scope:
+
+**E3 — LLM paraphrase strips deterministic content.**
+
+Fix 1.1 (commit `454dac8`) made the post-calc voice summary deterministic via `render_calc_result` in `profile_prompts.py`. Log confirms the renderer emitted the full string with USD prefix:
+
+```
+[deterministic_readback] source=render_calc_result session=205add5a chars=226
+[DirectTool] presenting: Стоимость 120000 долларов (это 360000 белорусских рублей по курсу 3 к 1). Аванс 30.0%: 108000.0 BYN.
+```
+
+Yet what the client actually heard on the call (TTS of LLM paraphrase of that string):
+
+> "Аванс составляет 108 тысяч рублей, ежемесячный платёж 10 635 рублей, а общая сумма сделки 494 459 рублей."
+
+The USD disclosure ("Стоимость 120000 долларов …") was dropped by the LLM. The call site at `rag_demo_system/backend/app.py:~2384` still hands `_result_summary` to the LLM with the instruction "Назови аванс, ежемесячный платёж и общую сумму" — the LLM obeys that narrower instruction and discards the leading sentence. Fix 1.1 only made the *input* deterministic; the *output* is still LLM-authored.
+
+**Refactor requirement:** post-calc TTS must be driven directly from `render_calc_result` output, not from an LLM paraphrase of it. Either:
+- Route the calc-result summary straight to TTS (skip LLM for this turn), OR
+- Keep the LLM in the loop but strictly for tone/empathy markers, structured as a prompt that *appends to* rather than replaces the deterministic body.
+
+This should live inside `apply_turn`'s `FireCalc` action handling — that action returns a deterministic text payload and the orchestrator's `execute_action` sends it verbatim to TTS.
+
+**E4 — Implicit-change auto-apply from a hallucinated classifier turn.**
+
+Same session, `205add5a`, turn 11 after a successful readback confirm:
+
+```
+[SessionAgent] raw={"intent": "CONVERSATION", "subject": "Прочий транспорт", ...}
+[Profile] stale subject patch ignored: 'Прочий транспорт' ...
+[Profile] snapshot: state=READBACK_PENDING ... → CHANGE_PENDING
+```
+
+The hygiene gate correctly dropped the hallucinated `subject` patch, but the implicit-change staging block (`[Profile] CHANGE_PENDING (implicit)` emitted later) still captured it and produced a "Меняю предмет лизинга на Прочий транспорт" change-confirm. The next classifier turn had `is_confirmation: true` (from the caller saying "Микро Лизинг") and the change applied — calc subsequently ran on `subject="Прочий транспорт"` despite the caller having confirmed `"Легковой автомобиль"` one turn earlier.
+
+**Refactor requirement:** the implicit-change pathway and the sticky-patch pathway must go through the SAME grounded-patch set. Today they divide responsibility: hygiene owns the primary patches, staging has its own `has_field_signal` check, and the two can disagree. In `apply_turn`, there is one `grounded_patches` set computed up-front (Section 2.3b's Option A), and every downstream decision — primary apply, staging, implicit-change, change-confirm — reads from the same set.
+
+This supersedes Fix 40b's `multi-field unlock` logic at `app.py` (currently spread across ~4 call sites) and the `[Profile] CHANGE_PENDING (implicit)` path (around app.py emitting that log line).
+
 ## Scope (phased execution)
 
 ### Phase 3.A — Extract pure functions first

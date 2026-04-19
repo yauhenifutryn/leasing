@@ -39,6 +39,35 @@ grep -r "response_format\|guided_json\|guided_regex" /ephemeral/leasing/rag_demo
 grep -n "classify_resp\|classifier" backend/app.py | head -20
 ```
 
+## Evidence from live calls 2026-04-19 (Section 1 testing)
+
+Two live calls (SIP sessions `c422f14b`, `205add5a`) exposed failure modes this section must close. Raw logs quoted from `.state/backend.log`:
+
+**E1 — Classifier emits a valid enum value from an utterance with no matching signal.**
+
+Session `205add5a`, turn 11 — after a successful readback, Whisper decoded the user saying our own brand name as "Микро Лизинг". Classifier response:
+
+```
+[SessionAgent] raw={"intent": "CONVERSATION", "subject": "Прочий транспорт", ...}
+```
+
+`profile_hygiene.py:126 utterance_has_subject_cue()` correctly dropped the patch (`[Profile] stale subject patch ignored: 'Прочий транспорт'`), but the downstream implicit-change staging path still picked it up and emitted a "Меняю предмет лизинга на Прочий транспорт" readback. **Pydantic alone will not prevent this** — "Прочий транспорт" is a valid enum value. What's missing is an *utterance-grounding* check inside the schema itself (or immediately after model_validate).
+
+**E2 — Same failure on two other enum fields in the same session.**
+
+- `type_schedule: "1"` emitted from utterance "120 000 долларов новую" (no graph word). Profile log:
+  ```
+  [Profile] patches_post_filter={'condition_new': 1, 'cost': 120000, 'type_schedule': '1', 'currency': 'USD'}
+  ```
+- `age_years: 3` emitted from "Три года, аванс 30%, и всё-таки давай аннуитетный график" — client meant `term_months=36`, classifier ALSO assigned 3 to age_years. Profile log:
+  ```
+  [Profile] patches_post_filter={'age_years': 3, 'prepaid_pct': 30, 'term_months': 36, 'type_schedule': '0'}
+  ```
+
+Note `condition_new=1` (new car) — age is not even relevant to the calculator for new equipment. A Pydantic cross-field validator could flag this: "age_years only meaningful when condition_new==0".
+
+**Implication for this section's scope:** Pydantic schema as specced in 2.1 constrains enum sets and numeric ranges but does NOT prevent hallucinated-yet-schema-valid extraction. A second layer is needed.
+
 ## Scope
 
 ### 2.1 — Define `ClassifierOutput` Pydantic model
@@ -104,6 +133,20 @@ if parsed:
 ```
 
 Remove the type-guard prints (`if _sa_parsed.get("prepaid_pct") is not None` etc) since Pydantic handled it.
+
+### 2.3b — Add utterance-grounding layer (NEW — added 2026-04-19 from live-call evidence)
+
+Pydantic constrains the enum *set* but not whether the classifier's extraction matched something the user actually said. Today's call `205add5a` emitted three schema-valid yet utterance-ungrounded fields in a single session (E1/E2 above).
+
+Two options for where this layer lives:
+
+**Option A — Pydantic post-validate step inside `classifier_schema.py`.** Pass `utterance` as a context dict to `model_validate(data, context={"utterance": msg})`. Use `@model_validator(mode="after")` on `ClassifierOutput` to null out enum fields whose cue isn't present in the utterance. Reuses the regex authorities already in `profile_hygiene.py` (`utterance_has_subject_cue`, `utterance_has_client_type_cue`, `_CONDITION_NEW_CUE_RE`, `_TYPE_SCHEDULE_CUE_RE`, `_CURRENCY_CUE_RE`). Pros: one place for all classifier validation, ugly extractions never leave the schema. Cons: couples schema file to regex module.
+
+**Option B — Keep `profile_hygiene.filter_patches` as the authority and run it on the Pydantic-validated dict.** This is closer to current flow. Pros: less churn. Cons: schema and grounding split across two files; staging path (`app.py` around `[Profile] extras: dropping ...`) still needs its own duplicate grounding check — the source of the "Прочий транспорт" implicit-change leak in session `205add5a`.
+
+**Recommendation:** Option A. Move the regex authorities to the schema module (or have the schema import them). Then the staging path can `ClassifierOutput.model_validate(raw, context={"utterance": msg})` and trust that ungrounded fields are already `None`. Kills the "dropped by hygiene but picked up by staging" divergence.
+
+Also add a `@model_validator` for the cross-field rule surfaced by E2: `age_years` must be `None` when `condition_new in (None, 1)`. Today's classifier emits `age_years=3` from "Три года" intended as term.
 
 ### 2.4 — Remove the `change_field` whitelist guard (Fix 41b)
 
