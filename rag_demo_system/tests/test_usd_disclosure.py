@@ -96,6 +96,58 @@ def test_usd_readback_pre_conversion_discloses_both() -> None:
     assert "3 к 1" in txt or "курсу 3" in txt
 
 
+def test_fractional_rate_readback_math_matches_narration(monkeypatch) -> None:
+    """Fix 1.9 — Codex adversarial review found that a fractional
+    USD_BYN_RATE (e.g. 3.25) caused the pre-conversion readback to
+    compute BYN with an int-rounded rate (x3) while narrating "по курсу 3
+    к 1" — producing 360000 for a 120000 USD quote while the actual
+    calculator conversion produced 390000. Readback must either show the
+    precise math or say the precise rate; silent drift is a financial
+    UX bug.
+    """
+    # Bypass the settings cache so we can inject a fractional rate.
+    import backend.profile_prompts as pp
+    monkeypatch.setattr(pp, "_USD_BYN_RATE_CACHE", 3.25, raising=False)
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=120000.0,
+        currency="USD",
+        condition_new=1,
+        term_months=36,
+        type_schedule="0",
+        prepaid_pct=30.0,
+    )
+    txt = build_readback_text(p)
+
+    # 120000 * 3.25 = 390000. Int-rounded rate path produces 360000 — bug.
+    assert "390000" in txt, f"pre-conversion BYN amount must use the exact rate: {txt}"
+    assert "360000" not in txt, f"int-rounded rate silently diverged: {txt}"
+    # Narration must expose the real rate, not a rounded "3 к 1".
+    assert "3.25 к 1" in txt, f"fractional rate must be narrated: {txt}"
+
+
+def test_integer_rate_readback_still_clean(monkeypatch) -> None:
+    """Whole rate 3.0 must render as '3 к 1', no trailing zeros."""
+    import backend.profile_prompts as pp
+    monkeypatch.setattr(pp, "_USD_BYN_RATE_CACHE", 3.0, raising=False)
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=20000.0,
+        currency="USD",
+        condition_new=1,
+        term_months=36,
+        type_schedule="0",
+        prepaid_pct=30.0,
+    )
+    txt = build_readback_text(p)
+    assert "60000" in txt
+    assert "3 к 1" in txt and "3.0 к 1" not in txt
+
+
 def test_usd_readback_legal_entity_stays_usd() -> None:
     """Юрлицо can settle in USD directly — no conversion happens, no
     dual-disclosure should appear."""

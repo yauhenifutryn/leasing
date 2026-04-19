@@ -120,23 +120,34 @@ def _format_cost_phrase(profile: Any) -> str:
         and profile.cost
         and (profile.currency or "") == "BYN"
     ):
-        rate_raw = profile.cost / orig_cost if orig_cost else _get_usd_byn_rate()
-        rate = int(round(rate_raw)) if rate_raw else int(round(_get_usd_byn_rate()))
-        cost_str = f"{int(profile.cost)}"
+        # Fix 1.9 (Codex review) — compute rate from the actual applied
+        # conversion (authoritative) and narrate it losslessly. Before,
+        # int(round(rate)) for both math and narration caused fractional
+        # rates (e.g. USD_BYN_RATE=3.25) to readback a BYN amount derived
+        # from a 3x rate while saying "по курсу 3 к 1" — diverged from
+        # the actual calculator conversion at 3.25x.
+        rate_exact = (profile.cost / orig_cost) if orig_cost else _get_usd_byn_rate()
         return (
             f"стоимость {int(orig_cost)} долларов "
-            f"(это {cost_str} белорусских рублей по курсу {rate} к 1)"
+            f"(это {int(profile.cost)} белорусских рублей "
+            f"по курсу {_fmt_rate(rate_exact)} к 1)"
         )
 
     # 2) Pre-conversion readback (Физ лицо + USD, DirectTool hasn't run yet).
     is_phys = (profile.client_type or "") == "Физическое лицо"
     if is_phys and (profile.currency or "") == "USD" and profile.cost:
-        rate = int(round(_get_usd_byn_rate()))
+        # Fix 1.9 — carry the exact settings rate through the arithmetic.
+        # int(round(rate)) for math turned 3.25 into 3 and reported a
+        # 360000 BYN equivalent for a 120000 USD quote while the calc
+        # actually applied 390000. Use the exact float for BYN math and
+        # format the rate losslessly for narration.
+        rate_exact = _get_usd_byn_rate()
         usd = int(profile.cost)
-        byn = usd * rate
+        byn = int(round(usd * rate_exact))
         return (
             f"стоимость {usd} долларов "
-            f"(это {byn} белорусских рублей по курсу {rate} к 1)"
+            f"(это {byn} белорусских рублей "
+            f"по курсу {_fmt_rate(rate_exact)} к 1)"
         )
 
     # Legacy single-currency path (BYN-only, or юрлицо with any currency).
@@ -209,14 +220,17 @@ def render_calc_result(result: dict[str, Any]) -> str:
             defaults_note = f" Параметры по умолчанию: {', '.join(parts)}."
 
     # Fix 1.2 prefix — disclose original USD amount alongside BYN equivalent.
+    # Fix 1.9 — narrate the rate losslessly instead of rounding to int; the
+    # BYN amount shown (`params['cost']`) is already the actual calculator
+    # input so fractional rates stay consistent across paths.
     conv_prefix = ""
     conv = result.get("currency_conversion") or {}
     if conv.get("from") == "USD" and conv.get("amount_from") is not None:
-        rate_disp = int(round(conv.get("rate") or _get_usd_byn_rate()))
+        rate_exact = conv.get("rate") or _get_usd_byn_rate()
         conv_prefix = (
             f"Стоимость {int(conv['amount_from'])} долларов "
             f"(это {int(params.get('cost', 0))} белорусских рублей "
-            f"по курсу {rate_disp} к 1). "
+            f"по курсу {_fmt_rate(rate_exact)} к 1). "
         )
 
     # Fix 1.8 (2026-04-19) — TTS mispronounces decimal monetary amounts.
@@ -263,6 +277,26 @@ def _fmt_pct(v: Any) -> str:
     except (TypeError, ValueError):
         return "?"
     return f"{int(f)}" if f == int(f) else f"{f:.1f}"
+
+
+def _fmt_rate(v: Any) -> str:
+    """Format an FX rate losslessly for the spoken "по курсу X к 1" phrase.
+
+    Whole rate -> "3"; fractional -> "3.25" / "3.5"; bad input -> "3" to
+    match the legacy fallback. Fix 1.9 — before this helper, rates were
+    int(round())-ed for narration while math sometimes used the exact
+    float, so readback promised "3 к 1" while calc applied 3.25.
+    """
+    if v in (None, ""):
+        return "3"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "3"
+    if f == int(f):
+        return f"{int(f)}"
+    # Strip trailing zeros on decimals: 3.50 -> "3.5", 3.2500 -> "3.25".
+    return f"{f:g}"
 
 
 _FIELD_RU = {
