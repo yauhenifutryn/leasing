@@ -55,11 +55,33 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     return "Уточните параметры расчёта, пожалуйста."
 
 
-# MVP hardcoded USD->BYN rate; must stay in sync with settings.tools.usd_byn_rate
-# and the classifier prompt at app.py:~1176. When this rate is ever pulled from
-# a real FX source (see project_calculator_production_backlog memory), move
-# this constant to settings and thread through here.
-_USD_BYN_RATE_MVP = 3
+# Fallback USD->BYN rate if settings can't be loaded (unit tests, isolated
+# imports). Production reads the real rate from settings.tools.usd_byn_rate
+# via _get_usd_byn_rate() so readback matches whatever rate the DirectTool
+# USD->BYN conversion actually applies (Codex review flagged the drift
+# risk of hardcoding in this module: readback and calc could disagree
+# if the setting ever changes).
+_USD_BYN_RATE_FALLBACK = 3.0
+_USD_BYN_RATE_CACHE: float | None = None
+
+
+def _get_usd_byn_rate() -> float:
+    """Return the live USD->BYN rate from settings, cached after first call.
+
+    Lazy import so this module stays importable in unit tests without a
+    loaded settings file. First call hits settings; subsequent calls are
+    effectively free. The rate does not change during a process lifetime
+    — it is read from env / config at startup.
+    """
+    global _USD_BYN_RATE_CACHE
+    if _USD_BYN_RATE_CACHE is not None:
+        return _USD_BYN_RATE_CACHE
+    try:
+        from .settings import load_settings  # lazy
+        _USD_BYN_RATE_CACHE = float(load_settings().tools.usd_byn_rate)
+    except Exception:  # noqa: BLE001 — settings may be absent in tests
+        _USD_BYN_RATE_CACHE = _USD_BYN_RATE_FALLBACK
+    return _USD_BYN_RATE_CACHE
 
 
 def _format_cost_phrase(profile: Any) -> str:
@@ -68,15 +90,18 @@ def _format_cost_phrase(profile: Any) -> str:
     Dual-disclosure rules for USD cost (Физическое лицо flow):
 
       1. Post-conversion (the DirectTool USD->BYN branch already ran and
-         populated `profile.original_cost` + `profile.original_currency`):
+         populated `profile.original_cost` + `profile.original_currency`,
+         AND profile.currency is now BYN — the "BYN" guard added after
+         Codex review prevents a misread on hybrid paths where the
+         conversion hasn't actually advanced the profile):
          speak both amounts using the actual applied rate.
       2. Pre-conversion (classifier just captured cost=N, currency='USD'
          but the profile is not yet at CONFIRMED so DirectTool has not
-         fired): speak both amounts using the MVP hardcoded 3:1 rate so
-         the readback itself discloses the conversion the client is about
-         to confirm. Observed 2026-04-19 live call: without this, readback
-         said bare "120000 USD" and the caller did not realise BYN figures
-         would be used for the calculation.
+         fired): speak both amounts using the rate from settings so the
+         readback itself discloses the conversion the client is about to
+         confirm. Without this, readback said bare "120000 USD" and the
+         caller did not realise BYN figures would be used for the
+         calculation (live call 2026-04-19, session 205add5a).
 
     TTS will convert the digits to Russian words via voice_adapters, e.g.
     "20000 долларов" -> "двадцать тысяч долларов".
@@ -84,9 +109,19 @@ def _format_cost_phrase(profile: Any) -> str:
     orig_cur = getattr(profile, "original_currency", None)
     orig_cost = getattr(profile, "original_cost", None)
 
-    # 1) Post-conversion readback (cost is already BYN, originals on the profile).
-    if orig_cur == "USD" and orig_cost is not None and profile.cost:
-        rate = int(round(profile.cost / orig_cost)) if orig_cost else _USD_BYN_RATE_MVP
+    # 1) Post-conversion readback. Cost has been converted to BYN; originals
+    # on the profile. Defensive `profile.currency == "BYN"` guard: if for
+    # any reason the conversion metadata is on the profile but cost is
+    # still USD, skip this branch and let the pre-conversion or legacy
+    # path handle rendering correctly.
+    if (
+        orig_cur == "USD"
+        and orig_cost is not None
+        and profile.cost
+        and (profile.currency or "") == "BYN"
+    ):
+        rate_raw = profile.cost / orig_cost if orig_cost else _get_usd_byn_rate()
+        rate = int(round(rate_raw)) if rate_raw else int(round(_get_usd_byn_rate()))
         cost_str = f"{int(profile.cost)}"
         return (
             f"стоимость {int(orig_cost)} долларов "
@@ -96,7 +131,7 @@ def _format_cost_phrase(profile: Any) -> str:
     # 2) Pre-conversion readback (Физ лицо + USD, DirectTool hasn't run yet).
     is_phys = (profile.client_type or "") == "Физическое лицо"
     if is_phys and (profile.currency or "") == "USD" and profile.cost:
-        rate = _USD_BYN_RATE_MVP
+        rate = int(round(_get_usd_byn_rate()))
         usd = int(profile.cost)
         byn = usd * rate
         return (
