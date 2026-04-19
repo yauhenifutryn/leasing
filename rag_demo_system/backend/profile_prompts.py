@@ -32,6 +32,22 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
             parts.append("новый или б/у")
         return "Уточните, пожалуйста, " + ", ".join(parts) + "."
 
+    # Fix 1.13 (2026-04-19) — age_years must be asked before term/prepaid.
+    # Live call 743c1a0e exposed that when a б/у client reached a state
+    # with {age_years, term_months, prepaid, type_schedule} all missing,
+    # the clarify asked for term/prepaid/graph and skipped age. The client
+    # then said "Два года" meaning a 2-year lease, and the classifier
+    # assigned that both to term_months=24 AND age_years=2 — the exact
+    # "Два года" ambiguity Section 2's cross-field validator will close.
+    # Asking age first kills the collision because age gets captured on
+    # its own turn, then term/prepaid/graph are asked cleanly afterward.
+    # Fix 1.5 (2026-04-19) — the age_years branch originally lived below
+    # term/prepaid; this priority bump supersedes 1.5's placement.
+    if "age_years" in fields:
+        return (
+            "Сколько лет вашему транспорту? Для б/у техники это обязательный параметр."
+        )
+
     if fields & {"term_months", "prepaid", "type_schedule"}:
         parts = []
         if "term_months" in fields:
@@ -41,16 +57,6 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
         if "type_schedule" in fields:
             parts.append("тип графика (аннуитет или линейный)")
         return "Подскажите " + ", ".join(parts) + "."
-
-    # Fix 1.5 (2026-04-19) — age_years only joins missing_fields() when
-    # condition_new == 0 (б/у). Without this branch the orchestrator falls
-    # through to the generic "Уточните параметры расчёта" prompt, which is
-    # useless to the LLM — observed 2026-04-19 to loop forever once Fix 1.3
-    # started reliably extracting condition_new=0 from "бэу/бу" variants.
-    if "age_years" in fields:
-        return (
-            "Сколько лет вашему транспорту? Для б/у техники это обязательный параметр."
-        )
 
     return "Уточните параметры расчёта, пожалуйста."
 
@@ -332,6 +338,12 @@ _FIELD_RU = {
     "cost": "стоимость",
     "condition_new": "состояние (новый/б/у)",
     "subject": "предмет лизинга",
+    # Fix 1.12 (2026-04-19) — live call 743c1a0e: change-confirm read out
+    # "Меняю age_years на 5" because age_years was missing from this map
+    # and _value_ru fell back to the raw key name. Caller heard a Python
+    # field name spoken out loud. Ship the Russian label.
+    "age_years": "возраст",
+    "age": "возраст",
 }
 
 

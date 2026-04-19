@@ -40,7 +40,32 @@ def test_age_years_with_cost_yields_cost_prompt_first() -> None:
     assert "стоимость" in text.lower()
 
 
-def test_age_years_with_term_yields_term_prompt_first() -> None:
-    # Same priority principle for the term/prepaid block.
+def test_age_years_with_term_yields_age_prompt_first() -> None:
+    # Fix 1.13 (2026-04-19) — swap the priority. age must be asked before
+    # term/prepaid. Live call 743c1a0e: client said "Два года" meaning a
+    # 2-year lease; classifier assigned it to BOTH term_months=24 AND
+    # age_years=2 because they hadn't been separated in the prompt
+    # sequence. Asking age on its own turn kills the collision.
     text = build_clarification_prompt({"age_years", "term_months", "prepaid"}, None)
-    assert "срок" in text.lower()
+    assert "лет" in text.lower(), f"age must be asked first: {text}"
+    assert "срок" not in text.lower(), f"term should be deferred: {text}"
+
+
+def test_age_years_after_cost_still_deferred() -> None:
+    # Priority ordering: when cost/currency are also missing, those still
+    # come first (they're upstream of the calculator in the funnel).
+    # Age only outranks term/prepaid/graph, not cost/currency.
+    text = build_clarification_prompt({"age_years", "cost", "currency"}, None)
+    assert "стоимость" in text.lower()
+    assert "возраст" not in text.lower() and "сколько лет" not in text.lower()
+
+
+def test_change_confirm_speaks_russian_age_label() -> None:
+    # Fix 1.12 — "Меняю age_years на 5" must never be spoken. The change-
+    # confirm must render the Russian label. Live call 743c1a0e shipped
+    # the bug in the wild (call audio confirmed).
+    from backend.profile_prompts import build_change_confirm_text
+    text = build_change_confirm_text({"field": "age_years", "new_value": 5})
+    assert "age_years" not in text, f"raw field name leaked to TTS: {text}"
+    assert "возраст" in text.lower(), f"Russian label missing: {text}"
+    assert "5" in text
