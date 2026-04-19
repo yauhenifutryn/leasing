@@ -59,6 +59,44 @@ def test_new_still_maps_to_one() -> None:
     assert has_field_signal("condition_new", 1, "новый мотоцикл")
 
 
+# Fix 1.10 — value-aware grounding. Contradictory or explicitly new-with-
+# mileage-negation phrases must not ground condition_new=0.
+
+def test_contradiction_rejects_used_grounding() -> None:
+    # Codex adversarial review 2026-04-19: "новая машина без пробега"
+    # previously grounded BOTH condition_new=0 and =1 because the "пробег"
+    # token fired the used-cue regex while "новая" fired an implied
+    # new-cue path. A bad classifier guess could then survive grounding
+    # and push the session into the б/у flow.
+    assert not has_field_signal("condition_new", 0, "новая машина без пробега")
+
+
+def test_contradiction_accepts_new_grounding() -> None:
+    # Mirror of the above: the same utterance must still ground =1 cleanly
+    # because the client explicitly said "новая" and negated mileage.
+    assert has_field_signal("condition_new", 1, "новая машина без пробега")
+
+
+def test_bare_new_does_not_ground_used() -> None:
+    assert not has_field_signal("condition_new", 0, "новый мотоцикл")
+
+
+def test_bare_used_does_not_ground_new() -> None:
+    assert not has_field_signal("condition_new", 1, "подержанная машина")
+    assert not has_field_signal("condition_new", 1, "бэу мотоцикл")
+
+
+def test_negated_new_is_used() -> None:
+    # "не новый" is semantically used. Existing positive test already
+    # covers the =0 direction; this locks in that =1 is rejected.
+    assert not has_field_signal("condition_new", 1, "не новый автомобиль")
+
+
+def test_zero_mileage_phrase_grounds_new() -> None:
+    assert has_field_signal("condition_new", 1, "машина с нулевым пробегом")
+    assert not has_field_signal("condition_new", 0, "машина с нулевым пробегом")
+
+
 @pytest.mark.parametrize("utterance", [
     "бэу",
     "старый",

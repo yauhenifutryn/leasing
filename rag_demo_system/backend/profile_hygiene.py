@@ -147,6 +147,38 @@ _CURRENCY_CUE_RE = re.compile(
 # colloquial variants the classifier was missing: бэу (phonetic spelling),
 # б-у (dash variant), с пробегом, не новый, старый. Client complaint:
 # "не понимает слово б/у".
+#
+# Fix 1.10 (Codex adversarial review 2026-04-19) — split into USED vs NEW
+# cue sets so grounding can reject contradictory classifier guesses. Before,
+# "новая машина без пробега" grounded BOTH condition_new=0 (cue "пробега")
+# AND condition_new=1 (cue "новая"); a bad classifier guess could then
+# survive the filter and flip the profile to б/у including the age_years
+# requirement. NEG cues explicitly invert: "без пробега" / "нулевой
+# пробег" are NEW-car phrases despite containing "пробег".
+_CONDITION_USED_CUE_RE = re.compile(
+    r"\b("
+    r"подержан\w+|бывш\w+|"
+    r"б/у|б-у|бу|бэу|"
+    r"пробег\w*|"
+    r"не\s+нов\w+|"
+    r"стар(?:ый|ая|ое|ые)"
+    r")\b",
+    re.IGNORECASE,
+)
+_CONDITION_NEW_EXPLICIT_CUE_RE = re.compile(
+    r"\b(нов\w+)\b",
+    re.IGNORECASE,
+)
+# Phrases that explicitly deny mileage / wear — these are new-car claims
+# even though they contain the "пробег" token that the used-cue regex
+# also matches.
+_CONDITION_NEW_NEGATION_RE = re.compile(
+    r"\b(без\s+пробег\w*|нулев\w+\s+пробег\w*|без\s+износ\w*)\b",
+    re.IGNORECASE,
+)
+# Back-compat alias so any external callers keep working; semantically this
+# is "any condition cue is present" — the value-aware check now lives in
+# has_field_signal for condition_new.
 _CONDITION_NEW_CUE_RE = re.compile(
     r"\b("
     r"нов\w+|подержан\w+|бывш\w+|"
@@ -187,7 +219,22 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
     if field == "currency":
         return bool(_CURRENCY_CUE_RE.search(utterance))
     if field == "condition_new":
-        return bool(_CONDITION_NEW_CUE_RE.search(utterance))
+        # Fix 1.10 — value-aware grounding. A contradictory utterance
+        # like "новая машина без пробега" must reject condition_new=0
+        # while accepting =1. "не новый" is a USED cue even though it
+        # contains "новый"; so subtract it from the raw NEW match
+        # before combining.
+        has_neg = bool(_CONDITION_NEW_NEGATION_RE.search(utterance))
+        has_used_raw = bool(_CONDITION_USED_CUE_RE.search(utterance))
+        has_used = has_used_raw and not has_neg
+        has_new_raw = bool(_CONDITION_NEW_EXPLICIT_CUE_RE.search(utterance))
+        has_not_new = bool(re.search(r"\bне\s+нов\w+\b", utterance, re.IGNORECASE))
+        has_new = (has_new_raw and not has_not_new) or has_neg
+        if int(value) == 0:
+            return has_used and not has_new
+        if int(value) == 1:
+            return has_new and not has_used
+        return False
     if field == "type_schedule":
         return bool(_TYPE_SCHEDULE_CUE_RE.search(utterance))
     if field in ("cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years"):
