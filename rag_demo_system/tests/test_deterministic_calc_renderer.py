@@ -59,6 +59,37 @@ def test_render_calc_result_basic_byn() -> None:
     assert "36" in out
 
 
+def test_render_calc_result_rounds_decimal_money() -> None:
+    """Fix 1.8 — TTS cannot pronounce "536.55 USD" cleanly. Monetary
+    fields must round to integers; percentages stay decimal when needed
+    (12.5%), integer when whole (30%)."""
+    out = render_calc_result(_minimal_result(
+        advance_sum=6000.0,      # whole USD amount, must render "6000"
+        payment_min=536.55,      # decimal that broke live call 674e3957
+        buyout_sum=200.0,
+        total=25516.039,
+        increase_percent=12.5,   # kept decimal (percentage)
+    ))
+    assert "536.55" not in out, f"decimal leaked into spoken summary: {out}"
+    # round(536.55) == 537 via banker's rounding in Python 3 — either 536
+    # or 537 is an acceptable integer form; both are TTS-clean.
+    assert " 537 " in out or " 536 " in out, f"rounded payment missing: {out}"
+    assert "6000" in out
+    assert "200" in out
+    assert "25516" in out
+    assert "12.5" in out          # percentage keeps one decimal
+
+
+def test_render_calc_result_whole_percentage_no_trailing_zero() -> None:
+    """30.0% should render as '30%' not '30.0%' for cleaner TTS."""
+    out = render_calc_result(_minimal_result(
+        params={"subject": "Легковой автомобиль", "cost": 60000.0,
+                "currency": "BYN", "prepaid": 30.0},
+    ))
+    assert "30.0%" not in out, f"trailing .0 on percentage: {out}"
+    assert "30%" in out
+
+
 def test_render_calc_result_usd_disclosure_prefix() -> None:
     out = render_calc_result(_minimal_result(currency_conversion={
         "from": "USD",

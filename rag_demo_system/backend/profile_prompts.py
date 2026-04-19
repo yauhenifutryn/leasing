@@ -212,23 +212,57 @@ def render_calc_result(result: dict[str, Any]) -> str:
     conv_prefix = ""
     conv = result.get("currency_conversion") or {}
     if conv.get("from") == "USD" and conv.get("amount_from") is not None:
-        rate_disp = int(round(conv.get("rate") or 3))
+        rate_disp = int(round(conv.get("rate") or _get_usd_byn_rate()))
         conv_prefix = (
             f"Стоимость {int(conv['amount_from'])} долларов "
             f"(это {int(params.get('cost', 0))} белорусских рублей "
             f"по курсу {rate_disp} к 1). "
         )
 
+    # Fix 1.8 (2026-04-19) — TTS mispronounces decimal monetary amounts.
+    # Live call 674e3957: "Ежемесячный платёж: 536.55 USD" spoken as
+    # "пятьсот тридцать шесть запятая пятьдесят пять" — awkward and
+    # unclear. Round all monetary fields to integers at the renderer
+    # boundary. Sub-unit precision is preserved in SMS (it goes through
+    # calculator.format_sms_body and the client can read exact figures).
+    # Percentages render as int when whole, else one decimal place.
     return (
         f"{conv_prefix}"
-        f"Аванс {params.get('prepaid', 30)}%: {result.get('advance_sum', '?')} {currency}. "
-        f"Ежемесячный платёж: {result.get('payment_min', '?')} {currency}. "
-        f"Выкупной: {result.get('buyout_sum', '?')} {currency}. "
-        f"Общая сумма: {result.get('total', '?')} {currency}. "
-        f"Удорожание: {result.get('increase_percent', '?')}%. "
+        f"Аванс {_fmt_pct(params.get('prepaid', 30))}%: "
+        f"{_fmt_money(result.get('advance_sum'))} {currency}. "
+        f"Ежемесячный платёж: {_fmt_money(result.get('payment_min'))} {currency}. "
+        f"Выкупной: {_fmt_money(result.get('buyout_sum'))} {currency}. "
+        f"Общая сумма: {_fmt_money(result.get('total'))} {currency}. "
+        f"Удорожание: {_fmt_pct(result.get('increase_percent'))}%. "
         f"Срок: {result.get('num_payments', '?')} мес."
         f"{defaults_note}"
     )
+
+
+def _fmt_money(v: Any) -> str:
+    """Round a monetary value to nearest integer for TTS-friendly output.
+
+    Numeric or numeric-string inputs become e.g. "536" from "536.55".
+    Non-numeric / None inputs fall back to '?' so the renderer never
+    emits a NoneType-stringified field into the spoken summary.
+    """
+    if v in (None, ""):
+        return "?"
+    try:
+        return f"{int(round(float(v)))}"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _fmt_pct(v: Any) -> str:
+    """Format a percentage: integer form when whole, else one decimal."""
+    if v in (None, ""):
+        return "?"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{int(f)}" if f == int(f) else f"{f:.1f}"
 
 
 _FIELD_RU = {
