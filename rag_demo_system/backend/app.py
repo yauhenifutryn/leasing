@@ -1504,11 +1504,21 @@ async def _stream_voice_response(
                 _NUMERIC_CHANGE_FIELDS = {
                     "cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years",
                 }
+                # Codex adversarial pass 4 (2026-04-20): enum change_fields
+                # (currency, client_type, subject, condition_new, type_schedule)
+                # previously skipped value-grounding entirely. Classifier could
+                # emit change_field='currency', change_value='USD' on "в рублях"
+                # and post-confirmation state flipped to USD on a hallucination.
+                # Route ALL grounded fields through value_grounded().
+                _GROUNDED_CHANGE_FIELDS = _NUMERIC_CHANGE_FIELDS | {
+                    "subject", "currency", "client_type", "condition_new", "type_schedule",
+                }
+                from .classifier_schema import value_grounded as _value_grounded
                 _primary_value_ok = _sa_change_value not in (None, "")
-                if _primary_value_ok and _sa_change_field in _NUMERIC_CHANGE_FIELDS:
-                    if not _has_field_signal(_sa_change_field, _sa_change_value, message or ""):
+                if _primary_value_ok and _sa_change_field in _GROUNDED_CHANGE_FIELDS:
+                    if not _value_grounded(_sa_change_field, _sa_change_value, message or ""):
                         print(
-                            f"[Profile] change_value signal missing — rejecting "
+                            f"[Profile] change_value not grounded — rejecting "
                             f"{_sa_change_field}={_sa_change_value!r} "
                             f"utterance='{(message or '')[:60]}'",
                             flush=True,
@@ -1886,15 +1896,34 @@ async def _stream_voice_response(
             session.assistant_speaking = False
             return
         if _sa_is_confirm:
-            _state_profile.apply_pending_change()
-            _state_profile.state = ProfileState.CONFIRMED
-            _state_profile.change_emitted_at = time.time()
-            _just_confirmed_this_turn = True
-            print(
-                f"[Orchestrator] change CONFIRMED (via always-on gate), recalculating",
-                flush=True,
-            )
-            # fall through to calculator recalc
+            # Codex adversarial pass 4 (2026-04-20): only advance to CONFIRMED
+            # when apply_pending_change actually applied at least one known
+            # field. A malformed payload (unknown fields only) now returns
+            # False and keeps pending_change intact — the state machine can
+            # re-prompt on the next turn instead of silently losing the edit.
+            _applied = _state_profile.apply_pending_change()
+            if _applied:
+                _state_profile.state = ProfileState.CONFIRMED
+                _state_profile.change_emitted_at = time.time()
+                _just_confirmed_this_turn = True
+                print(
+                    f"[Orchestrator] change CONFIRMED (via always-on gate), recalculating",
+                    flush=True,
+                )
+                # fall through to calculator recalc
+            else:
+                print(
+                    f"[Orchestrator] change NOT applied (no known fields in "
+                    f"pending_change) — re-prompting change-confirm",
+                    flush=True,
+                )
+                await _emit_plain_assistant_response(
+                    build_change_confirm_text(_state_profile.pending_change),
+                    websocket, session_id,
+                    backend=backend, session=session,
+                )
+                session.assistant_speaking = False
+                return
         elif _is_explicit_deny:
             print(f"[Orchestrator] re-prompting change-confirm (explicit deny)", flush=True)
             await _emit_plain_assistant_response(

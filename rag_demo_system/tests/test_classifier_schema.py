@@ -356,3 +356,51 @@ def test_age_years_nulled_when_condition_new_ungrounded():
     out = parse_classifier_output(raw, utterance="новая машина пять лет")
     assert out.condition_new is None
     assert out.age_years is None
+
+
+# --- Codex adversarial pass 4, 2026-04-20: value_grounded helper ---
+
+def test_value_grounded_currency_rejects_ungrounded():
+    # Helper must reject USD on "в рублях" so the app.py staging block can
+    # block explicit enum change_fields like change_value='USD'.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("currency", "USD", "в рублях") is False
+    assert value_grounded("currency", "USD", "в долларах") is True
+    assert value_grounded("currency", "RUB", "в рублях") is False
+    assert value_grounded("currency", "RUB", "в российских рублях") is True
+
+
+def test_value_grounded_client_type_normalizes_before_check():
+    # "ИП" as change_value must normalize to "Юридическое лицо" before cue match.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("client_type", "ИП", "я ип") is True
+    assert value_grounded("client_type", "Физическое лицо", "мы ООО") is False
+
+
+def test_value_grounded_subject_matches_value_only():
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("subject", "Легковой автомобиль", "хочу грузовик") is False
+    assert value_grounded("subject", "Легковой автомобиль", "Toyota") is True
+    assert value_grounded("subject", "Грузовой автомобиль", "хочу грузовик") is True
+
+
+def test_value_grounded_condition_new_reuses_fix_1_10():
+    from backend.classifier_schema import value_grounded
+    # Fix 1.10 value-aware logic inherited via has_field_signal.
+    assert value_grounded("condition_new", 0, "новая машина без пробега") is False
+    assert value_grounded("condition_new", 1, "новая машина без пробега") is True
+
+
+def test_value_grounded_numeric_delegates_has_field_signal():
+    from backend.classifier_schema import value_grounded
+    # Fix 34 / 40b spelled multipliers + year-to-month conversion.
+    assert value_grounded("cost", 80000, "80 тысяч") is True
+    assert value_grounded("term_months", 60, "на 5 лет") is True
+    assert value_grounded("cost", 80000, "привет") is False
+
+
+def test_value_grounded_empty_utterance_or_value():
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("currency", "USD", "") is False
+    assert value_grounded("currency", None, "в долларах") is False
+    assert value_grounded("currency", "", "в долларах") is False

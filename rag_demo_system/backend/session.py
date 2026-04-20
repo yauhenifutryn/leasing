@@ -135,12 +135,14 @@ class ClientProfile:
         # Multi-field shape.
         _changes = self.pending_change.get("changes")
         if isinstance(_changes, dict) and _changes:
+            _applied_any = False
             for field_name, vals in _changes.items():
                 if not hasattr(self, field_name):
-                    # Codex adversarial 2026-04-20 Finding B: fail loud on
-                    # unknown fields instead of silently dropping. Prior
-                    # behaviour let pending_change={"prepaid": ...} be
-                    # "confirmed" while the value never reached the calc.
+                    # Codex adversarial pass 4 (2026-04-20): log loudly but
+                    # skip unknown fields. If NO known fields got applied, we
+                    # fall through to return False below without clearing
+                    # pending_change, so the caller can decide not to advance
+                    # the profile to CONFIRMED on a malformed payload.
                     print(
                         f"[ClientProfile] apply_pending_change: ignoring unknown "
                         f"field={field_name!r} — state-loss guard",
@@ -149,10 +151,18 @@ class ClientProfile:
                     continue
                 new_value = vals.get("new") if isinstance(vals, dict) else vals
                 setattr(self, field_name, new_value)
+                _applied_any = True
                 if field_name == "prepaid_pct":
                     _applied_prepaid_pct = True
                 elif field_name == "prepaid_amount":
                     _applied_prepaid_amount = True
+            if not _applied_any:
+                print(
+                    f"[ClientProfile] apply_pending_change: no known fields in "
+                    f"{list(_changes.keys())} — leaving pending_change for retry",
+                    flush=True,
+                )
+                return False
             if _applied_prepaid_pct and self.prepaid_amount is not None:
                 self.prepaid_amount = None
             elif _applied_prepaid_amount and self.prepaid_pct is not None:
@@ -168,8 +178,15 @@ class ClientProfile:
                 self.prepaid_amount = None
             elif field_name == "prepaid_amount" and self.prepaid_pct is not None:
                 self.prepaid_pct = None
-        self.pending_change = None
-        return True
+            self.pending_change = None
+            return True
+        # Legacy single-field with unknown attribute — same fail-closed behaviour.
+        print(
+            f"[ClientProfile] apply_pending_change: legacy single-field "
+            f"pending_change has unknown field={field_name!r} — leaving for retry",
+            flush=True,
+        )
+        return False
 
     def to_dict(self) -> dict[str, Any]:
         return {

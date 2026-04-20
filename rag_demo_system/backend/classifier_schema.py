@@ -112,6 +112,41 @@ _TYPE_SCHEDULE_VALUE_CUES: dict[str, re.Pattern[str]] = {
     "1": re.compile(r"\bлинейн\w+|\bдифференциров\w+|\bубыва\w+|\bравн\w+", re.IGNORECASE),
 }
 
+
+def value_grounded(field: str, value, utterance: str) -> bool:
+    """Return True iff `value` is grounded by a matching cue in `utterance`.
+
+    Mirrors the value-aware logic inside
+    :meth:`ClassifierOutput._ground_against_utterance` and is exposed so
+    callers that inspect ``change_field`` / ``change_value`` pairs can apply
+    the same check (Codex adversarial pass 4, 2026-04-20: explicit enum
+    changes otherwise bypass grounding and can mutate confirmed state on a
+    hallucinated value).
+
+    Numeric fields delegate to :func:`profile_hygiene.has_field_signal` so
+    the Fix 34 / 40b / 1.10 multiplier and year-to-month logic is reused.
+    """
+    if value is None or value == "" or not utterance:
+        return False
+    if field == "subject" and isinstance(value, str):
+        cue_re = _SUBJECT_VALUE_CUES.get(value)
+        return bool(cue_re and cue_re.search(utterance))
+    if field == "client_type" and isinstance(value, str):
+        normalized = _normalize_client_type(value) or value
+        cue_re = _CLIENT_TYPE_VALUE_CUES.get(normalized)
+        return bool(cue_re and cue_re.search(utterance))
+    if field == "currency" and isinstance(value, str):
+        return _currency_cue_match(value, utterance)
+    if field == "type_schedule":
+        cue_re = _TYPE_SCHEDULE_VALUE_CUES.get(str(value))
+        return bool(cue_re and cue_re.search(utterance))
+    if field == "condition_new":
+        try:
+            return has_field_signal("condition_new", int(value), utterance)
+        except (TypeError, ValueError):
+            return False
+    return has_field_signal(field, value, utterance)
+
 _SUBJECT_VALUES = Literal[
     "Легковой автомобиль",
     "Грузовой автомобиль",
