@@ -1489,27 +1489,15 @@ async def _stream_voice_response(
                 # in the utterance. Classifier sometimes emits change_value=0
                 # (or other values) on non-numeric turns — without this guard
                 # term_months gets silently set to 0, corrupting the profile.
-                # Fix 41b: reject change_field values that aren't real profile
-                # fields. Classifier sometimes emits change_field="all" or
-                # similar bucket names which leaked into "Меняю all на ..."
-                # in the readback. Only whitelisted field names allowed.
-                _VALID_CHANGE_FIELDS = {
-                    "subject", "cost", "currency", "client_type", "condition_new",
-                    "age_years", "term_months", "type_schedule", "prepaid_pct",
-                    "prepaid_amount", "prepaid",
-                }
+                # CP-2.3: Fix 41b whitelist retired. ClassifierOutput.change_field
+                # is a Literal, so "all" / other non-fields are already None by
+                # the time we reach this block. Numeric-field signal check below
+                # still runs (Fix 40e — catches classifier emitting change_value=0
+                # on non-numeric turns).
                 _NUMERIC_CHANGE_FIELDS = {
                     "cost", "term_months", "prepaid_pct", "prepaid_amount", "age_years",
                 }
                 _primary_value_ok = _sa_change_value not in (None, "")
-                if _sa_change_field and _sa_change_field not in _VALID_CHANGE_FIELDS:
-                    print(
-                        f"[Profile] rejecting unknown change_field={_sa_change_field!r} "
-                        f"(not a valid profile field)",
-                        flush=True,
-                    )
-                    _primary_value_ok = False
-                    _sa_change_field = None  # prevent downstream use
                 if _primary_value_ok and _sa_change_field in _NUMERIC_CHANGE_FIELDS:
                     if not _has_field_signal(_sa_change_field, _sa_change_value, message or ""):
                         print(
