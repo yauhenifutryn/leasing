@@ -1835,14 +1835,29 @@ async def _stream_voice_response(
         else:
             # Deny-with-correction detection: did the classifier emit any
             # field whose value differs from the current profile?
+            # Codex adversarial confirmation pass (2026-04-20, E-Codex-2):
+            # require value_grounded() for each delta so a plain "нет" turn
+            # with classifier drift (e.g. stale numeric cost/term from
+            # carryover context) cannot stage an unspoken correction.
+            # value_grounded delegates to has_field_signal for numerics and
+            # to per-value cue maps for enums — one call covers both.
+            from .classifier_schema import value_grounded as _vg_readback
             _deltas: dict[str, dict[str, Any]] = {}
             for _hint_key, _field_key in _STATE_DELTA_KEYS:
                 _hint_val = _extracted_hints.get(_hint_key)
                 if _hint_val in (None, ""):
                     continue
                 _cur = getattr(_state_profile, _field_key, None)
-                if _cur != _hint_val:
-                    _deltas[_field_key] = {"old": _cur, "new": _hint_val}
+                if _cur == _hint_val:
+                    continue
+                if not _vg_readback(_field_key, _hint_val, message or ""):
+                    print(
+                        f"[Orchestrator] READBACK delta rejected (ungrounded): "
+                        f"{_field_key}={_hint_val!r} utterance='{(message or '')[:60]}'",
+                        flush=True,
+                    )
+                    continue
+                _deltas[_field_key] = {"old": _cur, "new": _hint_val}
             if _deltas:
                 _state_profile.pending_change = {"changes": _deltas}
                 _state_profile.state = ProfileState.CHANGE_PENDING
