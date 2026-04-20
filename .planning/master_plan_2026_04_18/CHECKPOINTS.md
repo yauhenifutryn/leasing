@@ -14,11 +14,12 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 ## Section 2 — Structured classifier
 
-- [ ] CP-2.1 — `backend/classifier_schema.py` with `ClassifierOutput` model
-- [ ] CP-2.2 — Hint extraction uses `ClassifierOutput.model_validate`
-- [ ] CP-2.3 — Fix 41b `_VALID_CHANGE_FIELDS` whitelist removed
-- [ ] CP-2.4 — All existing tests pass
-- [ ] CP-2.5 — Live validation failure rate <2%
+- [x] CP-2.1 — `backend/classifier_schema.py` (72b91cb): ClassifierOutput + @model_validator grounding + parse_classifier_output; 21 unit tests
+- [x] CP-2.2 — `parse_classifier_output` wired into app.py (484dab7); `_sa_parsed` dict now post-Pydantic, post-grounding shape (legacy .get() reads unchanged)
+- [x] CP-2.2b — ИП dropped from ClientType literal + prompt schema; action enum expanded to full downstream vocabulary (41aa50c)
+- [x] CP-2.3 — Fix 41b `_VALID_CHANGE_FIELDS` whitelist removed (277ea78); Literal covers it
+- [x] CP-2.4 — 452 passing + 8 pre-existing env failures (identical to stability-v1 baseline); 21 new tests green
+- [ ] CP-2.5 — Live validation failure rate <2% (pending SIP call)
 - [ ] CP-2.6 — Section closed, `structured-classifier-v1` tag pushed
 
 ## Section 3 — Architecture refactor
@@ -74,5 +75,10 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP-1.2 | 4efa723 | 2026-04-19 | USD dual-disclosure in readback / SMS / calc summary |
 | CP-1.1 | 454dac8 | 2026-04-19 | render_calc_result extracted; [deterministic_readback] marker; lint guard |
 | CP-1.5b | 15536d2 | 2026-04-19 | Fix 1.5 — age_years clarify branch (live-call regression from Fix 1.3) |
+| stability-v1 | 0ed4b2e | 2026-04-19 | Section 1 close (13 fixes, 5 SIP calls) |
+| CP-2.1 | 72b91cb | 2026-04-20 | ClassifierOutput Pydantic schema + utterance grounding + 21 unit tests |
+| CP-2.2 | 484dab7 | 2026-04-20 | parse_classifier_output wired into app.py (legacy dict shape preserved) |
+| CP-2.2b | 41aa50c | 2026-04-20 | Drop ИП from ClientType + prompt; expand action enum to 8 values (E-Codex) |
+| CP-2.3 | 277ea78 | 2026-04-20 | Fix 41b `_VALID_CHANGE_FIELDS` whitelist retired (Literal covers it) |
 
 (Append rows as checkpoints complete.)
