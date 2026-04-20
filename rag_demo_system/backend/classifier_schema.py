@@ -18,11 +18,12 @@ from __future__ import annotations
 import json as _json
 from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, Field, ValidationError, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from .profile_hygiene import (
     _CURRENCY_CUE_RE,
     _TYPE_SCHEDULE_CUE_RE,
+    _normalize_client_type,
     has_field_signal,
     utterance_has_client_type_cue,
     utterance_has_subject_cue,
@@ -37,11 +38,14 @@ _SUBJECT_VALUES = Literal[
     "Прочий транспорт",
 ]
 
-# "ИП" intentionally dropped (E-Codex finding). The prompt instructs Qwen to
-# collapse ИП / самозанятый / ООО / бизнесмен / etc. into "Юридическое лицо",
-# and the downstream calculator API accepts only the two values below.
-# profile_hygiene._normalize_client_type also collapses user-spoken "ИП" to
-# "Юридическое лицо". Single source of truth.
+# Stored client_type is one of two values (matches calculator API payload).
+# Qwen is told to collapse all business forms to "Юридическое лицо", but it
+# sometimes mirrors user phrasing (e.g. emits "ИП" when the user said "я ип").
+# A @field_validator(mode="before") normalizes those echoes using the shared
+# profile_hygiene._normalize_client_type map BEFORE Literal validation runs,
+# so valid answers never get dropped at the schema boundary.
+# (Codex adversarial review 2026-04-20: previously these answers were rejected
+#  by the schema and the downstream normalizer never saw them.)
 _CLIENT_TYPE_VALUES = Literal["Физическое лицо", "Юридическое лицо"]
 
 _CURRENCY_VALUES = Literal["BYN", "USD", "EUR", "RUB"]
@@ -103,6 +107,21 @@ class ClassifierOutput(BaseModel):
     # `parse_classifier_output` for one-line diagnostic logging. Leading
     # underscore keeps it out of `model_dump` output.
     _grounding_drops: list[str] = []
+
+    @field_validator("client_type", mode="before")
+    @classmethod
+    def _coerce_client_type(cls, v):
+        """Normalize Qwen echoes ("ИП", "ООО", "самозанятый", ...) to the two
+        canonical values BEFORE Literal validation. Delegates to
+        profile_hygiene._normalize_client_type — single source of truth.
+        Returns raw value on miss so Literal validation can reject it.
+        (Codex adversarial review 2026-04-20.)
+        """
+        if isinstance(v, str):
+            canonical = _normalize_client_type(v)
+            if canonical is not None:
+                return canonical
+        return v
 
     @model_validator(mode="after")
     def _ground_against_utterance(self, info: ValidationInfo) -> "ClassifierOutput":

@@ -1250,7 +1250,14 @@ async def _stream_voice_response(
                 pass
             _intent = str(_sa_parsed.get("intent", "")).upper()
             needs_tool = _intent == "TOOL"
-            if not _sa_parsed:
+            # CP-2.2 fix (Codex adversarial 2026-04-20): `_sa_parsed` always
+            # contains the three bool defaults (is_confirmation/is_stop_request/
+            # wants_readback serialize even on an empty model), so the old
+            # `if not _sa_parsed` emptiness check was unreachable. Route via
+            # the Pydantic model's intent field — None only on parse/validation
+            # failure — so the raw-text TOOL grep fallback fires again under
+            # format drift.
+            if _sa_output.intent is None:
                 needs_tool = "TOOL" in _raw.upper()
             # Legacy hint extraction for the existing DirectTool path
             if _sa_parsed.get("subject"):

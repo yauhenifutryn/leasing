@@ -21,12 +21,39 @@ def test_minimal_valid_parse():
     assert out.is_confirmation is False
 
 
-def test_ip_rejected_as_client_type():
-    # E-Codex: ИП is no longer a valid client_type — prompt collapses to Юр.лицо.
+def test_ip_normalized_to_yur_litso():
+    # Codex adversarial 2026-04-20: when Qwen echoes the user's literal "ИП",
+    # the @field_validator(mode="before") must normalize it to "Юридическое
+    # лицо" BEFORE Literal validation, otherwise business callers get stuck
+    # in a clarification loop because the schema drops their answer.
     raw = json.dumps({"intent": "TOOL", "client_type": "ИП"})
     out = parse_classifier_output(raw, utterance="я ип")
-    # ValidationError path returns empty model; client_type is None.
-    assert out.client_type is None
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_other_business_forms_normalized():
+    # Same regression surface: all business forms the profile_hygiene
+    # normalizer collapses to Юр.лицо must survive the schema boundary.
+    for raw_ct in ("самозанятый", "ООО", "ИП", "организация", "бизнесмен"):
+        raw = json.dumps({"intent": "TOOL", "client_type": raw_ct})
+        out = parse_classifier_output(raw, utterance="я от компании")
+        assert out.client_type == "Юридическое лицо", raw_ct
+
+
+def test_empty_model_intent_is_none_but_dict_not_empty():
+    # Regression guard for the CP-2.2 empty-dict fallback bug (Codex adversarial
+    # 2026-04-20). ClassifierOutput() with defaults serializes the three bool
+    # flags, so dict-based emptiness checks are broken. Downstream must use
+    # `_sa_output.intent is None` as the parse-failure signal instead.
+    empty = ClassifierOutput()
+    assert empty.intent is None
+    d = empty.model_dump(exclude_none=True)
+    assert "intent" not in d
+    assert d == {
+        "is_confirmation": False,
+        "is_stop_request": False,
+        "wants_readback": False,
+    }
 
 
 def test_change_field_all_rejected():
