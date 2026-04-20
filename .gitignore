@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Claude Code local config (permissions, hooks, etc). Local-only — never commit.
+.claude/
+
 # Virtual environments
 .venv/
 .venv*/
