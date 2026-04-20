@@ -1144,7 +1144,7 @@ async def _stream_voice_response(
                     ' "subject": "Легковой автомобиль/Грузовой автомобиль/Спецтехника/Оборудование/Недвижимость/Прочий транспорт или null",\n'
                     ' "cost": число или null,\n'
                     ' "currency": "BYN"|"USD"|"EUR"|"RUB" или null,\n'
-                    ' "client_type": "Физическое лицо"|"ИП"|"Юридическое лицо" или null,\n'
+                    ' "client_type": "Физическое лицо"|"Юридическое лицо" или null,\n'
                     ' "condition_new": 1|0 или null,\n'
                     ' "age_years": число или null,\n'
                     ' "prepaid_pct": число (0-40) или null,\n'
@@ -1157,7 +1157,7 @@ async def _stream_voice_response(
                     ' "wants_readback": true|false,\n'
                     ' "change_field": "имя поля или null",\n'
                     ' "change_value": значение или null,\n'
-                    ' "action": "calculate"|"recalculate"|"sms"|"clarify"|"confirm" или null}\n\n'
+                    ' "action": "calculate"|"recalculate"|"change_param"|"sms"|"clarify"|"clarify_client_type"|"confirm"|"invalid_param" или null}\n\n'
                     "intent=TOOL: клиент хочет посчитать / изменить расчёт / отправить СМС / подтвердить расчёт.\n"
                     "intent=RAG: информационный вопрос (офис, документы, условия общие).\n"
                     "intent=CONVERSATION: короткая реакция, подтверждение, остановка, знакомство, шутка.\n\n"

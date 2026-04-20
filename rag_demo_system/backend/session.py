@@ -12,7 +12,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Optional
 
-ClientType = Literal["Физическое лицо", "ИП", "Юридическое лицо"]
+# CP-2.2b: "ИП" dropped. profile_hygiene._normalize_client_type collapses all
+# business forms (ИП / самозанятый / ООО / бизнесмен / etc.) to "Юридическое
+# лицо" before they reach the profile; the calculator API only accepts these
+# two values. Three sources of truth collapsed into one (E-Codex finding).
+ClientType = Literal["Физическое лицо", "Юридическое лицо"]
 ScheduleType = Literal["0", "1"]  # 0 = annuity, 1 = linear / declining
 
 
