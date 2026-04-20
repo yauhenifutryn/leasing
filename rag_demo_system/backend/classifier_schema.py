@@ -16,8 +16,14 @@ so there is exactly one source of truth for "what counts as a cue".
 from __future__ import annotations
 
 import json as _json
+import math
 import re
 from typing import Literal, Optional, Union
+
+# Sentinel: canonicalize_change_value returns this when the value cannot be
+# coerced to the canonical type for its field; callers null both change_field
+# and change_value so the pair never reaches staging.
+_DROP_CHANGE_VALUE = object()
 
 from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
@@ -113,6 +119,91 @@ _TYPE_SCHEDULE_VALUE_CUES: dict[str, re.Pattern[str]] = {
 }
 
 
+_VALID_SUBJECTS = frozenset({
+    "Легковой автомобиль", "Грузовой автомобиль", "Спецтехника",
+    "Оборудование", "Недвижимость", "Прочий транспорт",
+})
+_VALID_CURRENCIES = frozenset({"BYN", "USD", "EUR", "RUB"})
+
+
+def canonicalize_change_value(field: str, value):
+    """Coerce a classifier-emitted ``change_value`` to the canonical runtime
+    type for ``change_field``. Returns ``_DROP_CHANGE_VALUE`` when the value
+    cannot be canonicalized (caller must null both change_field and
+    change_value so the bad pair never reaches staging).
+
+    Qwen sometimes mirrors the raw JSON representation from the prompt —
+    strings where numbers are expected, ints where schedule codes are
+    strings, user-phrased ``"ИП"`` for client_type. Without coercion the
+    staging block stores these raw, ClientProfile's string-based checks
+    silently bypass invariants (e.g. ``missing_fields()`` sees
+    ``condition_new="0"`` as set but ``== 0`` fails, so the used-asset age
+    requirement is skipped). (Codex thorough review 2026-04-20.)
+    """
+    if value is None:
+        return None
+    # Reject bools masquerading as ints (True/False coerce to 1/0 silently).
+    if isinstance(value, bool):
+        return _DROP_CHANGE_VALUE
+
+    if field == "condition_new":
+        try:
+            iv = int(value)
+        except (TypeError, ValueError):
+            return _DROP_CHANGE_VALUE
+        return iv if iv in (0, 1) else _DROP_CHANGE_VALUE
+
+    if field == "type_schedule":
+        if isinstance(value, (int, float)):
+            try:
+                iv = int(value)
+            except (TypeError, ValueError):
+                return _DROP_CHANGE_VALUE
+            return str(iv) if iv in (0, 1) else _DROP_CHANGE_VALUE
+        if isinstance(value, str):
+            s = value.strip()
+            return s if s in ("0", "1") else _DROP_CHANGE_VALUE
+        return _DROP_CHANGE_VALUE
+
+    if field == "currency":
+        if not isinstance(value, str):
+            return _DROP_CHANGE_VALUE
+        u = value.strip().upper()
+        return u if u in _VALID_CURRENCIES else _DROP_CHANGE_VALUE
+
+    if field == "client_type":
+        if not isinstance(value, str):
+            return _DROP_CHANGE_VALUE
+        normalized = _normalize_client_type(value)
+        return normalized if normalized is not None else _DROP_CHANGE_VALUE
+
+    if field == "subject":
+        if not isinstance(value, str):
+            return _DROP_CHANGE_VALUE
+        return value if value in _VALID_SUBJECTS else _DROP_CHANGE_VALUE
+
+    if field in ("cost", "prepaid_pct", "prepaid_amount"):
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return _DROP_CHANGE_VALUE
+        if not math.isfinite(f):
+            return _DROP_CHANGE_VALUE
+        return f
+
+    if field in ("term_months", "age_years"):
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return _DROP_CHANGE_VALUE
+        if not math.isfinite(f):
+            return _DROP_CHANGE_VALUE
+        return int(f)
+
+    # Unknown field (shouldn't happen — change_field is a Literal). Pass through.
+    return value
+
+
 def value_grounded(field: str, value, utterance: str) -> bool:
     """Return True iff `value` is grounded by a matching cue in `utterance`.
 
@@ -205,7 +296,10 @@ class ClassifierOutput(BaseModel):
 
     intent: Optional[Literal["TOOL", "RAG", "CONVERSATION"]] = None
     subject: Optional[_SUBJECT_VALUES] = None
-    cost: Optional[float] = None
+    # allow_inf_nan=False (Codex thorough review 2026-04-20): Python json
+    # accepts NaN/Infinity literals, and Pydantic passes them through by
+    # default. Non-finite numerics then crash readback at int() conversion.
+    cost: Optional[float] = Field(None, allow_inf_nan=False)
     currency: Optional[_CURRENCY_VALUES] = None
     client_type: Optional[_CLIENT_TYPE_VALUES] = None
     condition_new: Optional[Literal[0, 1]] = None
@@ -213,8 +307,8 @@ class ClassifierOutput(BaseModel):
     # Wide OOR ranges (-100..500). Calculator's validate_calc_inputs still
     # catches OOR at execution time (Fix 39 behaviour preserved); Pydantic's
     # job here is to catch NaN/Inf/non-numeric, not range-clamp.
-    prepaid_pct: Optional[float] = Field(None, ge=-100, le=500)
-    prepaid_amount: Optional[float] = None
+    prepaid_pct: Optional[float] = Field(None, ge=-100, le=500, allow_inf_nan=False)
+    prepaid_amount: Optional[float] = Field(None, allow_inf_nan=False)
     term_months: Optional[int] = Field(None, ge=-100, le=500)
     type_schedule: Optional[_SCHEDULE_VALUES] = None
     name: Optional[str] = None
@@ -245,6 +339,24 @@ class ClassifierOutput(BaseModel):
             canonical = _normalize_client_type(v)
             if canonical is not None:
                 return canonical
+        return v
+
+    @field_validator("type_schedule", mode="before")
+    @classmethod
+    def _coerce_type_schedule(cls, v):
+        """Qwen sometimes mirrors numeric codes (0 / 1) when the prompt shows
+        them as strings. Coerce int/float → str before Literal validation so
+        a legitimate schedule answer isn't dropped at the schema boundary.
+        (Codex thorough review 2026-04-20.)
+        """
+        if isinstance(v, bool):  # bool is a subclass of int — guard first
+            return v
+        if isinstance(v, int):
+            return str(v)
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        if isinstance(v, str):
+            return v.strip()
         return v
 
     @model_validator(mode="after")
@@ -301,6 +413,23 @@ class ClassifierOutput(BaseModel):
         if self.age_years is not None and self.condition_new != 0:
             drops.append(f"age_years={self.age_years} (condition_new={self.condition_new})")
             self.age_years = None
+
+        # --- Step 3: canonicalize change_value by change_field ---
+        # Codex thorough review 2026-04-20: classifier often mirrors raw JSON
+        # ("0" as string, 0 as int) so downstream state stores non-canonical
+        # types and string-based invariant checks get bypassed silently.
+        # Coerce here so the pair that reaches staging is type-clean OR None.
+        if self.change_field is not None and self.change_value is not None:
+            canonical = canonicalize_change_value(self.change_field, self.change_value)
+            if canonical is _DROP_CHANGE_VALUE:
+                drops.append(
+                    f"change_value={self.change_value!r} uncanonical for "
+                    f"change_field={self.change_field!r}"
+                )
+                self.change_field = None
+                self.change_value = None
+            elif canonical is not None:
+                self.change_value = canonical
 
         if drops:
             object.__setattr__(self, "_grounding_drops", drops)

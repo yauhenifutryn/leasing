@@ -404,3 +404,109 @@ def test_value_grounded_empty_utterance_or_value():
     assert value_grounded("currency", "USD", "") is False
     assert value_grounded("currency", None, "в долларах") is False
     assert value_grounded("currency", "", "в долларах") is False
+
+
+# --- Codex thorough review 2026-04-20: change_value canonicalization ---
+
+def test_change_value_condition_new_string_coerced_to_int():
+    # Highest-severity repro from the thorough review: classifier emits
+    # change_value="0" (string) for condition_new; without coercion it's
+    # stored verbatim and ClientProfile.missing_fields()'s `== 0` check
+    # silently bypasses the age requirement for used assets.
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "condition_new", "change_value": "0",
+    })
+    out = parse_classifier_output(raw, utterance="бу машина")
+    assert out.change_field == "condition_new"
+    assert out.change_value == 0
+    assert isinstance(out.change_value, int)
+
+
+def test_change_value_type_schedule_int_coerced_to_str():
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "type_schedule", "change_value": 0,
+    })
+    out = parse_classifier_output(raw, utterance="аннуитетный график")
+    assert out.change_field == "type_schedule"
+    assert out.change_value == "0"
+    assert isinstance(out.change_value, str)
+
+
+def test_change_value_client_type_ip_normalized():
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "client_type", "change_value": "ИП",
+    })
+    out = parse_classifier_output(raw, utterance="я ип")
+    assert out.change_value == "Юридическое лицо"
+
+
+def test_change_value_currency_uppercased():
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "currency", "change_value": "usd",
+    })
+    out = parse_classifier_output(raw, utterance="в долларах")
+    assert out.change_value == "USD"
+
+
+def test_change_value_uncanonical_drops_pair():
+    # Garbage change_value → both change_field and change_value nulled so
+    # the pair never reaches the staging block.
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "condition_new", "change_value": "yes please",
+    })
+    out = parse_classifier_output(raw, utterance="поменяй")
+    assert out.change_field is None
+    assert out.change_value is None
+
+
+def test_change_value_nan_rejected():
+    raw = '{"intent":"TOOL","change_field":"cost","change_value":NaN}'
+    out = parse_classifier_output(raw, utterance="стоимость триллион")
+    assert out.change_field is None
+    assert out.change_value is None
+
+
+# --- Codex thorough review: non-finite numerics rejected at schema ---
+
+def test_nan_cost_rejected_by_schema():
+    # Python's json.loads accepts NaN; Pydantic's allow_inf_nan=False must
+    # reject at the boundary. Otherwise readback's int(cost) raises ValueError.
+    raw = '{"intent":"TOOL","cost":NaN}'
+    out = parse_classifier_output(raw, utterance="хочу машину")
+    assert out.cost is None
+
+
+def test_infinity_prepaid_amount_rejected_by_schema():
+    raw = '{"intent":"TOOL","prepaid_amount":Infinity}'
+    out = parse_classifier_output(raw, utterance="большой аванс")
+    assert out.prepaid_amount is None
+
+
+def test_neg_infinity_prepaid_pct_rejected_by_schema():
+    raw = '{"intent":"TOOL","prepaid_pct":-Infinity}'
+    out = parse_classifier_output(raw, utterance="аванс")
+    assert out.prepaid_pct is None
+
+
+# --- Codex thorough review: numeric type_schedule coerced at top level ---
+
+def test_type_schedule_numeric_zero_coerced_at_top_level():
+    # Qwen sometimes emits {"type_schedule": 0} instead of "0" — schema
+    # coerces int→str before Literal validation so the answer isn't lost.
+    raw = json.dumps({"intent": "TOOL", "type_schedule": 0})
+    out = parse_classifier_output(raw, utterance="аннуитетный график")
+    assert out.type_schedule == "0"
+
+
+def test_type_schedule_numeric_one_coerced_at_top_level():
+    raw = json.dumps({"intent": "TOOL", "type_schedule": 1})
+    out = parse_classifier_output(raw, utterance="линейный график")
+    assert out.type_schedule == "1"
+
+
+def test_type_schedule_bool_not_coerced():
+    # Defensive: bool is an int subclass in Python; ensure True/False don't
+    # get accidentally coerced to type_schedule codes.
+    raw = json.dumps({"intent": "TOOL", "type_schedule": True})
+    out = parse_classifier_output(raw, utterance="аннуитет")
+    assert out.type_schedule is None
