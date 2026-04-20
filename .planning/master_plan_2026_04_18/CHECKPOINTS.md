@@ -14,11 +14,20 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 ## Section 2 — Structured classifier
 
-- [x] CP-2.1 — `backend/classifier_schema.py` (72b91cb): ClassifierOutput + @model_validator grounding + parse_classifier_output; 21 unit tests
-- [x] CP-2.2 — `parse_classifier_output` wired into app.py (484dab7); `_sa_parsed` dict now post-Pydantic, post-grounding shape (legacy .get() reads unchanged)
-- [x] CP-2.2b — ИП dropped from ClientType literal + prompt schema; action enum expanded to full downstream vocabulary (41aa50c)
-- [x] CP-2.3 — Fix 41b `_VALID_CHANGE_FIELDS` whitelist removed (277ea78); Literal covers it
-- [x] CP-2.4 — 452 passing + 8 pre-existing env failures (identical to stability-v1 baseline); 21 new tests green
+- [x] CP-2.1 — `backend/classifier_schema.py` (72b91cb): ClassifierOutput + @model_validator grounding + parse_classifier_output
+- [x] CP-2.2 — `parse_classifier_output` wired into app.py (484dab7)
+- [x] CP-2.2b — ИП dropped from ClientType + prompt; action enum expanded (41aa50c)
+- [x] CP-2.3 — Fix 41b `_VALID_CHANGE_FIELDS` whitelist retired (277ea78)
+- [x] CP-2.4 — Test baseline: 504 pass + 8 pre-existing env failures; 68 new schema tests green
+- [x] CP-2.4b — Codex review loop (5 adversarial + 2 basic passes) resolved all 13 findings:
+    - a100e74 — empty-dict fallback dead, ИП dropped at schema (pass 2)
+    - 7528262 — cue-presence vs value-aware grounding, prepaid alias state-loss (pass 3)
+    - a668482 — subject regex collision, validator ordering, empty-utterance bypass (pass 4)
+    - 6559724 — change_field enum bypass, apply_pending_change silent-success (pass 5)
+    - 623a4e2 — change_value canonicalization, NaN/inf, type_schedule numeric (thorough)
+    - 945aaea — E-Codex-2 READBACK deny grounding
+    - 9ea4f7b — condition_new / currency top-level coercers (basic P1/P2)
+    - 25cd065 — fractional change_value fail-closed (basic P2)
 - [ ] CP-2.5 — Live validation failure rate <2% (pending SIP call)
 - [ ] CP-2.6 — Section closed, `structured-classifier-v1` tag pushed
 
