@@ -157,12 +157,22 @@ def test_malformed_json_returns_empty():
     }
 
 
-def test_empty_utterance_skips_enum_grounding():
-    # Unit-test path: no utterance provided → do not null enum fields.
-    # Cross-field rule (age_years/condition_new) still runs — it does not need utterance.
-    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+def test_empty_utterance_nulls_grounded_enums():
+    # Codex adversarial pass 3, 2026-04-20: empty utterance = no evidence.
+    # Grounded enum fields must be nulled rather than preserved (production
+    # risk: blank/degraded ASR turns leaking stale classifier state).
+    raw = json.dumps({
+        "intent": "TOOL", "subject": "Легковой автомобиль", "currency": "USD",
+        "client_type": "Физическое лицо", "type_schedule": "0", "condition_new": 1,
+    })
     out = parse_classifier_output(raw, utterance="")
-    assert out.subject == "Легковой автомобиль"
+    assert out.subject is None
+    assert out.currency is None
+    assert out.client_type is None
+    assert out.type_schedule is None
+    assert out.condition_new is None
+    # Non-grounded fields still pass.
+    assert out.intent == "TOOL"
 
 
 def test_partial_validate_preserves_good_fields():
@@ -306,3 +316,43 @@ def test_prepaid_pct_still_valid_as_change_field():
     })
     out = parse_classifier_output(raw, utterance="аванс 20 процентов")
     assert out.change_field == "prepaid_pct"
+
+
+# --- Codex adversarial pass 3, 2026-04-20: subject collision + ordering ---
+
+def test_subject_car_nulled_on_gruzovoy_avtomobil():
+    # Finding 1: "грузовой автомобиль" must drop subject="Легковой автомобиль".
+    # Previously the generic "автомобил\w*" / "машин\w*" cues in the car
+    # pattern matched truck phrasings, so contradictory subjects leaked.
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="хочу грузовой автомобиль")
+    assert out.subject is None
+
+
+def test_subject_truck_passes_on_gruzovoy():
+    raw = json.dumps({"intent": "TOOL", "subject": "Грузовой автомобиль"})
+    out = parse_classifier_output(raw, utterance="хочу грузовой автомобиль")
+    assert out.subject == "Грузовой автомобиль"
+
+
+def test_subject_car_nulled_on_bare_mashina():
+    # Bare "машина" / "автомобиль" without category adjective is ambiguous —
+    # bot should clarify rather than ground Легковой by default.
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="хочу машину")
+    assert out.subject is None
+
+
+def test_age_years_nulled_when_condition_new_ungrounded():
+    # Finding 2: classifier emits {condition_new=0, age_years=5} on
+    # "новая машина пять лет". Step 1 grounds condition_new=0 against the
+    # utterance → the cue "новая" is a NEW cue, has_field_signal(
+    # "condition_new", 0, ...) is False → condition_new nulled. Step 2
+    # re-runs cross-field with the NEW condition_new value, nulling age_years.
+    # Previously the rule ran before grounding, leaving age_years=5 orphaned.
+    raw = json.dumps({
+        "intent": "TOOL", "condition_new": 0, "age_years": 5,
+    })
+    out = parse_classifier_output(raw, utterance="новая машина пять лет")
+    assert out.condition_new is None
+    assert out.age_years is None

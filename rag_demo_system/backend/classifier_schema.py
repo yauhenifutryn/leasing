@@ -35,7 +35,10 @@ from .profile_hygiene import (
 _SUBJECT_VALUE_CUES: dict[str, re.Pattern[str]] = {
     "Легковой автомобиль": re.compile(
         r"\b("
-        r"легков\w*|седан\w*|машин\w*|автомобил\w*|авто\b|внедорожник\w*|кроссовер\w*|"
+        # Specific car-category words only — NOT generic машин\w*/автомобил\w*
+        # which also match "грузовую машину" / "грузовой автомобиль"
+        # (Codex adversarial pass 3, 2026-04-20).
+        r"легков\w*|седан\w*|внедорожник\w*|кроссовер\w*|"
         # brand names implying car:
         r"bmw|mercedes|mercedes-benz|toyota|kia|hyundai|audi|volkswagen|vw|lexus|"
         r"mazda|renault|peugeot|ford|lada|skoda|fiat|chevrolet|nissan|honda|"
@@ -211,54 +214,58 @@ class ClassifierOutput(BaseModel):
 
     @model_validator(mode="after")
     def _ground_against_utterance(self, info: ValidationInfo) -> "ClassifierOutput":
+        """Null schema-valid-but-ungrounded enum fields and enforce cross-field
+        rules. Order (post-Codex pass 3, 2026-04-20):
+
+        1. Cue-ground every enum against the utterance (value-aware).
+        2. Apply cross-field rules AFTER grounding, so they see the final
+           grounded state (otherwise age_years could survive when its
+           sibling condition_new got nulled by step 1).
+
+        Empty utterance: treated as "no evidence" in production — all
+        cue-grounded enums are nulled rather than passed through. Unit tests
+        that want to inspect raw schema behaviour must pass a non-empty
+        utterance that carries the cues they expect.
+        """
         drops: list[str] = []
-
-        # Cross-field rule (no utterance needed): age_years is only meaningful
-        # for used equipment. Classifier sometimes emits age_years=3 when the
-        # user said "Три года" meaning term_months=36. Null it when
-        # condition_new is 1 or unknown.
-        if self.age_years is not None and self.condition_new != 0:
-            drops.append(f"age_years={self.age_years} (condition_new={self.condition_new})")
-            self.age_years = None
-
         ctx = info.context if isinstance(info.context, dict) else {}
         utterance = ctx.get("utterance", "") if ctx else ""
 
-        if not utterance:
-            # Empty utterance path: skip cue-based grounding (keeps unit tests
-            # that do not pass utterance working). Cross-field rule above still
-            # ran — that's intentional.
-            if drops:
-                object.__setattr__(self, "_grounding_drops", drops)
-            return self
-
-        # Value-aware grounding (Codex adversarial 2026-04-20). Each emitted
-        # value must have its OWN cue in the utterance, not just any cue for
-        # the dimension. Kills "currency=RUB on 'в долларах'" / "subject=
-        # Легковой on 'грузовик'" / "type_schedule='1' on 'аннуитет'" leaks.
+        # --- Step 1: value-aware cue grounding ---
         if self.subject is not None:
             cue_re = _SUBJECT_VALUE_CUES.get(self.subject)
-            if cue_re is None or not cue_re.search(utterance):
+            if cue_re is None or not (utterance and cue_re.search(utterance)):
                 drops.append(f"subject={self.subject!r}")
                 self.subject = None
         if self.client_type is not None:
             cue_re = _CLIENT_TYPE_VALUE_CUES.get(self.client_type)
-            if cue_re is None or not cue_re.search(utterance):
+            if cue_re is None or not (utterance and cue_re.search(utterance)):
                 drops.append(f"client_type={self.client_type!r}")
                 self.client_type = None
-        if self.currency is not None and not _currency_cue_match(self.currency, utterance):
+        if self.currency is not None and not (
+            utterance and _currency_cue_match(self.currency, utterance)
+        ):
             drops.append(f"currency={self.currency!r}")
             self.currency = None
         if self.type_schedule is not None:
             cue_re = _TYPE_SCHEDULE_VALUE_CUES.get(self.type_schedule)
-            if cue_re is None or not cue_re.search(utterance):
+            if cue_re is None or not (utterance and cue_re.search(utterance)):
                 drops.append(f"type_schedule={self.type_schedule!r}")
                 self.type_schedule = None
-        if self.condition_new is not None and not has_field_signal(
-            "condition_new", self.condition_new, utterance
+        if self.condition_new is not None and not (
+            utterance and has_field_signal("condition_new", self.condition_new, utterance)
         ):
             drops.append(f"condition_new={self.condition_new}")
             self.condition_new = None
+
+        # --- Step 2: cross-field rules (run AFTER grounding) ---
+        # age_years is only meaningful for used equipment. Apply this after
+        # condition_new grounding so the rule sees the final grounded value —
+        # otherwise we'd leave age_years in an impossible state when
+        # condition_new got nulled by its own cue check.
+        if self.age_years is not None and self.condition_new != 0:
+            drops.append(f"age_years={self.age_years} (condition_new={self.condition_new})")
+            self.age_years = None
 
         if drops:
             object.__setattr__(self, "_grounding_drops", drops)
