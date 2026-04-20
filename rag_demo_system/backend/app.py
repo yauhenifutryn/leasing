@@ -21,6 +21,7 @@ from .grounding_validator import replace_ungrounded
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text, split_for_tts_streaming
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
+from .classifier_schema import parse_classifier_output
 from .rag_skip import should_skip_rag
 from .profile_prompts import (
     build_change_confirm_text,
@@ -1232,18 +1233,18 @@ async def _stream_voice_response(
                 timeout_sec=4,
             )
             _raw = classify_resp.text.strip()
-            _js_start = _raw.find("{")
-            _js_end = _raw.rfind("}") + 1
-            _sa_parsed = {}
-            if _js_start >= 0 and _js_end > _js_start:
-                import json as _json_classify
-                try:
-                    _sa_parsed = _json_classify.loads(_raw[_js_start:_js_end])
-                except Exception:
-                    _sa_parsed = {}
+            # CP-2.2: route raw classifier text through ClassifierOutput.
+            # parse_classifier_output never raises; returns empty model on
+            # JSON / validation failure. Utterance is passed as context so
+            # the post-validator nulls enum fields lacking a cue in the user
+            # utterance (E1/E2 fixes). Legacy call sites below keep reading
+            # _sa_parsed.get(...) — the dict is now the Pydantic-validated,
+            # utterance-grounded shape.
+            _sa_output = parse_classifier_output(_raw, message or "")
+            _sa_parsed = _sa_output.model_dump(exclude_none=True)
             try:
                 import json as _json
-                _sa_summary = {k: v for k, v in (_sa_parsed or {}).items() if v not in (None, "", [], {})}
+                _sa_summary = {k: v for k, v in _sa_parsed.items() if v not in (None, "", [], {})}
                 print(f"[SessionAgent] raw={_json.dumps(_sa_summary, ensure_ascii=False)[:250]} session={session_id[:8]}", flush=True)
             except Exception:  # noqa: BLE001
                 pass
