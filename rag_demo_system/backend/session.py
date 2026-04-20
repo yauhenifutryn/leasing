@@ -137,6 +137,15 @@ class ClientProfile:
         if isinstance(_changes, dict) and _changes:
             for field_name, vals in _changes.items():
                 if not hasattr(self, field_name):
+                    # Codex adversarial 2026-04-20 Finding B: fail loud on
+                    # unknown fields instead of silently dropping. Prior
+                    # behaviour let pending_change={"prepaid": ...} be
+                    # "confirmed" while the value never reached the calc.
+                    print(
+                        f"[ClientProfile] apply_pending_change: ignoring unknown "
+                        f"field={field_name!r} — state-loss guard",
+                        flush=True,
+                    )
                     continue
                 new_value = vals.get("new") if isinstance(vals, dict) else vals
                 setattr(self, field_name, new_value)

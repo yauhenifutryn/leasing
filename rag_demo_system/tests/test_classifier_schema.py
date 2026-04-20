@@ -214,3 +214,95 @@ def test_client_type_grounded_passes():
     raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
     out = parse_classifier_output(raw, utterance="я от компании")
     assert out.client_type == "Юридическое лицо"
+
+
+# --- Codex adversarial re-review 2026-04-20: value-aware grounding ---
+
+def test_currency_rub_nulled_when_utterance_says_dollars():
+    # Codex Finding A: 'currency="RUB"' + utterance "в долларах" must drop RUB,
+    # not keep it because USD cue is somewhere in the dimension.
+    raw = json.dumps({"intent": "TOOL", "currency": "RUB"})
+    out = parse_classifier_output(raw, utterance="в долларах")
+    assert out.currency is None
+
+
+def test_currency_usd_nulled_when_utterance_says_rubles():
+    raw = json.dumps({"intent": "TOOL", "currency": "USD"})
+    out = parse_classifier_output(raw, utterance="в рублях")
+    assert out.currency is None
+
+
+def test_currency_byn_passes_for_bare_rubles_belarus_context():
+    raw = json.dumps({"intent": "TOOL", "currency": "BYN"})
+    out = parse_classifier_output(raw, utterance="в рублях")
+    assert out.currency == "BYN"
+
+
+def test_currency_byn_blocked_when_russian_rubles_specified():
+    # "российские рубли" disambiguates to RUB; BYN must not survive.
+    raw = json.dumps({"intent": "TOOL", "currency": "BYN"})
+    out = parse_classifier_output(raw, utterance="в российских рублях")
+    assert out.currency is None
+
+
+def test_currency_rub_passes_when_russian_rubles_specified():
+    raw = json.dumps({"intent": "TOOL", "currency": "RUB"})
+    out = parse_classifier_output(raw, utterance="в российских рублях")
+    assert out.currency == "RUB"
+
+
+def test_subject_car_nulled_when_utterance_says_trucks():
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="хочу грузовик")
+    assert out.subject is None
+
+
+def test_subject_trucks_passes_on_grouzovik():
+    raw = json.dumps({"intent": "TOOL", "subject": "Грузовой автомобиль"})
+    out = parse_classifier_output(raw, utterance="хочу грузовик")
+    assert out.subject == "Грузовой автомобиль"
+
+
+def test_client_type_fiz_nulled_when_utterance_says_ooo():
+    raw = json.dumps({"intent": "TOOL", "client_type": "Физическое лицо"})
+    out = parse_classifier_output(raw, utterance="мы ООО Ромашка")
+    assert out.client_type is None
+
+
+def test_client_type_yur_passes_on_ooo():
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="мы ООО Ромашка")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_type_schedule_linear_nulled_when_utterance_says_annuitet():
+    raw = json.dumps({"intent": "TOOL", "type_schedule": "1"})
+    out = parse_classifier_output(raw, utterance="давай аннуитетный график")
+    assert out.type_schedule is None
+
+
+def test_type_schedule_annuity_passes_on_annuitet():
+    raw = json.dumps({"intent": "TOOL", "type_schedule": "0"})
+    out = parse_classifier_output(raw, utterance="давай аннуитетный график")
+    assert out.type_schedule == "0"
+
+
+# --- Codex Finding B: prepaid alias removed from schema ---
+
+def test_prepaid_alias_rejected_as_change_field():
+    # Codex Finding B: change_field="prepaid" must be dropped by the schema
+    # because ClientProfile has no `prepaid` attribute — apply_pending_change
+    # would silently skip it, leaving the user's confirmed change unapplied.
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "prepaid", "change_value": 20,
+    })
+    out = parse_classifier_output(raw, utterance="аванс 20 процентов")
+    assert out.change_field is None
+
+
+def test_prepaid_pct_still_valid_as_change_field():
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "prepaid_pct", "change_value": 20,
+    })
+    out = parse_classifier_output(raw, utterance="аванс 20 процентов")
+    assert out.change_field == "prepaid_pct"

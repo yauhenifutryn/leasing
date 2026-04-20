@@ -16,18 +16,98 @@ so there is exactly one source of truth for "what counts as a cue".
 from __future__ import annotations
 
 import json as _json
+import re
 from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from .profile_hygiene import (
-    _CURRENCY_CUE_RE,
-    _TYPE_SCHEDULE_CUE_RE,
     _normalize_client_type,
     has_field_signal,
-    utterance_has_client_type_cue,
-    utterance_has_subject_cue,
 )
+
+# Value-specific utterance cue sets (Codex adversarial 2026-04-20 fix for
+# Finding A). profile_hygiene's ``utterance_has_*_cue`` helpers answer "is any
+# cue for this DIMENSION present", which lets contradictory-but-plausible
+# values through — e.g. classifier emits ``currency="RUB"`` on "в долларах"
+# and the USD cue satisfies the dimension check. These per-value patterns
+# demand the cue MATCH the emitted value, not just the dimension.
+_SUBJECT_VALUE_CUES: dict[str, re.Pattern[str]] = {
+    "Легковой автомобиль": re.compile(
+        r"\b("
+        r"легков\w*|седан\w*|машин\w*|автомобил\w*|авто\b|внедорожник\w*|кроссовер\w*|"
+        # brand names implying car:
+        r"bmw|mercedes|mercedes-benz|toyota|kia|hyundai|audi|volkswagen|vw|lexus|"
+        r"mazda|renault|peugeot|ford|lada|skoda|fiat|chevrolet|nissan|honda|"
+        r"мерседес|тойот\w+|киа|хендай|ауди|фольксваген|лексус|мазд\w+|фольцваген|"
+        r"рено|пежо|форд|лад\w+|шкод\w+|ниссан|хонд\w+"
+        r")",
+        re.IGNORECASE,
+    ),
+    "Грузовой автомобиль": re.compile(
+        r"\b(грузов\w*|грузовик\w*|фур\w+|тягач\w*|самосвал\w*|микроавтобус\w*|камаз|уаз)",
+        re.IGNORECASE,
+    ),
+    "Спецтехника": re.compile(
+        r"\b(спецтехник\w*|погрузчик\w*|экскаватор\w*|бульдозер\w*|кран\w*|каток\w*|"
+        r"трактор\w*|комбайн\w*)",
+        re.IGNORECASE,
+    ),
+    "Оборудование": re.compile(
+        r"\b(оборудовани\w*|станк\w+|установк\w+)|\bлиния\b",
+        re.IGNORECASE,
+    ),
+    "Недвижимость": re.compile(
+        r"\b(недвижимост\w*|квартир\w+|дом\b|здани\w+|помещени\w+|склад\w*|офис\w*)",
+        re.IGNORECASE,
+    ),
+    "Прочий транспорт": re.compile(
+        r"\b(транспорт\w*|автобус\w*|прицеп\w*|мотоцикл\w*|скутер\w*)",
+        re.IGNORECASE,
+    ),
+}
+
+_CLIENT_TYPE_VALUE_CUES: dict[str, re.Pattern[str]] = {
+    "Физическое лицо": re.compile(
+        r"\b(физлиц\w*|физик\w*|физическ\w+)",
+        re.IGNORECASE,
+    ),
+    "Юридическое лицо": re.compile(
+        r"(\b(ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+|"
+        r"юрлиц\w*|юридическ\w+|ооо|оао|зао|"
+        r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|"
+        r"предпринимат\w+)|бизнес\w*)",
+        re.IGNORECASE,
+    ),
+}
+
+_RUSSIAN_RUBLE_RE = re.compile(r"\bросси\w*\s*рубл\w*|\brub\b", re.IGNORECASE)
+_BELARUS_RUBLE_RE = re.compile(r"\bрубл\w*|\bруб\b|\bbyn\b|\bblr\b|\bбелорусск\w+\s*рубл\w*", re.IGNORECASE)
+
+
+def _currency_cue_match(value: str, utterance: str) -> bool:
+    """Currency is value-aware because 'рубли' in Belarus context means BYN,
+    and Russian rubles only ground if 'российск' modifier appears. Order
+    matters: check RUB modifier before BYN match.
+    """
+    if value == "USD":
+        return bool(re.search(r"\bдоллар\w*|\busd\b", utterance, re.IGNORECASE))
+    if value == "EUR":
+        return bool(re.search(r"\bевро\b|\beur\b", utterance, re.IGNORECASE))
+    if value == "RUB":
+        return bool(_RUSSIAN_RUBLE_RE.search(utterance))
+    if value == "BYN":
+        # Any рубл\w* mention that's NOT explicitly "российский рубль".
+        if _RUSSIAN_RUBLE_RE.search(utterance):
+            return False
+        return bool(_BELARUS_RUBLE_RE.search(utterance))
+    return False
+
+
+_TYPE_SCHEDULE_VALUE_CUES: dict[str, re.Pattern[str]] = {
+    "0": re.compile(r"\bаннуитет\w*", re.IGNORECASE),
+    "1": re.compile(r"\bлинейн\w+|\bдифференциров\w+|\bубыва\w+|\bравн\w+", re.IGNORECASE),
+}
 
 _SUBJECT_VALUES = Literal[
     "Легковой автомобиль",
@@ -51,10 +131,16 @@ _CLIENT_TYPE_VALUES = Literal["Физическое лицо", "Юридичес
 _CURRENCY_VALUES = Literal["BYN", "USD", "EUR", "RUB"]
 _SCHEDULE_VALUES = Literal["0", "1"]
 
+# "prepaid" alias intentionally dropped (Codex adversarial 2026-04-20,
+# Finding B). ClientProfile has `prepaid_pct` and `prepaid_amount` fields
+# but no `prepaid` attribute, so pending_change with field="prepaid" was
+# silently skipped by apply_pending_change's hasattr gate, and the user's
+# confirmed аванс change never reached the calculator. Schema now forces
+# classifier to disambiguate to pct or amount.
 _CHANGE_FIELDS = Literal[
     "subject", "cost", "currency", "client_type", "condition_new",
     "age_years", "term_months", "type_schedule",
-    "prepaid_pct", "prepaid_amount", "prepaid",
+    "prepaid_pct", "prepaid_amount",
 ]
 
 # Full downstream action vocabulary (E-Codex). app.py reads these values at
@@ -146,18 +232,28 @@ class ClassifierOutput(BaseModel):
                 object.__setattr__(self, "_grounding_drops", drops)
             return self
 
-        if self.subject is not None and not utterance_has_subject_cue(utterance):
-            drops.append(f"subject={self.subject!r}")
-            self.subject = None
-        if self.client_type is not None and not utterance_has_client_type_cue(utterance):
-            drops.append(f"client_type={self.client_type!r}")
-            self.client_type = None
-        if self.currency is not None and not _CURRENCY_CUE_RE.search(utterance):
+        # Value-aware grounding (Codex adversarial 2026-04-20). Each emitted
+        # value must have its OWN cue in the utterance, not just any cue for
+        # the dimension. Kills "currency=RUB on 'в долларах'" / "subject=
+        # Легковой on 'грузовик'" / "type_schedule='1' on 'аннуитет'" leaks.
+        if self.subject is not None:
+            cue_re = _SUBJECT_VALUE_CUES.get(self.subject)
+            if cue_re is None or not cue_re.search(utterance):
+                drops.append(f"subject={self.subject!r}")
+                self.subject = None
+        if self.client_type is not None:
+            cue_re = _CLIENT_TYPE_VALUE_CUES.get(self.client_type)
+            if cue_re is None or not cue_re.search(utterance):
+                drops.append(f"client_type={self.client_type!r}")
+                self.client_type = None
+        if self.currency is not None and not _currency_cue_match(self.currency, utterance):
             drops.append(f"currency={self.currency!r}")
             self.currency = None
-        if self.type_schedule is not None and not _TYPE_SCHEDULE_CUE_RE.search(utterance):
-            drops.append(f"type_schedule={self.type_schedule!r}")
-            self.type_schedule = None
+        if self.type_schedule is not None:
+            cue_re = _TYPE_SCHEDULE_VALUE_CUES.get(self.type_schedule)
+            if cue_re is None or not cue_re.search(utterance):
+                drops.append(f"type_schedule={self.type_schedule!r}")
+                self.type_schedule = None
         if self.condition_new is not None and not has_field_signal(
             "condition_new", self.condition_new, utterance
         ):
