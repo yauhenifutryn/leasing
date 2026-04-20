@@ -510,3 +510,48 @@ def test_type_schedule_bool_not_coerced():
     raw = json.dumps({"intent": "TOOL", "type_schedule": True})
     out = parse_classifier_output(raw, utterance="аннуитет")
     assert out.type_schedule is None
+
+
+# --- Codex basic review 2026-04-20: top-level field coercion symmetry ---
+
+def test_condition_new_string_zero_coerced_to_int():
+    # Codex basic P1: Qwen sometimes emits condition_new as quoted string.
+    # Must coerce so used-asset signal + age_years requirement still fire.
+    raw = json.dumps({"intent": "TOOL", "condition_new": "0"})
+    out = parse_classifier_output(raw, utterance="бу машина")
+    assert out.condition_new == 0
+    assert isinstance(out.condition_new, int)
+
+
+def test_condition_new_string_one_coerced_to_int():
+    raw = json.dumps({"intent": "TOOL", "condition_new": "1"})
+    out = parse_classifier_output(raw, utterance="новая машина")
+    assert out.condition_new == 1
+
+
+def test_condition_new_float_one_point_zero_coerced():
+    raw = json.dumps({"intent": "TOOL", "condition_new": 1.0})
+    out = parse_classifier_output(raw, utterance="новая")
+    assert out.condition_new == 1
+
+
+def test_currency_lowercase_coerced_to_upper():
+    # Codex basic P2: Qwen may emit "usd" / "byn" in lower case. Must coerce
+    # at the boundary so the currency isn't dropped before grounding runs.
+    raw = json.dumps({"intent": "TOOL", "currency": "usd"})
+    out = parse_classifier_output(raw, utterance="в долларах")
+    assert out.currency == "USD"
+
+
+def test_currency_mixed_case_with_whitespace_coerced():
+    raw = json.dumps({"intent": "TOOL", "currency": " ByN "})
+    out = parse_classifier_output(raw, utterance="в рублях")
+    assert out.currency == "BYN"
+
+
+def test_currency_garbage_string_still_dropped():
+    # Coercion only rescues valid currencies — "XYZ" must still fall through
+    # and get rejected by the Literal.
+    raw = json.dumps({"intent": "TOOL", "currency": "XYZ"})
+    out = parse_classifier_output(raw, utterance="в долларах")
+    assert out.currency is None

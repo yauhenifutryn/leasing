@@ -359,6 +359,39 @@ class ClassifierOutput(BaseModel):
             return v.strip()
         return v
 
+    @field_validator("condition_new", mode="before")
+    @classmethod
+    def _coerce_condition_new(cls, v):
+        """Symmetric to _coerce_type_schedule: Qwen may emit the code as a
+        quoted string ("0" / "1") instead of an int. Coerce before Literal
+        validation so a used-asset signal isn't dropped at the schema
+        boundary. (Codex basic review 2026-04-20 P1.)
+        """
+        if isinstance(v, bool):
+            return v  # let Literal reject
+        if isinstance(v, str):
+            s = v.strip()
+            if s in ("0", "1"):
+                return int(s)
+            return v
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        return v
+
+    @field_validator("currency", mode="before")
+    @classmethod
+    def _coerce_currency(cls, v):
+        """Uppercase + strip currency strings before Literal validation.
+        Qwen sometimes emits lowercase ("usd" / "byn") which the old
+        _normalize_currency path handled downstream; the Literal is stricter,
+        so normalize here at the boundary. (Codex basic review 2026-04-20 P2.)
+        """
+        if isinstance(v, str):
+            u = v.strip().upper()
+            if u in ("BYN", "USD", "EUR", "RUB"):
+                return u
+        return v
+
     @model_validator(mode="after")
     def _ground_against_utterance(self, info: ValidationInfo) -> "ClassifierOutput":
         """Null schema-valid-but-ungrounded enum fields and enforce cross-field
