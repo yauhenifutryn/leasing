@@ -466,6 +466,46 @@ def test_change_value_nan_rejected():
     assert out.change_value is None
 
 
+def test_change_value_fractional_term_months_rejected():
+    # Codex basic review P2: fractional floats for integer fields must fail
+    # closed, not truncate. 60.5 → silently 60 was the bug.
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "term_months", "change_value": 60.5,
+    })
+    out = parse_classifier_output(raw, utterance="на 60 месяцев")
+    assert out.change_field is None
+    assert out.change_value is None
+
+
+def test_change_value_fractional_condition_new_rejected():
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "condition_new", "change_value": 0.5,
+    })
+    out = parse_classifier_output(raw, utterance="наполовину новая")
+    assert out.change_field is None
+    assert out.change_value is None
+
+
+def test_change_value_fractional_type_schedule_rejected():
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "type_schedule", "change_value": 0.5,
+    })
+    out = parse_classifier_output(raw, utterance="аннуитет")
+    assert out.change_field is None
+    assert out.change_value is None
+
+
+def test_change_value_integer_float_still_coerced():
+    # 60.0 IS an integer value in float form — must still canonicalize.
+    raw = json.dumps({
+        "intent": "TOOL", "change_field": "term_months", "change_value": 60.0,
+    })
+    out = parse_classifier_output(raw, utterance="на 60 месяцев")
+    assert out.change_field == "term_months"
+    assert out.change_value == 60
+    assert isinstance(out.change_value, int)
+
+
 # --- Codex thorough review: non-finite numerics rejected at schema ---
 
 def test_nan_cost_rejected_by_schema():

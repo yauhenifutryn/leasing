@@ -147,6 +147,11 @@ def canonicalize_change_value(field: str, value):
         return _DROP_CHANGE_VALUE
 
     if field == "condition_new":
+        # Reject fractional floats — 0.5 must not silently truncate to 0.
+        # (Codex basic review 2026-04-20 P2: fail closed on malformed input
+        # rather than mutating the confirmed profile to the wrong value.)
+        if isinstance(value, float) and not value.is_integer():
+            return _DROP_CHANGE_VALUE
         try:
             iv = int(value)
         except (TypeError, ValueError):
@@ -154,12 +159,16 @@ def canonicalize_change_value(field: str, value):
         return iv if iv in (0, 1) else _DROP_CHANGE_VALUE
 
     if field == "type_schedule":
-        if isinstance(value, (int, float)):
-            try:
-                iv = int(value)
-            except (TypeError, ValueError):
+        if isinstance(value, bool):
+            return _DROP_CHANGE_VALUE
+        if isinstance(value, float):
+            # Fractional floats must not truncate to a schedule code.
+            if not value.is_integer():
                 return _DROP_CHANGE_VALUE
+            iv = int(value)
             return str(iv) if iv in (0, 1) else _DROP_CHANGE_VALUE
+        if isinstance(value, int):
+            return str(value) if value in (0, 1) else _DROP_CHANGE_VALUE
         if isinstance(value, str):
             s = value.strip()
             return s if s in ("0", "1") else _DROP_CHANGE_VALUE
@@ -192,11 +201,15 @@ def canonicalize_change_value(field: str, value):
         return f
 
     if field in ("term_months", "age_years"):
+        # Reject fractional floats — 60.5 term_months must not silently
+        # truncate to 60 and confirm the wrong change. (Codex basic P2.)
         try:
             f = float(value)
         except (TypeError, ValueError):
             return _DROP_CHANGE_VALUE
         if not math.isfinite(f):
+            return _DROP_CHANGE_VALUE
+        if not f.is_integer():
             return _DROP_CHANGE_VALUE
         return int(f)
 
