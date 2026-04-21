@@ -28,8 +28,8 @@ Update this file atomically as work progresses. Include commit SHA next to compl
     - 945aaea — E-Codex-2 READBACK deny grounding
     - 9ea4f7b — condition_new / currency top-level coercers (basic P1/P2)
     - 25cd065 — fractional change_value fail-closed (basic P2)
-- [ ] CP-2.5 — Live validation failure rate <2% (pending SIP call)
-- [ ] CP-2.6 — Section closed, `structured-classifier-v1` tag pushed
+- [x] CP-2.5 — Live SIP call 2026-04-20 (session cc7fc318 on 38.80.122.98): 0 validation failures, 0 json parse failures, 0 state-loss guards, 4 grounding drops (healthy). Well below <5 threshold.
+- [x] CP-2.6 — `structured-classifier-v1` tag pushed 2026-04-20. Section CLOSED. Orchestrator bugs observed in cc7fc318 (readback skip, change-confirm bypass, profile-memory loss, USD disclosure drop) are NOT Section 2 scope — documented in Section 3 plan as E5/E6/E7/E8 and are acceptance criteria for `apply_turn`.
 
 ## Section 3 — Architecture refactor
 
@@ -89,5 +89,7 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP-2.2 | 484dab7 | 2026-04-20 | parse_classifier_output wired into app.py (legacy dict shape preserved) |
 | CP-2.2b | 41aa50c | 2026-04-20 | Drop ИП from ClientType + prompt; expand action enum to 8 values (E-Codex) |
 | CP-2.3 | 277ea78 | 2026-04-20 | Fix 41b `_VALID_CHANGE_FIELDS` whitelist retired (Literal covers it) |
+| CP-2.4b (codex rev) | 25cd065 | 2026-04-20 | End of 8-pass Codex review loop (13 findings resolved) |
+| structured-classifier-v1 | 25cd065 | 2026-04-20 | Section 2 close; CP-2.5 SIP-validated on session cc7fc318 |
 
 (Append rows as checkpoints complete.)

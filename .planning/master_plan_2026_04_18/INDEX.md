@@ -24,9 +24,9 @@ Where N is one of: 1, 2, 3, 4, 5, 6. Claude should:
 
 | # | File | Status | Prereqs | Effort | Priority |
 |---|---|---|---|---|---|
-| 1 | [01_pre_refactor_stability.md](01_pre_refactor_stability.md) | pending | none | ~1 day | HIGH — client-facing wins |
-| 2 | [02_structured_classifier.md](02_structured_classifier.md) | pending | none (parallel to 1 OK) | ~1 day | MEDIUM — enables 3 |
-| 3 | [03_architecture_refactor.md](03_architecture_refactor.md) | pending | 2 done | ~2-3 days | MEDIUM — structural |
+| 1 | [01_pre_refactor_stability.md](01_pre_refactor_stability.md) | **COMPLETE** (`stability-v1` @ 0ed4b2e) | none | ~1 day | HIGH — client-facing wins |
+| 2 | [02_structured_classifier.md](02_structured_classifier.md) | **COMPLETE** (`structured-classifier-v1` @ 25cd065) | none (parallel to 1 OK) | ~1 day | MEDIUM — enables 3 |
+| 3 | [03_architecture_refactor.md](03_architecture_refactor.md) | **NEXT** — E5/E6/E7/E8 evidence attached as CP-3.5 criteria | 2 done | ~2-3 days | HIGH — fixes orchestrator chaos surfaced by Section 2 SIP test |
 | 4 | [04_natural_turn_taking.md](04_natural_turn_taking.md) | pending | ideally after 3 | ~2 days | HIGH — UX polish |
 | 5 | [05_speaker_mode_adaptive_vad.md](05_speaker_mode_adaptive_vad.md) | pending | after 4 | ~1 day | MEDIUM — experimental |
 | 6 | [06_final_docs_and_self_improvement.md](06_final_docs_and_self_improvement.md) | pending | all above + client UAT | ~1 day | FINAL — close out plan |

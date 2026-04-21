@@ -90,6 +90,63 @@ The hygiene gate correctly dropped the hallucinated `subject` patch, but the imp
 
 This supersedes Fix 40b's `multi-field unlock` logic at `app.py` (currently spread across ~4 call sites) and the `[Profile] CHANGE_PENDING (implicit)` path (around app.py emitting that log line).
 
+## Evidence from live call 2026-04-20 (post-Section-2 SIP test)
+
+Session `cc7fc318` (38.80.122.98, 2026-04-20 17:55-17:58) was the CP-2.5 live validation for Section 2. The schema layer passed all metrics (0 validation failures, 0 parse failures, 0 state-loss guards, 4 healthy grounding drops). But the SAME CALL surfaced four orchestrator bugs that Section 2 cannot fix — they belong to Section 3 by design. These are the concrete acceptance tests for `apply_turn`:
+
+**E5 — Readback gate requires intent=TOOL, skips on intent=CONVERSATION (app.py:2022).**
+
+At 17:57:07 user said "Аннуитетный график" after all other params were captured. Classifier labeled the turn `intent=CONVERSATION` (Qwen's legitimate read: "user is confirming a param choice, not asking to calculate"). Profile transitioned to `missing=[]` on this turn.
+
+```
+[Orchestrator] COLLECTING clarify: patched=['type_schedule'] still_missing=[] intent=CONVERSATION
+```
+
+Gate 2 (readback emit) at `app.py:2022-2090` is wrapped in `if needs_tool:` — since `needs_tool = (_intent == "TOOL")` and intent was CONVERSATION, the gate was skipped entirely. Bot went to the LLM clarify path instead, which freewheeled chat ("Аннуитетный график означает равные ежемесячные платежи...") and never spoke the deterministic readback.
+
+User eventually said "Ну, рассчитай" three turns later, forcing intent=TOOL, and only then did calc fire — but with no readback-confirm step, so the contract was broken.
+
+Section 1's 5 SIP test calls didn't hit this because those callers ended the last field-fill turn with an explicit calc trigger word. Qwen's intent labelling for plain-answer turns is legitimately ambiguous; the orchestrator must not depend on it.
+
+**Refactor requirement:** `apply_turn` returns `EmitReadback()` whenever `profile.is_complete_for_calc() and state == COLLECTING and confirmed_at is None and not is_confirmation`. Classifier intent label is IRRELEVANT to this transition. Verify: write a unit test where `classifier_output.intent == "CONVERSATION"` and profile just became complete — assert the returned action is `EmitReadback`.
+
+**E6 — Change-confirm bypassed; direct-call fires on user's first change utterance (app.py:2047-2059 + 2106-2168).**
+
+Session `cc7fc318` turn at 17:58:47. User said "А давай всё-таки поменяем срок на 60". At 17:58:48 — 1 second later — calculator was called with `term=60`. No "Меняю срок на 60 месяцев, всё верно?" step. No CHANGE_PENDING transition.
+
+Root cause in the current orchestrator: `_is_param_change_for_gate` (line 2047) bypasses Gate 1/2 when `action in ("change_param", "recalculate")` AND there's a prior calc in history AND there's a fresh param hint. Then the direct-call path at line 2106 applies the change and fires calc in one turn. The CHANGE_PENDING staging block at the always-on state-gate region runs BEFORE this, but only fires when `state in (CONFIRMED, CHANGE_PENDING)` — and today's state was stuck in COLLECTING (see E5) so CHANGE_PENDING was never entered.
+
+**Refactor requirement:** `apply_turn` returns `EmitChangeConfirm(changes)` on any turn where the classifier emitted a change_field/change_value pair that differs from the current profile AND the profile is complete, REGARDLESS of current state. Direct-apply is never allowed for user-initiated changes — only confirmed changes flow through. Verify: unit test with profile complete + classifier emits `change_field=term_months, change_value=60` — assert action is `EmitChangeConfirm({"term_months": {"old": 36, "new": 60}})`, NOT `FireCalc`.
+
+**E7 — Profile state lost across implicit subject flips (same session).**
+
+At 17:57:49 user said "Да, я всё-таки хочу грузовой автомобиль". Profile had: subject=Легковой, client_type=Физическое, cost=80000, currency=USD, term=36, prepaid=20, type_schedule=0. Bot response at 17:57:50: "Грузовые автомобили доступны только для юридических лиц. Вы ИП или организация?" — correct pivot. Then at 17:58:00 after user said "Я организация", bot responded "подтвердите стоимость, год выпуска и размер аванса" — asking for data it already had.
+
+Log confirms profile state was intact the whole time:
+```
+[Profile] snapshot: state=COLLECTING ... subj=Грузовой автомобиль cost=80000.0 USD
+client_type=Юридическое лицо cond_new=1 term=36 prepaid=20.0% graph=0 missing=[]
+```
+
+`missing=[]` yet bot asked clarifying questions about captured params. The LLM clarify path was re-entered because state never transitioned to CONFIRMED (see E5), and the LLM-facing prompt didn't include the current profile snapshot as constraint — it improvised.
+
+**Refactor requirement:** when `apply_turn` decides to emit clarification text (`EmitClarify` or a re-prompt variant), the rendered prompt MUST contain the current profile's captured values inline as anti-hallucination anchors. This was partially done in Fix 1.1's deterministic `render_calc_result`; `apply_turn` extends the same discipline to clarification turns. Verify: feed a complete-profile + subject-change turn through `apply_turn` twice in a row, assert the LLM prompt on the second call contains "cost=80000" verbatim.
+
+**E8 — USD disclosure regression is E3, same bug, fresh repro.**
+
+Session `cc7fc318` at 17:57:32 heard: "Аванс составит 48 000 рублей, ежемесячный платёж 8109 рублей, а общая сумма сделки 342 317 рублей." No USD context, even though user said $80 000 and the deterministic renderer emitted it. Same pattern as Section 1 call `205add5a` (E3 above). Two independent repros confirm E3 is structural, not a flake. `apply_turn`'s `FireCalc` handler must ship the deterministic body to TTS unparaphrased.
+
+## Updated acceptance criteria for CP-3.5 (live regression sweep)
+
+CP-3.5 fails if any of these replay on a fresh SIP call after the refactor:
+
+1. Bot skips readback when the last-field-fill utterance is ambiguous intent (E5).
+2. Bot applies a change_field and fires calc in the same turn without a confirmation beat (E6).
+3. Bot asks for data already captured after an implicit profile pivot (E7).
+4. Post-calc narration drops USD disclosure when `original_currency == "USD"` (E8/E3).
+
+Each must have a unit test at `apply_turn` level BEFORE the live sweep.
+
 ## Scope (phased execution)
 
 ### Phase 3.A — Extract pure functions first
