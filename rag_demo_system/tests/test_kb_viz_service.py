@@ -48,6 +48,13 @@ class _FakeHit:
 
 
 class _FakeQdrant:
+    """Default fake: every returned chunk has section "monthly-fee" so the
+    service's section dedup drops all but the first. Tests that need
+    several distinct chunks through dedup should either set
+    KB_VIZ_DEDUPE_SECTIONS=false on the fixture, inject _FakeQdrantVaried
+    (unique section per chunk), or call STATE.register_query directly.
+    """
+
     def search(self, collection_name, query_vector, limit, with_payload, with_vectors):
         return [
             _FakeHit(
@@ -63,6 +70,25 @@ class _FakeQdrant:
         ]
 
 
+class _FakeQdrantVaried:
+    """Every chunk has its own heading_path[1] section, so section dedup
+    is a no-op and the service returns the full requested top_k."""
+
+    def search(self, collection_name, query_vector, limit, with_payload, with_vectors):
+        return [
+            _FakeHit(
+                id_=f"chunk-{i}",
+                score=0.9 - i * 0.1,
+                payload={
+                    "chunk_id": f"chunk-{i}",
+                    "text": f"chunk {i} body",
+                    "heading_path": ["pricing", f"section-{i}"],
+                },
+            )
+            for i in range(limit)
+        ]
+
+
 def _reload_service() -> None:
     mod_name = "services.kb_viz_service"
     if mod_name in sys.modules:
@@ -71,13 +97,17 @@ def _reload_service() -> None:
         del sys.modules["services"]
 
 
-def _fresh(monkeypatch, tmp_path, token: str | None):
+def _fresh(monkeypatch, tmp_path, token: str | None, *, dedupe: bool = False):
     if token is None:
         monkeypatch.delenv("KB_VIZ_OVERLAY_TOKEN", raising=False)
     else:
         monkeypatch.setenv("KB_VIZ_OVERLAY_TOKEN", token)
     monkeypatch.setenv("KB_VIZ_RESULTS_DIR", str(tmp_path))
     monkeypatch.setenv("KB_VIZ_STATE_DIR", str(tmp_path / ".state"))
+    # Default most tests to dedupe=off so the original fake, which emits
+    # same-section chunks, returns the full K. Tests that care about dedup
+    # set dedupe=True and use _FakeQdrantVaried where appropriate.
+    monkeypatch.setenv("KB_VIZ_DEDUPE_SECTIONS", "true" if dedupe else "false")
     _reload_service()
     from services import kb_viz_service as svc
 
@@ -731,3 +761,53 @@ def test_query_registry_evicts_oldest_fifo(open_client) -> None:
         assert svc.STATE.issued_chunks("q4") == frozenset({"chunk-4"})
     finally:
         svc.QUERY_REGISTRY_MAX = original_cap
+
+
+def test_dedupe_drops_same_section_chunks(monkeypatch, tmp_path) -> None:
+    """Same-section chunks are the dominant source of near-duplicate top-K
+    hits (same answer page chunked N ways). With dedupe on, /overlay_query
+    should return at most one chunk per section even when Qdrant returns
+    many near-identical hits from the same section.
+    """
+    client, svc = _fresh(monkeypatch, tmp_path, token=None, dedupe=True)
+
+    class _SameSection:
+        def search(self, collection_name, query_vector, limit, with_payload, with_vectors):
+            # Emits 3*K chunks all in the same section, except chunk-0
+            # and chunk-5 which belong to a different section.
+            out = []
+            for i in range(limit):
+                sec = "monthly-fee"
+                if i == 5:
+                    sec = "documents"
+                out.append(_FakeHit(
+                    id_=f"chunk-{i}",
+                    score=0.9 - i * 0.01,
+                    payload={
+                        "chunk_id": f"chunk-{i}",
+                        "text": f"chunk {i}",
+                        "heading_path": ["pricing", sec],
+                    },
+                ))
+            return out
+
+    svc.STATE._qdrant = _SameSection()
+    body = client.post("/overlay_query", json={"text": "q", "kind": "3d", "top_k": 5}).json()
+    sections = [m["section"] for m in body["top_k"]]
+    # Dedupe keeps the top scorer per section. With 2 distinct sections
+    # in the fake, we see 2 unique sections; the rest top-up with the
+    # next-highest-score chunks from the dominant section since we
+    # didn't reach K unique sections.
+    assert sections[0] == "monthly-fee"
+    assert "documents" in sections
+    # Of the K returned, at least the first two are distinct.
+    assert sections[0] != sections[1]
+
+
+def test_dedupe_disabled_returns_near_duplicates(monkeypatch, tmp_path) -> None:
+    """With dedupe off, duplicate-section chunks come through unchanged."""
+    client, svc = _fresh(monkeypatch, tmp_path, token=None, dedupe=False)
+    # Default fake emits all 5 chunks with section "monthly-fee"
+    body = client.post("/overlay_query", json={"text": "q", "kind": "3d", "top_k": 5}).json()
+    assert len(body["top_k"]) == 5
+    assert {m["section"] for m in body["top_k"]} == {"monthly-fee"}

@@ -68,6 +68,11 @@ MAX_COMMENT_CHARS = 2000
 # bound. FIFO eviction when full. 2000 is generous for a single demo
 # session (~1 query every ~5s for 3 hours) but keeps memory trivial.
 QUERY_REGISTRY_MAX = 2000
+# When true, /overlay_query returns at most one chunk per heading_path[1]
+# section, which is the most common source of near-duplicate top-K hits
+# (multiple chunks from the same answer page). Over-fetches by this
+# multiplier to get enough unique sections before trimming to top_k.
+DEDUPE_OVERSAMPLE = 3
 
 
 def _env(name: str, default: str) -> str:
@@ -86,6 +91,13 @@ class _State:
         self.qdrant_url = _env("KB_VIZ_QDRANT_URL", DEFAULT_QDRANT_URL)
         self.qdrant_coll = _env("KB_VIZ_QDRANT_COLL", DEFAULT_QDRANT_COLL)
         self.token = os.getenv("KB_VIZ_OVERLAY_TOKEN") or None
+        # Dedupe near-duplicate top-K by section. Default ON — same-section
+        # chunks are typically overlapping excerpts of one answer page, and
+        # showing five near-identical cards to the reviewer is noise. Set
+        # KB_VIZ_DEDUPE_SECTIONS=false to turn off.
+        self.dedupe_sections = _env("KB_VIZ_DEDUPE_SECTIONS", "true").lower() not in (
+            "0", "false", "no", "off"
+        )
         self._lock = threading.Lock()
         self._feedback_lock = threading.Lock()
         self._profiles_lock = threading.Lock()
@@ -492,10 +504,40 @@ def overlay_query(
         raise HTTPException(status_code=500, detail=f"Projection failed: {exc}")
 
     try:
-        matches = _top_k(vec, payload.top_k)
+        # Over-fetch when dedupe is on so we have enough unique sections
+        # to fill K after dropping within-section duplicates.
+        fetch_k = payload.top_k * DEDUPE_OVERSAMPLE if STATE.dedupe_sections else payload.top_k
+        raw = _top_k(vec, fetch_k)
     except Exception as exc:
         logger.exception("Qdrant search failed")
         raise HTTPException(status_code=503, detail=f"Qdrant search failed: {exc}")
+
+    if STATE.dedupe_sections:
+        # Keep the highest-scoring chunk per section (raw is already score-desc
+        # from Qdrant). Fall back to raw top-K if dedupe didn't produce
+        # enough unique sections — better to show duplicates than <K results.
+        seen: set[str] = set()
+        deduped: list[OverlayMatch] = []
+        for m in raw:
+            key = (m.section or "").strip().lower() or m.chunk_id
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(m)
+            if len(deduped) >= payload.top_k:
+                break
+        if len(deduped) < payload.top_k:
+            # Top up with whatever we had (already score-sorted).
+            existing_ids = {m.chunk_id for m in deduped}
+            for m in raw:
+                if m.chunk_id not in existing_ids:
+                    deduped.append(m)
+                    existing_ids.add(m.chunk_id)
+                    if len(deduped) >= payload.top_k:
+                        break
+        matches = deduped[: payload.top_k]
+    else:
+        matches = raw[: payload.top_k]
 
     _maybe_touch_profile(payload.client_id)
 

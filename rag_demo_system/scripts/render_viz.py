@@ -522,30 +522,40 @@ def _overlay_post_script(
         badTexts.push(label);
       }}
     }});
-    function pushHaloTrace(name, color, xs, ys, zs, texts) {{
+    // Ring fill: light tinted, not fully transparent, so the LEGEND icon
+    // actually shows a colored circle instead of an empty outline — the
+    // user reported "panel on the right has ✓ Подтверждено with no icon".
+    // Also add an icon inside each ring (✓ or ✗) so the meaning is legible
+    // even at a glance without reading the legend label.
+    function pushHaloTrace(name, borderColor, fillColor, glyph, xs, ys, zs, texts) {{
       if (xs.length === 0) return;
+      var labelTexts = xs.map(function() {{ return glyph; }});
       if (kind === '3d') {{
         newTraces.push({{
-          type: 'scatter3d', mode: 'markers', name: name,
+          type: 'scatter3d', mode: 'markers+text', name: name,
           x: xs, y: ys, z: zs,
-          marker: {{size: 12, color: 'rgba(0,0,0,0)', symbol: 'circle-open', line: {{width: 2.5, color: color}}}},
-          text: texts,
-          hovertemplate: '<b>%{{text}}</b><extra>' + name + '</extra>',
+          marker: {{size: 16, color: fillColor, symbol: 'circle', line: {{width: 3, color: borderColor}}}},
+          text: labelTexts, textposition: 'middle center',
+          textfont: {{size: 11, color: borderColor, family: 'system-ui, sans-serif'}},
+          customdata: texts,
+          hovertemplate: '<b>%{{customdata}}</b><extra>' + name + '</extra>',
           showlegend: true
         }});
       }} else {{
         newTraces.push({{
-          type: 'scatter', mode: 'markers', name: name,
+          type: 'scatter', mode: 'markers+text', name: name,
           x: xs, y: ys,
-          marker: {{size: 18, color: 'rgba(0,0,0,0)', symbol: 'circle-open', line: {{width: 2.5, color: color}}}},
-          text: texts,
-          hovertemplate: '<b>%{{text}}</b><extra>' + name + '</extra>',
+          marker: {{size: 26, color: fillColor, symbol: 'circle', line: {{width: 3, color: borderColor}}}},
+          text: labelTexts, textposition: 'middle center',
+          textfont: {{size: 14, color: borderColor, family: 'system-ui, sans-serif'}},
+          customdata: texts,
+          hovertemplate: '<b>%{{customdata}}</b><extra>' + name + '</extra>',
           showlegend: true
         }});
       }}
     }}
-    pushHaloTrace(VERIFIED_OK_NAME, '#2a7d2a', okXs, okYs, okZs, okTexts);
-    pushHaloTrace(VERIFIED_BAD_NAME, '#b3261e', badXs, badYs, badZs, badTexts);
+    pushHaloTrace(VERIFIED_OK_NAME,  '#2a7d2a', 'rgba(42, 125, 42, 0.18)',  '✓', okXs,  okYs,  okZs,  okTexts);
+    pushHaloTrace(VERIFIED_BAD_NAME, '#b3261e', 'rgba(179, 38, 30, 0.18)',  '✗', badXs, badYs, badZs, badTexts);
 
     // Order users so the current user renders on top
     var keys = Object.keys(perUser).sort(function(a, b) {{
@@ -1100,9 +1110,9 @@ def _overlay_post_script(
           chunkMarkerTrace = {{
             type: 'scatter3d', mode: 'markers+text', name: QUERY_ZONE_NAME,
             x: chunkXs, y: chunkYs, z: chunkZs,
-            marker: {{size: 14, color: 'rgba(255, 255, 255, 0.95)', line: {{width: 2, color: '#e23c3c'}}}},
+            marker: {{size: 20, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
             text: chunkLabels, textposition: 'middle center',
-            textfont: {{size: 11, color: '#c22020', family: 'system-ui, sans-serif'}},
+            textfont: {{size: 13, color: '#b11616', family: 'system-ui, sans-serif'}},
             customdata: chunkHovers,
             hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
             showlegend: true
@@ -1111,9 +1121,9 @@ def _overlay_post_script(
           chunkMarkerTrace = {{
             type: 'scatter', mode: 'markers+text', name: QUERY_ZONE_NAME,
             x: chunkXs, y: chunkYs,
-            marker: {{size: 22, color: 'rgba(255, 255, 255, 0.95)', line: {{width: 2, color: '#e23c3c'}}}},
+            marker: {{size: 32, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
             text: chunkLabels, textposition: 'middle center',
-            textfont: {{size: 12, color: '#c22020', family: 'system-ui, sans-serif'}},
+            textfont: {{size: 16, color: '#b11616', family: 'system-ui, sans-serif'}},
             customdata: chunkHovers,
             hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
             showlegend: true
