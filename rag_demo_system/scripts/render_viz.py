@@ -568,134 +568,189 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     return '';
   }}
 
-  // Per-chunk feedback: each row collects two orthogonal signals.
-  //   • Точность (content):  "is this chunk's text factually correct?"
-  //     — mandatory signal, drives the coverage icons.
-  //   • Релевантность (relevance): "is this chunk a good answer to the
-  //     query?" — optional secondary signal, logged for later analysis,
-  //     does not change coverage.
-  // Clients are encouraged to skip chunks they can't confidently judge.
+  // Step-through review flow. Shows ONE chunk at a time with full text
+  // expanded, vote buttons that persist their selected state, and a Next
+  // button that always advances. When all N chunks are reviewed the panel
+  // collapses so the 3D graph is not pushed off-screen.
+  //
+  // State per query:
+  //   currentChunkIdx — index of the chunk being reviewed (0..N-1, N=done)
+  //   chunkStates[i]  — {{content: 'correct'|'wrong'|null, relevance: ...}}
+  var currentChunkIdx = 0;
+  var chunkStates = [];
+  var matchesCollapsed = false;
+
+  function resetReviewState() {{
+    currentChunkIdx = 0;
+    chunkStates = [];
+    matchesCollapsed = false;
+  }}
+
+  function markSelected(btn, isSelected, selectedBg) {{
+    if (isSelected) {{
+      btn.style.borderWidth = '2px';
+      btn.style.fontWeight = '700';
+      btn.style.background = selectedBg;
+      btn.style.boxShadow = 'inset 0 0 0 1px rgba(0,0,0,0.08)';
+    }} else {{
+      btn.style.borderWidth = '1px';
+      btn.style.fontWeight = '400';
+      btn.style.boxShadow = 'none';
+    }}
+  }}
+
   function renderMatchList() {{
     matches.textContent = '';
     if (!lastQuery) return;
 
+    var total = lastQuery.top_k.length;
+    // Ensure the state array is the right length.
+    while (chunkStates.length < total) chunkStates.push({{content: null, relevance: null}});
+
     var instruction = el('div', {{style: 'margin-bottom:8px;padding:8px 10px;background:#fff8e1;border-left:3px solid #e0b84a;color:#4a3d14;font-size:12px;line-height:1.5;'}});
-    instruction.appendChild(el('div', {{
-      text: 'Как проверять:',
-      style: 'font-weight:600;margin-bottom:4px;'
-    }}));
-    instruction.appendChild(el('div', {{
-      text: '• Точность (главное) — верны ли факты в тексте чанка: цифры, телефоны, условия. ✓ если всё верно, ✗ если есть ошибка (нужен комментарий).'
-    }}));
-    instruction.appendChild(el('div', {{
-      text: '• Релевантность (по желанию) — подходит ли этот чанк как ответ на ваш вопрос. Не обязательно, но полезно для будущего анализа поиска.'
-    }}));
-    instruction.appendChild(el('div', {{
-      text: '• Пропустите чанк, если не уверены. Не голосуйте просто так.',
-      style: 'margin-top:4px;color:#6d5210;'
-    }}));
+    instruction.appendChild(el('div', {{text: 'Как проверять:', style: 'font-weight:600;margin-bottom:4px;'}}));
+    instruction.appendChild(el('div', {{text: '• Точность (главное) — верны ли факты в тексте чанка. ✗ требует комментарий.'}}));
+    instruction.appendChild(el('div', {{text: '• Релевантность (по желанию) — подходит ли этот чанк как ответ на ваш вопрос.'}}));
+    instruction.appendChild(el('div', {{text: '• Если не уверены — просто нажмите «Пропустить».', style: 'margin-top:4px;color:#6d5210;'}}));
     matches.appendChild(instruction);
 
-    lastQuery.top_k.forEach(function(m, i) {{
-      var cov = (lastCoverage.per_chunk || {{}})[m.chunk_id];
-      var icon = coverageIcon(cov);
-      var counts = cov ? cov.correct + '✓ / ' + cov.wrong + '✗' : 'ещё не проверялось';
-      var score = (m.score != null) ? m.score.toFixed(3) : '?';
+    // Collapse toggle (works at any time: mid-review or after completion).
+    var header = el('div', {{style: 'display:flex;align-items:center;gap:10px;margin-bottom:8px;'}});
+    var progressLabel = el('span', {{style: 'font-weight:600;color:#234;'}});
+    progressLabel.textContent = currentChunkIdx >= total
+      ? 'Все ' + total + ' чанков просмотрены. Спасибо!'
+      : 'Чанк ' + (currentChunkIdx + 1) + ' из ' + total;
+    header.appendChild(progressLabel);
+    var collapseBtn = el('a', {{href: '#', style: 'margin-left:auto;color:#357;cursor:pointer;text-decoration:underline;font-size:12px;'}});
+    collapseBtn.textContent = matchesCollapsed ? 'Показать чанки ▼' : 'Скрыть чанки ▲';
+    collapseBtn.onclick = function(e) {{
+      e.preventDefault();
+      matchesCollapsed = !matchesCollapsed;
+      renderMatchList();
+    }};
+    header.appendChild(collapseBtn);
+    matches.appendChild(header);
 
-      var row = el('div', {{
-        style: 'margin-bottom:6px;padding:8px 10px;background:#fff;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;'
-      }});
+    if (matchesCollapsed) return;
 
-      // Header line with rank, score, section, coverage counts
-      var head = el('div', {{
-        style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px;'
-      }});
-      head.appendChild(el('span', {{text: icon + ' #' + (i + 1), style: 'font-weight:600;min-width:38px;'}}));
-      head.appendChild(el('span', {{text: score, style: 'color:#888;font-size:11px;min-width:42px;'}}));
-      head.appendChild(el('span', {{text: m.section || '(без раздела)', style: 'color:#223;flex:1;'}}));
-      head.appendChild(el('span', {{text: counts, style: 'color:#555;font-size:11px;'}}));
-      row.appendChild(head);
+    // All done: show a summary of what the user voted and stop here.
+    if (currentChunkIdx >= total) {{
+      var summary = el('div', {{style: 'padding:10px;background:#eef7ee;border:1px solid #b5d8b5;border-radius:4px;color:#234;font-size:12px;'}});
+      var contentVotes = chunkStates.filter(function(s) {{ return s.content; }}).length;
+      var relVotes = chunkStates.filter(function(s) {{ return s.relevance; }}).length;
+      summary.textContent = 'Записано голосов: ' + contentVotes + ' по точности, ' + relVotes + ' по релевантности. ' +
+        'Задайте другой вопрос, чтобы продолжить.';
+      matches.appendChild(summary);
+      return;
+    }}
 
-      // Preview text with click-to-expand
-      var preview = m.text_preview || '';
-      var full = m.text_full || preview;
-      var textBox = el('div', {{
-        text: preview,
-        style: 'color:#333;margin:4px 0 6px 0;line-height:1.45;max-height:3.8em;overflow:hidden;white-space:pre-wrap;cursor:pointer;'
-      }});
-      var expanded = false;
-      textBox.addEventListener('click', function() {{
-        expanded = !expanded;
-        textBox.textContent = expanded ? full : preview;
-        textBox.style.maxHeight = expanded ? 'none' : '3.8em';
-      }});
-      row.appendChild(textBox);
+    var m = lastQuery.top_k[currentChunkIdx];
+    var state = chunkStates[currentChunkIdx];
+    var cov = (lastCoverage.per_chunk || {{}})[m.chunk_id];
+    var icon = coverageIcon(cov);
+    var counts = cov ? cov.correct + '✓ / ' + cov.wrong + '✗' : 'ещё не проверялось';
+    var score = (m.score != null) ? m.score.toFixed(3) : '?';
 
-      // --- Content accuracy buttons (primary signal) ---
-      var contentRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-top:4px;'}});
-      contentRow.appendChild(el('span', {{text: 'Точность:', style: 'font-size:11px;color:#555;min-width:80px;'}}));
-      var ok = el('button', {{
-        text: '✓ Верно', style: 'padding:4px 10px;cursor:pointer;background:#e7f7e7;border:1px solid #7bc97b;border-radius:3px;font-size:12px;'
-      }});
-      var no = el('button', {{
-        text: '✗ Ошибка', style: 'padding:4px 10px;cursor:pointer;background:#fbeaea;border:1px solid #d98080;border-radius:3px;font-size:12px;'
-      }});
-      var rowStatus = el('span', {{style: 'color:#666;font-size:11px;margin-left:4px;'}});
-      contentRow.appendChild(ok);
-      contentRow.appendChild(no);
-      contentRow.appendChild(rowStatus);
-      row.appendChild(contentRow);
+    var card = el('div', {{style: 'padding:12px 14px;background:#fff;border:1px solid #d0d0d0;border-radius:6px;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,0.04);'}});
 
-      // --- Relevance buttons (optional secondary signal) ---
-      var relRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-top:4px;'}});
-      relRow.appendChild(el('span', {{text: 'Релевантность:', style: 'font-size:11px;color:#555;min-width:110px;'}}));
-      var rel = el('button', {{
-        text: '◯ Подходит', style: 'padding:4px 10px;cursor:pointer;background:#eef3fb;border:1px solid #7aa4d4;border-radius:3px;font-size:12px;'
-      }});
-      var notRel = el('button', {{
-        text: '⊘ Не подходит', style: 'padding:4px 10px;cursor:pointer;background:#f5f0f8;border:1px solid #a989c2;border-radius:3px;font-size:12px;'
-      }});
-      var relStatus = el('span', {{style: 'color:#666;font-size:11px;margin-left:4px;'}});
-      relRow.appendChild(rel);
-      relRow.appendChild(notRel);
-      relRow.appendChild(relStatus);
-      row.appendChild(relRow);
+    var head = el('div', {{style: 'display:flex;align-items:center;gap:10px;margin-bottom:8px;'}});
+    head.appendChild(el('span', {{text: icon + ' #' + (currentChunkIdx + 1), style: 'font-weight:700;font-size:14px;'}}));
+    head.appendChild(el('span', {{text: score, style: 'color:#888;font-size:11px;'}}));
+    head.appendChild(el('span', {{text: m.section || '(без раздела)', style: 'color:#223;flex:1;font-weight:500;'}}));
+    head.appendChild(el('span', {{text: counts, style: 'color:#555;font-size:11px;'}}));
+    card.appendChild(head);
 
-      // Lazy comment input, appears only on ✗ Ошибка
-      var commentBox = el('div', {{style: 'display:none;margin-top:6px;'}});
-      var ta = el('textarea', {{
-        placeholder: 'Что именно неверно в этом чанке? (обязательно)',
-        style: 'width:100%;min-height:50px;padding:6px;box-sizing:border-box;font-size:12px;'
-      }});
-      var send = el('button', {{
-        text: 'Отправить', style: 'padding:4px 10px;cursor:pointer;margin-top:4px;font-size:12px;'
-      }});
-      commentBox.appendChild(ta);
-      commentBox.appendChild(send);
-      row.appendChild(commentBox);
+    var full = m.text_full || m.text_preview || '';
+    var textBox = el('div', {{text: full, style: 'color:#222;margin:0 0 12px 0;line-height:1.5;white-space:pre-wrap;background:#fafafa;padding:10px;border-radius:4px;border:1px solid #eee;max-height:360px;overflow:auto;'}});
+    card.appendChild(textBox);
 
-      ok.onclick = function() {{
-        submitChunkFeedback(m, 'content', 'correct', null, rowStatus);
-      }};
-      no.onclick = function() {{
-        commentBox.style.display = 'block';
-        ta.focus();
-      }};
-      send.onclick = function() {{
-        var c = ta.value.trim();
-        if (!c) {{ rowStatus.textContent = 'Нужен комментарий.'; return; }}
-        submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
-        commentBox.style.display = 'none';
-      }};
-      rel.onclick = function() {{
-        submitChunkFeedback(m, 'relevance', 'relevant', null, relStatus);
-      }};
-      notRel.onclick = function() {{
-        submitChunkFeedback(m, 'relevance', 'not_relevant', null, relStatus);
-      }};
+    // --- Content accuracy buttons ---
+    var contentRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-bottom:6px;'}});
+    contentRow.appendChild(el('span', {{text: 'Точность:', style: 'font-size:12px;color:#555;min-width:110px;'}}));
+    var ok = el('button', {{text: '✓ Верно', style: 'padding:6px 12px;cursor:pointer;background:#e7f7e7;border:1px solid #7bc97b;border-radius:3px;font-size:12px;'}});
+    var no = el('button', {{text: '✗ Ошибка', style: 'padding:6px 12px;cursor:pointer;background:#fbeaea;border:1px solid #d98080;border-radius:3px;font-size:12px;'}});
+    markSelected(ok, state.content === 'correct', '#bfe4bf');
+    markSelected(no, state.content === 'wrong', '#f2c4c4');
+    contentRow.appendChild(ok);
+    contentRow.appendChild(no);
+    card.appendChild(contentRow);
 
-      matches.appendChild(row);
+    // Comment textarea, visible when wrong is selected (or being chosen)
+    var commentBox = el('div', {{style: 'display:' + (state.content === 'wrong' ? 'block' : 'none') + ';margin:6px 0 10px 0;'}});
+    var ta = el('textarea', {{placeholder: 'Что именно неверно? (обязательно для ✗)', style: 'width:100%;min-height:60px;padding:8px;box-sizing:border-box;font-size:12px;'}});
+    if (state.contentComment) ta.value = state.contentComment;
+    commentBox.appendChild(ta);
+    card.appendChild(commentBox);
+
+    // --- Relevance buttons (optional) ---
+    var relRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-bottom:12px;'}});
+    relRow.appendChild(el('span', {{text: 'Релевантность:', style: 'font-size:12px;color:#555;min-width:110px;'}}));
+    var rel = el('button', {{text: '◯ Подходит', style: 'padding:6px 12px;cursor:pointer;background:#eef3fb;border:1px solid #7aa4d4;border-radius:3px;font-size:12px;'}});
+    var notRel = el('button', {{text: '⊘ Не подходит', style: 'padding:6px 12px;cursor:pointer;background:#f5f0f8;border:1px solid #a989c2;border-radius:3px;font-size:12px;'}});
+    markSelected(rel, state.relevance === 'relevant', '#c8d8ef');
+    markSelected(notRel, state.relevance === 'not_relevant', '#dcc9e5');
+    relRow.appendChild(rel);
+    relRow.appendChild(notRel);
+    card.appendChild(relRow);
+
+    // --- Status + navigation ---
+    var footer = el('div', {{style: 'display:flex;align-items:center;gap:10px;'}});
+    var rowStatus = el('span', {{style: 'color:#666;font-size:11px;flex:1;'}});
+    var skipBtn = el('button', {{text: 'Пропустить →', style: 'padding:6px 14px;cursor:pointer;background:#f0f0f0;border:1px solid #bbb;border-radius:3px;font-size:12px;'}});
+    var nextBtn = el('button', {{text: 'Дальше →', style: 'padding:6px 14px;cursor:pointer;background:#1e66c8;border:1px solid #1e66c8;color:#fff;border-radius:3px;font-size:12px;display:' + ((state.content || state.relevance) ? 'inline-block' : 'none') + ';'}});
+    footer.appendChild(rowStatus);
+    footer.appendChild(skipBtn);
+    footer.appendChild(nextBtn);
+    card.appendChild(footer);
+
+    matches.appendChild(card);
+
+    // Wire up vote buttons — each records the signal and re-renders for
+    // the highlight state, but does NOT auto-advance. User clicks "Дальше"
+    // when they're done with this chunk.
+    ok.onclick = async function() {{
+      await submitChunkFeedback(m, 'content', 'correct', null, rowStatus);
+      state.content = 'correct';
+      state.contentComment = null;
+      renderMatchList();
+    }};
+    no.onclick = function() {{
+      state.content = 'wrong';
+      renderMatchList();
+      setTimeout(function() {{ ta.focus(); }}, 10);
+    }};
+    // When the comment textarea loses focus and has content + we're in
+    // 'wrong' state, submit the wrong verdict.
+    ta.addEventListener('blur', async function() {{
+      var c = ta.value.trim();
+      if (state.content === 'wrong' && c && state.contentComment !== c) {{
+        await submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
+        state.contentComment = c;
+      }}
     }});
+    rel.onclick = async function() {{
+      await submitChunkFeedback(m, 'relevance', 'relevant', null, rowStatus);
+      state.relevance = 'relevant';
+      renderMatchList();
+    }};
+    notRel.onclick = async function() {{
+      await submitChunkFeedback(m, 'relevance', 'not_relevant', null, rowStatus);
+      state.relevance = 'not_relevant';
+      renderMatchList();
+    }};
+    skipBtn.onclick = function() {{ currentChunkIdx++; renderMatchList(); }};
+    nextBtn.onclick = async function() {{
+      if (state.content === 'wrong') {{
+        var c = ta.value.trim();
+        if (!c) {{ rowStatus.textContent = 'Нужен комментарий к ошибке.'; ta.focus(); return; }}
+        if (state.contentComment !== c) {{
+          await submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
+          state.contentComment = c;
+        }}
+      }}
+      currentChunkIdx++;
+      renderMatchList();
+    }};
   }}
 
   function startPolling() {{
@@ -738,13 +793,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       var pos = data.position;
       var topK = data.top_k || [];
       lastQuery = {{query_id: data.query_id, text: q, kind: kind, top_k: topK}};
+      resetReviewState();
       var trace = kind === '3d'
         ? {{x:[pos[0]], y:[pos[1]], z:[pos[2]], mode:'markers+text', type:'scatter3d', marker:{{size:10, color:'red', symbol:'diamond'}}, text:['Your query'], textposition:'top center', name:'Query', hovertemplate:'%{{text}}<extra></extra>'}}
         : {{x:[pos[0]], y:[pos[1]], mode:'markers+text', type:'scatter', marker:{{size:16, color:'red', symbol:'star'}}, text:['Your query'], textposition:'top center', name:'Query', hovertemplate:'%{{text}}<extra></extra>'}};
       var existing = gd.data.findIndex(function(t) {{ return t.name === 'Query'; }});
       if (existing >= 0) Plotly.deleteTraces(gd, existing);
       Plotly.addTraces(gd, [trace]);
-      status.textContent = 'Top ' + topK.length + ' matches. (icons: ✓ validated correct, ✗ flagged wrong, ± mixed, ? unvalidated — cumulative across all users)';
+      status.textContent = 'Found ' + topK.length + ' matches. Проверяйте по одному. (иконки: ✓ подтверждено, ✗ помечено как ошибка, ± смешанно, ? не проверено)';
       renderMatchList();
     }} catch (e) {{
       status.textContent = 'Overlay failed: ' + e.message;

@@ -143,8 +143,13 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     assert "◯ Подходит" in html_3d
     assert "⊘ Не подходит" in html_3d
     assert "signal_type" in html_3d
-    # Click-to-expand + text_full wiring
     assert "text_full" in html_3d
+    # Step-through review flow wiring
+    assert "currentChunkIdx" in html_3d
+    assert "Дальше" in html_3d         # Next button
+    assert "Пропустить" in html_3d     # Skip button
+    assert "Скрыть чанки" in html_3d   # Collapse toggle
+    assert "markSelected" in html_3d   # Persistent vote highlighting
 
 
 def test_truncate_handles_long_text() -> None:
