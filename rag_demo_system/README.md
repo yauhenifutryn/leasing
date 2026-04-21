@@ -158,3 +158,73 @@ For the fair benchmark case, run two tunnels:
 
 - `app` for `:8000`
 - `llm` for `:8001`
+
+## KB Visualization (client demo + KB-quality feedback tool)
+
+An optional UMAP projection of the live Qdrant index as self-contained
+Plotly HTMLs. Two plots (2D and 3D), colored by KB section, hover shows
+the chunk text. Built for client explanation of "how vector retrieval
+works" and to collect targeted feedback on which KB chunks are correct
+or wrong. All targets are scoped to this subdirectory (see
+`rag_demo_system/Makefile`); the root Makefile is untouched.
+
+Runs on the same GPU server as production. Talks to `localhost:6333`
+Qdrant, no laptop step needed, no conflict with the voice pipeline.
+
+### Static only (emailable HTMLs)
+
+```bash
+make -C rag_demo_system kb-viz
+# outputs: rag_demo_system/results/kb_viz_{2d,3d}.html
+```
+
+### Plus live-query overlay (experimental)
+
+Adds a toggleable button to the HTML that:
+
+1. Embeds a typed question on the GPU server.
+2. Projects it into the same UMAP space.
+3. Shows the top-5 nearest KB chunks.
+4. Lets the client mark each answer **Correct** or **Wrong** with a
+   free-text comment on what was wrong.
+5. Persists every feedback event to `.state/kb_viz_feedback.jsonl`
+   (matching the existing self-improvement pipeline shape).
+6. Fetches `GET /coverage` to show a per-section validation tally and
+   hint which sections the client has not yet probed.
+
+```bash
+# Terminal A: run the overlay service
+make -C rag_demo_system kb-viz-overlay-serve             # uvicorn on :8500
+
+# Terminal B: rebuild HTMLs with overlay URL baked in
+export KB_VIZ_PUBLIC_URL=https://<your-server>:8500/overlay_query
+export KB_VIZ_OVERLAY_TOKEN=$(openssl rand -hex 16)       # optional
+make -C rag_demo_system kb-viz-overlay-build
+```
+
+The overlay service uses the same `intfloat/multilingual-e5-large`
+embedding model as production, with the matching `query:` prefix, so
+retrieval geometry matches the bot exactly.
+
+### Feedback report
+
+```bash
+make -C rag_demo_system kb-viz-feedback-report
+# aggregates rag_demo_system/.state/kb_viz_feedback.jsonl into a
+# per-section / per-chunk / comment rollup
+```
+
+Legend in the match list:
+
+| Icon | Meaning |
+|---|---|
+| ✓ | Chunk has been confirmed correct at least once and never flagged wrong |
+| ✗ | Chunk has been flagged wrong at least once and never confirmed correct |
+| ± | Chunk has both correct and wrong feedback (ambiguous) |
+| ? | Chunk has never appeared in any feedback event (unvalidated) |
+
+### Tests
+
+```bash
+make -C rag_demo_system kb-viz-test
+```

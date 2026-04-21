@@ -54,3 +54,11 @@ demo_ui/__pycache__/
 *.zip
 
 .worktrees/
+
+# KB visualization artifacts (regenerated from Qdrant)
+.venv-viz/
+rag_demo_system/results/embeddings.json
+rag_demo_system/results/kb_viz_*.html
+rag_demo_system/results/umap_*.joblib
+rag_demo_system/results/viz_meta.json
+rag_demo_system/.overlay_token

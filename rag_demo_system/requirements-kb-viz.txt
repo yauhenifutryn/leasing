@@ -1,0 +1,23 @@
+# KB visualization (static HTMLs) + optional overlay service.
+#
+# Deliberately minimal: no torch, no transformers. The overlay service needs
+# sentence-transformers when live; install rag_demo_system/requirements.txt
+# alongside this file on the server for that path.
+
+numpy>=1.24,<3
+pandas>=2.0,<3
+umap-learn>=0.5.5,<0.6
+numba>=0.58
+scikit-learn>=1.3
+plotly>=5.20,<6
+joblib>=1.3
+qdrant-client>=1.7,<2
+
+# Overlay service only
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27,<1
+pydantic>=2,<3
+
+# Tests
+pytest>=8,<9
+httpx>=0.27

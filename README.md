@@ -16,6 +16,7 @@ This repository contains several long-lived branches. Each represents a distinct
 | `claude/qwen-voice-next` | Experimental | 204 | Qwen3-Omni benchmarking, multi-model voice testing |
 | `codex/split-voice-providers` | Spike | 3 | Quick experiment: split-brain voice provider options |
 | `codex/yandex-realtime-voice-integration` | Spike | 5 | Yandex SpeechKit realtime voice demo |
+| `feature/kb-viz` | Standalone add-on | small | KB vector-index visualization (static 2D/3D + optional live-query overlay with client feedback capture). Merges into `main` independently, no voice-pipeline dependencies. See [rag_demo_system/README.md](rag_demo_system/README.md#kb-visualization-client-demo--kb-quality-feedback-tool). |
 
 ### main: Call Analysis Pipeline
 
@@ -142,7 +143,25 @@ rag_demo_system/backend/tools/
 
 ### claude/qwen-voice-next: Experimental
 
-Experimental branch exploring Qwen3-Omni as an alternative to the split STT/LLM/TTS pipeline. Includes a benchmarking framework for comparing voice model configurations. Not intended for production.
+Experimental branch exploring Qwen3-Omni as an alternative to the split STT/LLM/TTS pipeline. Includes a benchmarking framework for comparing voice model configurations. Not intended for production. During the cleanup pass this branch is expected to become the tag `experiment/qwen-voice-next` and the branch will be deleted.
+
+### feature/kb-viz: KB Visualization (Client Demo + Feedback Tool)
+
+Standalone add-on. Projects the live Qdrant index via UMAP to 2D and 3D, emits self-contained Plotly HTMLs you can email to a client. Optional overlay service on `:8500` embeds client-typed questions in the same space, shows the top-5 matches, and captures Correct/Wrong verdicts with a comment. Feedback is appended as JSONL to `rag_demo_system/.state/kb_viz_feedback.jsonl` (same shape as the self-improvement pipeline so future aggregation scripts can union both sources).
+
+Intended to merge into `main` independently of `feature/voice-pipeline`, so client demos run from a stable trunk. Does not touch `provision_server.sh` or the root `Makefile`. All targets scoped to `rag_demo_system/Makefile`.
+
+```bash
+git clone --branch feature/kb-viz git@github.com:yauhenifutryn/leasing.git leasing-kb-viz
+cd leasing-kb-viz
+make -C rag_demo_system kb-viz             # static HTMLs, ~40s
+# Optional: live-query overlay + feedback capture
+make -C rag_demo_system kb-viz-overlay-serve &
+export KB_VIZ_PUBLIC_URL=https://<your-server>:8500/overlay_query
+make -C rag_demo_system kb-viz-overlay-build
+```
+
+Full details in [rag_demo_system/README.md](rag_demo_system/README.md#kb-visualization-client-demo--kb-quality-feedback-tool).
 
 ### codex/split-voice-providers and codex/yandex-realtime-voice-integration
 
