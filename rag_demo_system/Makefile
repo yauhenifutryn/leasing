@@ -18,6 +18,11 @@ PY_VIZ    = $(VENV_VIZ)/bin/python
 # Static HTMLs:   emailable, no server at runtime.
 # Overlay (opt):  FastAPI on :8500, live queries + client feedback capture.
 
+# One-shot deploy: bootstrap venv + render HTMLs + start service +
+# smoke-test + print share URL. Use this on a fresh server clone.
+kb-viz-deploy:
+	bash scripts/deploy_kb_viz.sh
+
 kb-viz:
 	bash scripts/setup_kb_viz.sh
 
@@ -73,6 +78,6 @@ kb-viz-status:
 	@pgrep -af 'uvicorn.*kb_viz_service' || echo "[kb-viz] not running"
 	@ss -tlnp 2>/dev/null | grep ':8500' || true
 
-.PHONY: kb-viz kb-viz-overlay-build kb-viz-overlay-serve kb-viz-test \
-        kb-viz-feedback-report kb-viz-smoke kb-viz-logs \
+.PHONY: kb-viz-deploy kb-viz kb-viz-overlay-build kb-viz-overlay-serve \
+        kb-viz-test kb-viz-feedback-report kb-viz-smoke kb-viz-logs \
         kb-viz-static kb-viz-reset-state kb-viz-stop kb-viz-status

@@ -192,12 +192,41 @@ Adds a toggleable button to the HTML that:
 6. Fetches `GET /coverage` to show a per-section validation tally and
    hint which sections the client has not yet probed.
 
+**One-shot deploy** (fresh server clone → ready-to-share URL in one
+command):
+
+```bash
+# On the server, after:
+#   git clone https://github.com/yauhenifutryn/leasing.git leasing-kb-viz
+#   cd leasing-kb-viz && git checkout feature/kb-viz
+make -C rag_demo_system kb-viz-deploy
+```
+
+The script auto-detects the server's public IP, generates a soft-gate
+token if none is set, bootstraps the venv, dumps Qdrant, renders the
+HTMLs with the overlay wired in, starts the service, waits for
+`/health`, runs the smoke test from inside and outside, and prints the
+client-ready URL plus a maintenance cheat-sheet.
+
+Overrides:
+
+```bash
+KB_VIZ_PUBLIC_IP=38.80.122.98 \
+KB_VIZ_OVERLAY_TOKEN=$(openssl rand -hex 16) \
+KB_VIZ_EMBED_DEVICE=cuda \
+    make -C rag_demo_system kb-viz-deploy
+```
+
+**Manual two-step flow** (used internally by `kb-viz-deploy`; run it
+yourself only if you need to debug or redeploy without regenerating the
+HTMLs):
+
 ```bash
 # Terminal A: run the overlay service
 make -C rag_demo_system kb-viz-overlay-serve             # uvicorn on :8500
 
 # Terminal B: rebuild HTMLs with overlay URL baked in
-export KB_VIZ_PUBLIC_URL=https://<your-server>:8500/overlay_query
+export KB_VIZ_PUBLIC_URL=http://<your-server-ip>:8500/overlay_query
 export KB_VIZ_OVERLAY_TOKEN=$(openssl rand -hex 16)       # optional soft gate
 make -C rag_demo_system kb-viz-overlay-build
 ```
@@ -205,6 +234,19 @@ make -C rag_demo_system kb-viz-overlay-build
 The overlay service uses the same `intfloat/multilingual-e5-large`
 embedding model as production, with the matching `query:` prefix, so
 retrieval geometry matches the bot exactly.
+
+#### Maintenance cheat-sheet
+
+| Command | Purpose |
+|---|---|
+| `make kb-viz-deploy` | Re-deploy from scratch (new token, new HTMLs, fresh service) |
+| `make kb-viz-smoke` | One-shot PASS/FAIL health probe across all endpoints |
+| `make kb-viz-logs` | Print service log + feedback log + profile registry (no streaming) |
+| `make kb-viz-status` | Show PID + listening ports for the uvicorn process |
+| `make kb-viz-reset-state` | Wipe feedback + profile files (keeps service running) |
+| `make kb-viz-stop` | Stop the service |
+| `make kb-viz-static` | Rebuild emailable static HTMLs (no overlay) |
+| `make kb-viz-feedback-report` | Human-readable feedback aggregation |
 
 #### Trust model for `KB_VIZ_OVERLAY_TOKEN`
 
