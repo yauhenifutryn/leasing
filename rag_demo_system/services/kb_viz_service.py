@@ -196,6 +196,7 @@ class OverlayMatch(BaseModel):
     score: float
     section: str
     text_preview: str
+    text_full: str = ""  # full chunk text, shown on click-to-expand in the UI
 
 
 class OverlayResponse(BaseModel):
@@ -329,7 +330,14 @@ def _top_k(vector: list[float], k: int) -> list[OverlayMatch]:
     for hit in results:
         payload = dict(hit.payload or {})
         heading = payload.get("heading_path") or []
-        section = heading[0] if heading else ""
+        # Skip heading_path[0] — it's the doc-level root ("Knowledge Base")
+        # that's the same for every chunk and not useful as a section label.
+        if len(heading) >= 2 and heading[1]:
+            section = heading[1]
+        elif heading:
+            section = heading[0]
+        else:
+            section = ""
         text = str(payload.get("text", ""))
         preview = text if len(text) <= TEXT_PREVIEW_CHARS else text[:TEXT_PREVIEW_CHARS].rstrip() + "…"
         out.append(
@@ -338,6 +346,7 @@ def _top_k(vector: list[float], k: int) -> list[OverlayMatch]:
                 score=float(hit.score or 0.0),
                 section=str(section),
                 text_preview=preview,
+                text_full=text,
             )
         )
     return out

@@ -123,8 +123,14 @@ def test_overlay_query_3d_returns_query_id(open_client) -> None:
     first = body["top_k"][0]
     assert first["chunk_id"].startswith("chunk-")
     assert 0.0 <= first["score"] <= 1.0
-    assert first["section"] == "pricing"
+    # Section comes from heading_path[1] now (heading_path[0] is the
+    # doc-level root and was the same for every chunk — useless as a label).
+    assert first["section"] == "monthly-fee"
     assert first["text_preview"].endswith("…")
+    # Full text is also returned so the UI can click-to-expand without a
+    # second round-trip to the server.
+    assert first["text_full"]
+    assert len(first["text_full"]) >= len(first["text_preview"])
 
 
 def test_overlay_query_2d(open_client) -> None:

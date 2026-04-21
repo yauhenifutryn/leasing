@@ -32,7 +32,8 @@ UMAP_3D_N_NEIGHBORS: int = 20
 UMAP_3D_MIN_DIST: float = 0.2
 UMAP_RANDOM_STATE: int = 42
 
-HOVER_TEXT_MAX_CHARS: int = 300
+HOVER_TEXT_MAX_CHARS: int = 80
+MATCH_LIST_PREVIEW_CHARS: int = 180
 TITLE_2D: str = "Micro Leasing KB · 2D Projection (UMAP)"
 TITLE_3D: str = "Micro Leasing KB · 3D Projection (UMAP)"
 
@@ -59,7 +60,16 @@ def load_embeddings(path: Path) -> LoadedEmbeddings:
     for p in points:
         payload_field = p.get("payload") or {}
         heading_path = payload_field.get("heading_path") or []
-        section = heading_path[0] if heading_path else _DEFAULT_SECTION
+        # heading_path[0] is the doc-level root ("Knowledge Base") and is the
+        # same for every chunk, so using it for coloring / sectioning makes
+        # the whole plot one colour. Prefer heading_path[1] when present
+        # (the actual topic e.g. "кто владеет компанией Микро Лизинг").
+        if len(heading_path) >= 2 and heading_path[1]:
+            section = heading_path[1]
+        elif heading_path:
+            section = heading_path[0]
+        else:
+            section = _DEFAULT_SECTION
         records.append(
             {
                 "point_id": str(p.get("id", "")),
@@ -325,26 +335,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   var input = el('input', {{type: 'text', placeholder: 'Ask a question (Russian)', style: 'width:60%;padding:6px;'}});
   var ask = el('button', {{text: 'Project', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;'}});
   var status = el('div', {{style: 'margin-top:6px;color:#666;'}});
-  var matches = el('div', {{style: 'margin-top:6px;color:#333;'}});
-  var feedback = el('div', {{style: 'margin-top:8px;display:none;'}});
-  var fbBtnOk = el('button', {{text: '✓ Correct', style: 'padding:6px 10px;cursor:pointer;background:#e7f7e7;border:1px solid #7bc97b;margin-right:6px;'}});
-  var fbBtnNo = el('button', {{text: '✗ Wrong', style: 'padding:6px 10px;cursor:pointer;background:#fbeaea;border:1px solid #d98080;'}});
-  var fbComment = el('div', {{style: 'margin-top:6px;display:none;'}});
-  var fbTextarea = el('textarea', {{placeholder: 'What was wrong? (required)', style: 'width:60%;min-height:60px;padding:6px;'}});
-  var fbSend = el('button', {{text: 'Send comment', style: 'padding:6px 10px;cursor:pointer;margin-left:6px;vertical-align:top;'}});
-  var fbStatus = el('div', {{style: 'margin-top:4px;color:#666;'}});
+  var matches = el('div', {{style: 'margin-top:8px;color:#222;'}});
+  var fbStatus = el('div', {{style: 'margin-top:6px;color:#666;font-size:12px;'}});
   var coverage = el('div', {{style: 'margin-top:10px;padding:8px;background:#f4f8ff;border:1px solid #cfe0f5;font-size:12px;color:#234;'}});
-  fbComment.appendChild(fbTextarea);
-  fbComment.appendChild(fbSend);
-  feedback.appendChild(fbBtnOk);
-  feedback.appendChild(fbBtnNo);
-  feedback.appendChild(fbComment);
-  feedback.appendChild(fbStatus);
   panel.appendChild(input);
   panel.appendChild(ask);
   panel.appendChild(status);
   panel.appendChild(matches);
-  panel.appendChild(feedback);
+  panel.appendChild(fbStatus);
   panel.appendChild(coverage);
   bar.appendChild(toggle);
   bar.appendChild(userBadge);
@@ -550,16 +548,97 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     return '';
   }}
 
+  // Per-chunk verdict: each row carries its own ✓/✗ pair. Voting is
+  // content-only ("is this chunk's text factually correct?"), not
+  // relevance-to-query. Clients skip chunks they can't judge. This keeps
+  // the feedback log unambiguous: 'wrong' means a factual KB error, not a
+  // retrieval miss.
   function renderMatchList() {{
     matches.textContent = '';
     if (!lastQuery) return;
+
+    var instruction = el('div', {{
+      text: 'Judge each chunk on its own facts — not whether it matched your question. Click ✓ if the chunk content is factually correct, ✗ if it has an error. Skip chunks you can\\'t judge.',
+      style: 'margin-bottom:8px;padding:8px 10px;background:#fff8e1;border-left:3px solid #e0b84a;color:#4a3d14;font-size:12px;line-height:1.4;'
+    }});
+    matches.appendChild(instruction);
+
     lastQuery.top_k.forEach(function(m, i) {{
-      var row = document.createElement('div');
-      var score = (m.score != null) ? m.score.toFixed(3) : '?';
       var cov = (lastCoverage.per_chunk || {{}})[m.chunk_id];
       var icon = coverageIcon(cov);
-      var counts = cov ? ' (' + cov.correct + '✓/' + cov.wrong + '✗)' : '';
-      row.textContent = icon + ' ' + (i + 1) + '. ' + score + ' — ' + (m.section || '') + ' — ' + (m.text_preview || '') + counts;
+      var counts = cov ? cov.correct + '✓ / ' + cov.wrong + '✗' : 'new';
+      var score = (m.score != null) ? m.score.toFixed(3) : '?';
+
+      var row = el('div', {{
+        style: 'margin-bottom:6px;padding:8px 10px;background:#fff;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;'
+      }});
+
+      // Header line with rank, score, section, coverage counts
+      var head = el('div', {{
+        style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px;'
+      }});
+      head.appendChild(el('span', {{text: icon + ' #' + (i + 1), style: 'font-weight:600;min-width:38px;'}}));
+      head.appendChild(el('span', {{text: score, style: 'color:#888;font-size:11px;min-width:42px;'}}));
+      head.appendChild(el('span', {{text: m.section || '(no section)', style: 'color:#223;flex:1;'}}));
+      head.appendChild(el('span', {{text: counts, style: 'color:#555;font-size:11px;'}}));
+      row.appendChild(head);
+
+      // Preview text with click-to-expand
+      var preview = m.text_preview || '';
+      var full = m.text_full || preview;  // field added in a moment
+      var textBox = el('div', {{
+        text: preview,
+        style: 'color:#333;margin:4px 0 6px 0;line-height:1.45;max-height:3.8em;overflow:hidden;white-space:pre-wrap;cursor:pointer;'
+      }});
+      var expanded = false;
+      textBox.addEventListener('click', function() {{
+        expanded = !expanded;
+        textBox.textContent = expanded ? full : preview;
+        textBox.style.maxHeight = expanded ? 'none' : '3.8em';
+      }});
+      row.appendChild(textBox);
+
+      // Per-chunk vote buttons
+      var btnRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;'}});
+      var ok = el('button', {{
+        text: '✓ Correct', style: 'padding:4px 10px;cursor:pointer;background:#e7f7e7;border:1px solid #7bc97b;border-radius:3px;font-size:12px;'
+      }});
+      var no = el('button', {{
+        text: '✗ Wrong', style: 'padding:4px 10px;cursor:pointer;background:#fbeaea;border:1px solid #d98080;border-radius:3px;font-size:12px;'
+      }});
+      var rowStatus = el('span', {{style: 'color:#666;font-size:11px;margin-left:4px;'}});
+      btnRow.appendChild(ok);
+      btnRow.appendChild(no);
+      btnRow.appendChild(rowStatus);
+      row.appendChild(btnRow);
+
+      // Lazy comment input, appears only on ✗ Wrong
+      var commentBox = el('div', {{style: 'display:none;margin-top:6px;'}});
+      var ta = el('textarea', {{
+        placeholder: 'What is wrong about this chunk? (required)',
+        style: 'width:100%;min-height:50px;padding:6px;box-sizing:border-box;font-size:12px;'
+      }});
+      var send = el('button', {{
+        text: 'Send', style: 'padding:4px 10px;cursor:pointer;margin-top:4px;font-size:12px;'
+      }});
+      commentBox.appendChild(ta);
+      commentBox.appendChild(send);
+      row.appendChild(commentBox);
+
+      ok.onclick = function() {{
+        submitChunkFeedback(m, 'correct', null, rowStatus);
+      }};
+      no.onclick = function() {{
+        commentBox.style.display = 'block';
+        ta.focus();
+      }};
+      send.onclick = function() {{
+        var c = ta.value.trim();
+        if (!c) {{ rowStatus.textContent = 'Comment required.'; return; }}
+        submitChunkFeedback(m, 'wrong', c, rowStatus);
+        commentBox.style.display = 'none';
+      }};
+
       matches.appendChild(row);
     }});
   }}
@@ -594,10 +673,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     if (!q) return;
     status.textContent = 'Embedding + projecting...';
     matches.textContent = '';
-    feedback.style.display = 'none';
-    fbComment.style.display = 'none';
     fbStatus.textContent = '';
-    fbTextarea.value = '';
     try {{
       var body = {{text: q, kind: kind, top_k: 5}};
       if (user) body.client_id = user;
@@ -613,47 +689,38 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       var existing = gd.data.findIndex(function(t) {{ return t.name === 'Query'; }});
       if (existing >= 0) Plotly.deleteTraces(gd, existing);
       Plotly.addTraces(gd, [trace]);
-      status.textContent = 'Top ' + topK.length + ' matches (legend: ✓ validated, ✗ flagged, ± mixed, ? unvalidated):';
+      status.textContent = 'Top ' + topK.length + ' matches. (icons: ✓ validated correct, ✗ flagged wrong, ± mixed, ? unvalidated — cumulative across all users)';
       renderMatchList();
-      feedback.style.display = 'block';
     }} catch (e) {{
       status.textContent = 'Overlay failed: ' + e.message;
     }}
   }};
 
-  async function submitFeedback(verdict, comment) {{
-    if (!lastQuery) return;
-    fbStatus.textContent = 'Sending...';
+  // Per-chunk feedback: a single click on a row's ✓/✗ sends one event
+  // for that specific chunk. The feedback payload still carries the
+  // same top_k shape (with one entry) so the coverage endpoint and the
+  // JSONL-backed aggregation keep working unchanged.
+  async function submitChunkFeedback(match, verdict, comment, rowStatus) {{
+    if (!lastQuery || !match) return;
+    rowStatus.textContent = 'Sending...';
     try {{
       var payload = {{
         query_id: lastQuery.query_id,
         query_text: lastQuery.text,
         kind: lastQuery.kind,
         verdict: verdict,
-        top_k: lastQuery.top_k.map(function(m) {{ return {{chunk_id: m.chunk_id, section: m.section || '', score: m.score}}; }}),
+        top_k: [{{chunk_id: match.chunk_id, section: match.section || '', score: match.score}}],
       }};
       if (comment) payload.comment = comment;
       if (user) payload.client_id = user;
       var res = await fetch(feedbackUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify(payload)}});
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      fbStatus.textContent = 'Thanks. Recorded.';
-      feedback.style.display = 'none';
+      rowStatus.textContent = (verdict === 'correct' ? '✓ recorded' : '✗ recorded');
       await refreshCoverage();
     }} catch (e) {{
-      fbStatus.textContent = 'Feedback failed: ' + e.message;
+      rowStatus.textContent = 'Failed: ' + e.message;
     }}
   }}
-
-  fbBtnOk.onclick = function() {{ submitFeedback('correct', null); }};
-  fbBtnNo.onclick = function() {{
-    fbComment.style.display = 'block';
-    fbTextarea.focus();
-  }};
-  fbSend.onclick = function() {{
-    var c = fbTextarea.value.trim();
-    if (!c) {{ fbStatus.textContent = 'Comment required for wrong verdict.'; return; }}
-    submitFeedback('wrong', c);
-  }};
 
   window.addEventListener('beforeunload', stopPolling);
 }})();
@@ -677,11 +744,14 @@ def _render_one(
 
     sections = [r["section"] for r in records]
     hover_customdata = _build_hover_customdata(records)
+    # Intentionally compact: Plotly tooltips clip off-screen on very wide
+    # content, so the hover shows just enough to identify the chunk
+    # (section + short preview + id). Full text lives in the match list
+    # below the plot, which supports click-to-expand.
     hovertemplate = (
         "<b>%{customdata[1]}</b><br>"
         "%{customdata[0]}<br>"
-        "<i>%{customdata[2]}</i><br>"
-        "<span style='color:#888;'>%{customdata[3]}</span>"
+        "<span style='color:#888;font-size:11px;'>%{customdata[3]}</span>"
         "<extra></extra>"
     )
 
