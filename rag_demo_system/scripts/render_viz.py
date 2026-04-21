@@ -39,6 +39,14 @@ TITLE_3D: str = "Micro Leasing KB · 3D Projection (UMAP)"
 
 _DEFAULT_SECTION = "Без раздела"
 
+# Plotly Express creates one trace per unique color value. A KB with
+# thousands of chunks where every heading is unique would produce
+# thousands of traces, each carrying its own marker config — the emitted
+# HTML grows to hundreds of MB and refuses to load in a browser. Cap the
+# number of distinct color groups; overflow goes into "Other".
+MAX_COLOR_GROUPS: int = 15
+OTHER_GROUP_LABEL: str = "Other"
+
 
 @dataclass
 class LoadedEmbeddings:
@@ -82,7 +90,19 @@ def load_embeddings(path: Path) -> LoadedEmbeddings:
             }
         )
 
+    # Compute color_group: keep the top N most frequent sections as their
+    # own Plotly color category, bucket everything else into OTHER_GROUP_LABEL.
+    # Without this, a KB with 3000 unique headings would generate 3000
+    # traces (hundreds of MB of HTML). See MAX_COLOR_GROUPS.
+    from collections import Counter
+    counts = Counter(r["section"] for r in records)
+    top_sections = {name for name, _ in counts.most_common(MAX_COLOR_GROUPS)}
+    for r in records:
+        r["color_group"] = r["section"] if r["section"] in top_sections else OTHER_GROUP_LABEL
+
     meta = {k: v for k, v in payload.items() if k != "points"}
+    meta["color_groups"] = sorted(top_sections) + ([OTHER_GROUP_LABEL] if len(counts) > MAX_COLOR_GROUPS else [])
+    meta["distinct_sections"] = len(counts)
     return LoadedEmbeddings(vectors=vectors, records=records, meta=meta)
 
 
@@ -787,7 +807,7 @@ def _render_one(
     assert kind in ("2d", "3d")
     is_3d = kind == "3d"
 
-    sections = [r["section"] for r in records]
+    color_groups = [r.get("color_group") or r["section"] for r in records]
     hover_customdata = _build_hover_customdata(records)
     # Intentionally compact: Plotly tooltips clip off-screen on very wide
     # content, so the hover shows just enough to identify the chunk
@@ -803,16 +823,20 @@ def _render_one(
     frame_cols: dict[str, Any] = {
         "x": coords[:, 0],
         "y": coords[:, 1],
-        "section": sections,
+        # Plotly Express creates one trace per unique value of the color
+        # column. We pass color_group (capped at MAX_COLOR_GROUPS + 1) to
+        # bound trace count — without this a KB with many headings blows
+        # HTML size up to hundreds of MB and the page never loads.
+        "color_group": color_groups,
     }
     if is_3d:
         frame_cols["z"] = coords[:, 2]
     df = pd.DataFrame(frame_cols)
 
     if is_3d:
-        fig = px.scatter_3d(df, x="x", y="y", z="z", color="section", title=title, opacity=0.85)
+        fig = px.scatter_3d(df, x="x", y="y", z="z", color="color_group", title=title, opacity=0.85)
     else:
-        fig = px.scatter(df, x="x", y="y", color="section", title=title, opacity=0.85)
+        fig = px.scatter(df, x="x", y="y", color="color_group", title=title, opacity=0.85)
 
     fig.update_traces(
         customdata=hover_customdata,

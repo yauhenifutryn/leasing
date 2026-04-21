@@ -156,6 +156,40 @@ def test_truncate_handles_long_text() -> None:
     assert out.endswith("…")
 
 
+def test_high_section_variety_does_not_explode_html(tmp_path: Path) -> None:
+    """Regression test for the 575 MB incident: with a KB where every chunk
+    has a unique heading_path[1], Plotly Express (color="section") would
+    create one trace per chunk and explode the HTML to hundreds of MB. The
+    MAX_COLOR_GROUPS bucketing keeps trace count bounded so the file stays
+    around the baseline ~10 MB regardless of section variety.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    points = []
+    n = 800  # keep UMAP fast in tests; the regression scales with heading variety
+    for i in range(n):
+        vec = rng.normal(0, 1, size=(32,))
+        vec = vec / np.linalg.norm(vec)
+        points.append({
+            "id": f"pt-{i}",
+            "vector": vec.tolist(),
+            "payload": {
+                "chunk_id": f"chunk-{i}",
+                "text": f"Chunk {i}",
+                "heading_path": ["Knowledge Base", f"topic-{i}"],
+            },
+        })
+    src = tmp_path / "embeddings.json"
+    src.write_text(json.dumps({"points": points}), encoding="utf-8")
+
+    render_viz.render(embeddings_path=src, out_dir=tmp_path)
+
+    html_3d = tmp_path / "kb_viz_3d.html"
+    size_mb = html_3d.stat().st_size / (1024 * 1024)
+    assert size_mb < 20, f"HTML grew to {size_mb:.1f} MB — MAX_COLOR_GROUPS bucketing regressed"
+
+
 def test_json_for_script_escapes_closing_tag() -> None:
     """Codex adversarial finding 3: </script> breakout via crafted URL/token."""
     hostile_token = "abc</script><script>alert(1)</script>"
