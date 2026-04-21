@@ -353,7 +353,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   var note = el('span', {{text: 'Experimental. Calls the GPU server.', style: 'margin-left:10px;color:#888;'}});
   var panel = el('div', {{style: 'display:none;margin-top:10px;'}});
   var input = el('input', {{type: 'text', placeholder: 'Ask a question (Russian)', style: 'width:60%;padding:6px;'}});
-  var ask = el('button', {{text: 'Project', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;'}});
+  var ask = el('button', {{text: 'Go', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;'}});
   var status = el('div', {{style: 'margin-top:6px;color:#666;'}});
   var matches = el('div', {{style: 'margin-top:8px;color:#222;'}});
   var fbStatus = el('div', {{style: 'margin-top:6px;color:#666;font-size:12px;'}});
@@ -462,13 +462,26 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       var color = colorForUser(userKey, isMe);
       var label = isMe ? 'you (' + userKey + ')' : userKey;
 
+      // Hover text for every marker on this chunk shows the full
+      // attribution across all users, not just the current user. That
+      // way, hovering any colored ring (regardless of whose trace it
+      // belongs to) tells you who else touched this chunk.
+      function chunkHover(cid, c) {{
+        var cov = perChunk[cid] || {{}};
+        var line = cid + ' — ' + (c.section || '');
+        var v = (cov.validated_by || []).join(', ');
+        var f = (cov.flagged_by || []).join(', ');
+        if (v) line += '<br>✓ by: ' + v;
+        if (f) line += '<br>✗ by: ' + f;
+        return line;
+      }}
+
       var cXs = [], cYs = [], cZs = [], cTexts = [];
       (u.correct_chunks || []).forEach(function(cid) {{
         var c = coords[cid];
         if (!c) return;
         cXs.push(c.x); cYs.push(c.y); if (c.z !== undefined) cZs.push(c.z);
-        var cov = perChunk[cid] || {{}};
-        cTexts.push(cid + ' — ' + (c.section || '') + ' — ' + (cov.correct || 0) + '✓/' + (cov.wrong || 0) + '✗');
+        cTexts.push(chunkHover(cid, c));
       }});
       if (cXs.length > 0) {{
         newTraces.push(makeTrace(
@@ -485,8 +498,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
         var c = coords[cid];
         if (!c) return;
         wXs.push(c.x); wYs.push(c.y); if (c.z !== undefined) wZs.push(c.z);
-        var cov = perChunk[cid] || {{}};
-        wTexts.push(cid + ' — ' + (c.section || '') + ' — ' + (cov.correct || 0) + '✓/' + (cov.wrong || 0) + '✗');
+        wTexts.push(chunkHover(cid, c));
       }});
       if (wXs.length > 0) {{
         newTraces.push(makeTrace(
@@ -778,6 +790,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     }}
   }};
 
+  // Enter key in the query input triggers the same action as Go click.
+  input.addEventListener('keydown', function(ev) {{
+    if (ev.key === 'Enter' && !ev.shiftKey) {{
+      ev.preventDefault();
+      ask.click();
+    }}
+  }});
+
   ask.onclick = async function() {{
     var q = input.value.trim();
     if (!q) return;
@@ -790,17 +810,40 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       var res = await fetch(embedUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify(body)}});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
-      var pos = data.position;
       var topK = data.top_k || [];
       lastQuery = {{query_id: data.query_id, text: q, kind: kind, top_k: topK}};
       resetReviewState();
+
+      // Star position: use centroid of the top-K chunks' UMAP coordinates
+      // instead of the raw query-vector transform. UMAP.transform() of a
+      // query vector embedded with "query: " prefix often lands outside
+      // the passage cloud (e5-large puts query/passage in offset
+      // sub-regions). The centroid is visually honest — "your question
+      // retrieved these specific points, here's the center of them" —
+      // and the high-dim top-K is computed correctly upstream regardless.
+      var coords = buildChunkCoords();
+      var cx = 0, cy = 0, cz = 0, n = 0;
+      topK.forEach(function(m) {{
+        var c = coords[m.chunk_id];
+        if (!c) return;
+        cx += c.x; cy += c.y; if (c.z !== undefined) cz += c.z;
+        n += 1;
+      }});
+      var pos;
+      if (n > 0) {{
+        pos = [cx / n, cy / n, kind === '3d' ? cz / n : undefined];
+      }} else {{
+        // Fallback to the server-reported projection (rare: all top-K
+        // chunks missing from coords, e.g., KB re-indexed mid-session).
+        pos = data.position;
+      }}
       var trace = kind === '3d'
         ? {{x:[pos[0]], y:[pos[1]], z:[pos[2]], mode:'markers+text', type:'scatter3d', marker:{{size:10, color:'red', symbol:'diamond'}}, text:['Your query'], textposition:'top center', name:'Query', hovertemplate:'%{{text}}<extra></extra>'}}
         : {{x:[pos[0]], y:[pos[1]], mode:'markers+text', type:'scatter', marker:{{size:16, color:'red', symbol:'star'}}, text:['Your query'], textposition:'top center', name:'Query', hovertemplate:'%{{text}}<extra></extra>'}};
       var existing = gd.data.findIndex(function(t) {{ return t.name === 'Query'; }});
       if (existing >= 0) Plotly.deleteTraces(gd, existing);
       Plotly.addTraces(gd, [trace]);
-      status.textContent = 'Found ' + topK.length + ' matches. Проверяйте по одному. (иконки: ✓ подтверждено, ✗ помечено как ошибка, ± смешанно, ? не проверено)';
+      status.textContent = 'Найдено ' + topK.length + ' чанков. Проверяйте по одному.';
       renderMatchList();
     }} catch (e) {{
       status.textContent = 'Overlay failed: ' + e.message;

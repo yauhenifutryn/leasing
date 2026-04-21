@@ -439,6 +439,36 @@ def test_coverage_aggregates_feedback(open_client) -> None:
     assert ps["Документы"]["unique_chunks"] == 1
 
 
+def test_per_chunk_attribution_lists(open_client) -> None:
+    """per_chunk.validated_by / flagged_by should list the users who touched
+    each chunk so the UI hover can show multi-user attribution at a glance.
+    """
+    client, _ = open_client
+
+    def submit(user: str, verdict: str, chunk_ids: list[str], comment: str | None = None) -> None:
+        payload = {
+            "query_id": f"q-{user}-{verdict}",
+            "query_text": "q",
+            "kind": "3d",
+            "verdict": verdict,
+            "client_id": user,
+            "top_k": [{"chunk_id": cid, "section": "S", "score": 0.5} for cid in chunk_ids],
+        }
+        if comment:
+            payload["comment"] = comment
+        assert client.post("/feedback", json=payload).status_code == 200
+
+    submit("sasha", "correct", ["c-1", "c-2"])
+    submit("john", "correct", ["c-1"])
+    submit("maria", "wrong", ["c-2"], comment="factual error")
+
+    body = client.get("/coverage").json()
+    assert sorted(body["per_chunk"]["c-1"]["validated_by"]) == ["john", "sasha"]
+    assert body["per_chunk"]["c-1"]["flagged_by"] == []
+    assert body["per_chunk"]["c-2"]["validated_by"] == ["sasha"]
+    assert body["per_chunk"]["c-2"]["flagged_by"] == ["maria"]
+
+
 def test_coverage_ignores_malformed_jsonl_lines(open_client, tmp_path) -> None:
     client, svc = open_client
     log = svc.STATE.feedback_log_path()

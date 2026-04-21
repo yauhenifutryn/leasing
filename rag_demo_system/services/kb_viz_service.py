@@ -253,6 +253,11 @@ class ChunkCoverage(BaseModel):
     last_ts: str | None = None
     last_verdict: str | None = None
     section: str = ""
+    # Who touched this chunk. UI uses these to build hover text like
+    # "✓ by: sasha, john / ✗ by: maria" so multi-user attribution is
+    # visible at a glance without interleaving through per-user traces.
+    validated_by: list[str] = Field(default_factory=list)
+    flagged_by: list[str] = Field(default_factory=list)
 
 
 class UserCoverage(BaseModel):
@@ -579,9 +584,13 @@ def _compute_coverage() -> CoverageResponse:
                 if verdict == "correct":
                     cov.correct += 1
                     per_user_correct_sets[user_key].add(cid)
+                    if user_key not in cov.validated_by:
+                        cov.validated_by.append(user_key)
                 elif verdict == "wrong":
                     cov.wrong += 1
                     per_user_wrong_sets[user_key].add(cid)
+                    if user_key not in cov.flagged_by:
+                        cov.flagged_by.append(user_key)
                 cov.last_ts = ts
                 cov.last_verdict = verdict or None
                 if section and not cov.section:
