@@ -345,6 +345,11 @@ def _top_k(vector: list[float], k: int) -> list[OverlayMatch]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    """Exposes every config knob an operator needs to confirm the viz is
+    pointed at the same KB as the voice pipeline. qdrant_coll is the
+    important one: if it differs from the voice pipeline's collection the
+    overlay is looking at a different index and the demo is wrong.
+    """
     return {
         "ok": True,
         "service": "kb_viz",
@@ -352,6 +357,7 @@ def health() -> dict[str, Any]:
         "embed_model": STATE.embed_model_name,
         "embed_device": STATE.embed_device,
         "qdrant_url": STATE.qdrant_url,
+        "qdrant_coll": STATE.qdrant_coll,
         "token_required": STATE.token is not None,
     }
 

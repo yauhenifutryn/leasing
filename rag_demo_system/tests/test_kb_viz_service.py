@@ -105,6 +105,10 @@ def test_health(open_client) -> None:
     assert body["ok"] is True
     assert body["service"] == "kb_viz"
     assert body["token_required"] is False
+    # Must expose the Qdrant collection so operators can confirm the viz is
+    # reading the same index the voice pipeline is writing.
+    assert body["qdrant_coll"] == "micro_leasing_kb"
+    assert body["embed_model"] == "intfloat/multilingual-e5-large"
 
 
 def test_overlay_query_3d_returns_query_id(open_client) -> None:
