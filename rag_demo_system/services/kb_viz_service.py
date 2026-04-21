@@ -194,11 +194,19 @@ class ChunkCoverage(BaseModel):
     section: str = ""
 
 
+class UserCoverage(BaseModel):
+    """Per-user aggregate so the UI can render distinct-colored traces."""
+    correct_chunks: list[str] = Field(default_factory=list)
+    wrong_chunks: list[str] = Field(default_factory=list)
+    total_events: int = 0
+
+
 class CoverageResponse(BaseModel):
     total_feedback: int
     unique_chunks_validated: int
     per_chunk: dict[str, ChunkCoverage]
     per_section: dict[str, dict[str, int]]
+    per_user: dict[str, UserCoverage] = Field(default_factory=dict)
 
 
 app = FastAPI(title="KB Viz Overlay Service")
@@ -370,15 +378,22 @@ def feedback(
 
 
 def _compute_coverage() -> CoverageResponse:
-    """Walk the feedback JSONL and tally per-chunk + per-section validation.
+    """Walk the feedback JSONL and tally per-chunk / per-section / per-user.
 
     Cheap enough to recompute on every request while the log stays small
     (one KB demo session is well under 500 entries). If the file grows
     large a cache + mtime check would be the obvious optimization.
+
+    per_user lets the UI render one distinct-colored trace per validator so
+    concurrent clients can see "user A validated these, user B those" at a
+    glance without clicking into individual chunks.
     """
     log = STATE.feedback_log_path()
     per_chunk: dict[str, ChunkCoverage] = {}
     per_section: dict[str, dict[str, int]] = {}
+    per_user: dict[str, UserCoverage] = {}
+    per_user_correct_sets: dict[str, set[str]] = {}
+    per_user_wrong_sets: dict[str, set[str]] = {}
     total_feedback = 0
 
     if log.exists():
@@ -393,6 +408,12 @@ def _compute_coverage() -> CoverageResponse:
             total_feedback += 1
             verdict = rec.get("verdict", "")
             ts = rec.get("ts")
+            user_key = _user_key(rec)
+            if user_key not in per_user:
+                per_user[user_key] = UserCoverage()
+                per_user_correct_sets[user_key] = set()
+                per_user_wrong_sets[user_key] = set()
+            per_user[user_key].total_events += 1
             sections_this_record: set[str] = set()
             for m in rec.get("top_k") or []:
                 cid = str(m.get("chunk_id", "")).strip()
@@ -405,17 +426,16 @@ def _compute_coverage() -> CoverageResponse:
                     per_chunk[cid] = cov
                 if verdict == "correct":
                     cov.correct += 1
+                    per_user_correct_sets[user_key].add(cid)
                 elif verdict == "wrong":
                     cov.wrong += 1
+                    per_user_wrong_sets[user_key].add(cid)
                 cov.last_ts = ts
                 cov.last_verdict = verdict or None
                 if section and not cov.section:
                     cov.section = section
                 sections_this_record.add(section or "Без раздела")
 
-            # Per-section: one verdict count per feedback record per section,
-            # not per chunk, so a 5-item top_k does not inflate the section
-            # tally by 5.
             for sec_key in sections_this_record:
                 sec = per_section.setdefault(
                     sec_key, {"correct": 0, "wrong": 0, "unique_chunks": 0}
@@ -423,7 +443,6 @@ def _compute_coverage() -> CoverageResponse:
                 if verdict in ("correct", "wrong"):
                     sec[verdict] += 1
 
-        # unique_chunks per section: distinct chunk_ids ever seen.
         seen_per_section: dict[str, set[str]] = {}
         for cid, cov in per_chunk.items():
             sec_key = cov.section or "Без раздела"
@@ -433,12 +452,28 @@ def _compute_coverage() -> CoverageResponse:
                 per_section[sec_key] = {"correct": 0, "wrong": 0, "unique_chunks": 0}
             per_section[sec_key]["unique_chunks"] = len(chunk_ids)
 
+        for user_key in per_user:
+            per_user[user_key].correct_chunks = sorted(per_user_correct_sets[user_key])
+            per_user[user_key].wrong_chunks = sorted(per_user_wrong_sets[user_key])
+
     return CoverageResponse(
         total_feedback=total_feedback,
         unique_chunks_validated=len(per_chunk),
         per_chunk=per_chunk,
         per_section=per_section,
+        per_user=per_user,
     )
+
+
+def _user_key(rec: dict[str, Any]) -> str:
+    """Best-effort label for who authored a feedback record."""
+    cid = rec.get("client_id")
+    if isinstance(cid, str) and cid.strip():
+        return cid.strip()
+    addr = rec.get("remote_addr")
+    if isinstance(addr, str) and addr.strip():
+        return f"ip:{addr.strip()}"
+    return "anon"
 
 
 @app.get("/coverage", response_model=CoverageResponse)

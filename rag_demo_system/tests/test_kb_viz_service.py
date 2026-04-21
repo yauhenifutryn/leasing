@@ -370,3 +370,60 @@ def test_coverage_ignores_malformed_jsonl_lines(open_client, tmp_path) -> None:
     assert body["total_feedback"] == 1
     assert body["unique_chunks_validated"] == 1
     assert body["per_chunk"]["x-1"]["correct"] == 1
+
+
+def test_coverage_per_user_breakdown(open_client) -> None:
+    client, _ = open_client
+
+    def submit(user: str, verdict: str, chunk_ids: list[str], section: str, comment: str | None = None) -> None:
+        payload = {
+            "query_id": f"q-{user}-{verdict}-{'-'.join(chunk_ids)}",
+            "query_text": f"q from {user}",
+            "kind": "3d",
+            "verdict": verdict,
+            "client_id": user,
+            "top_k": [{"chunk_id": cid, "section": section, "score": 0.5} for cid in chunk_ids],
+        }
+        if comment:
+            payload["comment"] = comment
+        res = client.post("/feedback", json=payload)
+        assert res.status_code == 200, res.text
+
+    # sasha validates 2 chunks correct, 1 wrong
+    submit("sasha", "correct", ["c-1", "c-2"], "Стоимость")
+    submit("sasha", "wrong", ["c-5"], "Документы", comment="wrong section returned")
+    # john validates 2 chunks correct (one overlaps with sasha)
+    submit("john", "correct", ["c-2", "c-3"], "Стоимость")
+    # anonymous (no client_id) adds one more correct
+    res = client.post(
+        "/feedback",
+        json={
+            "query_id": "q-anon",
+            "query_text": "anon",
+            "kind": "3d",
+            "verdict": "correct",
+            "top_k": [{"chunk_id": "c-4", "section": "Офисы", "score": 0.4}],
+        },
+    )
+    assert res.status_code == 200
+
+    body = client.get("/coverage").json()
+    assert body["total_feedback"] == 4
+
+    users = body["per_user"]
+    assert "sasha" in users
+    assert "john" in users
+    # anonymous becomes "ip:<addr>" via remote_addr, or "anon" in test env
+    other_keys = [k for k in users.keys() if k not in ("sasha", "john")]
+    assert len(other_keys) == 1
+
+    assert users["sasha"]["total_events"] == 2
+    assert sorted(users["sasha"]["correct_chunks"]) == ["c-1", "c-2"]
+    assert users["sasha"]["wrong_chunks"] == ["c-5"]
+
+    assert users["john"]["total_events"] == 1
+    assert sorted(users["john"]["correct_chunks"]) == ["c-2", "c-3"]
+    assert users["john"]["wrong_chunks"] == []
+
+    # Aggregate consistency: c-2 should have correct=2 (sasha + john)
+    assert body["per_chunk"]["c-2"]["correct"] == 2

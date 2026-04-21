@@ -111,20 +111,38 @@ def _build_hover_customdata(records: list[dict[str, Any]]) -> list[list[str]]:
     ]
 
 
+COVERAGE_POLL_MS: int = 15000
+COVERAGE_VALIDATED_TRACE: str = "✓ Validated (shared)"
+COVERAGE_FLAGGED_TRACE: str = "✗ Flagged wrong (shared)"
+COVERAGE_USER_TRACE_PREFIX: str = "✓ by "
+COVERAGE_WRONG_USER_TRACE_PREFIX: str = "✗ by "
+
+
 def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     """Inject the overlay UI: query input, feedback buttons, coverage panel.
 
     Uses DOM API only (createElement + textContent + appendChild) so response
     data from the server is never interpolated as HTML. No XSS surface.
+    Coverage polls every COVERAGE_POLL_MS while the panel is open, so
+    concurrent users see each other's validation within that interval.
     """
-    token_js = json.dumps(token) if token else "null"
-    url_js = json.dumps(embed_url)
-    kind_js = json.dumps(kind)
+    # ensure_ascii=False keeps the UTF-8 glyphs (✓ ✗) intact in the emitted
+    # JS literals so the smoke test and legend strings match the configured
+    # constants. The output HTML is served as UTF-8 so this is safe.
+    token_js = json.dumps(token, ensure_ascii=False) if token else "null"
+    url_js = json.dumps(embed_url, ensure_ascii=False)
+    kind_js = json.dumps(kind, ensure_ascii=False)
+    poll_ms_js = json.dumps(COVERAGE_POLL_MS)
+    validated_name_js = json.dumps(COVERAGE_VALIDATED_TRACE, ensure_ascii=False)
+    flagged_name_js = json.dumps(COVERAGE_FLAGGED_TRACE, ensure_ascii=False)
     return f"""
 (function() {{
   var embedUrl = {url_js};
   var token = {token_js};
   var kind = {kind_js};
+  var pollMs = {poll_ms_js};
+  var VALIDATED_NAME = {validated_name_js};
+  var FLAGGED_NAME = {flagged_name_js};
   var feedbackUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/feedback$1');
   var coverageUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/coverage$1');
   var gd = document.getElementsByClassName('plotly-graph-div')[0];
@@ -152,12 +170,47 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     return '?';
   }}
 
-  // State for the current query session
+  // ---- User identity: ?user= > localStorage > prompt ----
+  function currentUser() {{
+    try {{
+      var params = new URLSearchParams(window.location.search || '');
+      var u = params.get('user');
+      if (u && u.trim()) {{
+        localStorage.setItem('kb_viz_user', u.trim());
+        return u.trim();
+      }}
+    }} catch (e) {{ /* URLSearchParams not available: fall through */ }}
+    try {{
+      var stored = localStorage.getItem('kb_viz_user');
+      if (stored && stored.trim()) return stored.trim();
+    }} catch (e) {{ /* localStorage blocked */ }}
+    return null;
+  }}
+
+  function promptUser() {{
+    var u = window.prompt('Your name or initials (stays in this browser only, included in feedback):');
+    if (!u) return null;
+    u = u.trim().slice(0, 128);
+    if (!u) return null;
+    try {{ localStorage.setItem('kb_viz_user', u); }} catch (e) {{}}
+    return u;
+  }}
+
+  var user = currentUser();
+
+  // ---- State ----
   var lastQuery = null;  // {{query_id, text, kind, top_k}}
   var lastCoverage = {{per_chunk: {{}}, per_section: {{}}, total_feedback: 0}};
+  var pollTimer = null;
+  // Cached chunk_id -> coords map, built once from the baseline traces so
+  // per-chunk coverage overlays can be drawn without re-parsing hover data.
+  var chunkCoords = null;
 
+  // ---- UI scaffolding ----
   var bar = el('div', {{style: 'font-family:system-ui,sans-serif;font-size:13px;padding:10px;background:#fafafa;border-bottom:1px solid #ddd;'}});
   var toggle = el('button', {{text: 'Enable live overlay', style: 'padding:6px 10px;cursor:pointer;'}});
+  var userBadge = el('span', {{style: 'margin-left:10px;color:#333;'}});
+  var userChange = el('a', {{href: '#', text: '(change)', style: 'margin-left:6px;color:#357;cursor:pointer;text-decoration:underline;'}});
   var note = el('span', {{text: 'Experimental. Calls the GPU server.', style: 'margin-left:10px;color:#888;'}});
   var panel = el('div', {{style: 'display:none;margin-top:10px;'}});
   var input = el('input', {{type: 'text', placeholder: 'Ask a question (Russian)', style: 'width:60%;padding:6px;'}});
@@ -185,14 +238,149 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   panel.appendChild(feedback);
   panel.appendChild(coverage);
   bar.appendChild(toggle);
+  bar.appendChild(userBadge);
+  bar.appendChild(userChange);
   bar.appendChild(note);
   bar.appendChild(panel);
   gd.parentNode.insertBefore(bar, gd);
+
+  function renderUserBadge() {{
+    userBadge.textContent = user ? ('You: ' + user) : '(no user set)';
+  }}
+  renderUserBadge();
+  userChange.onclick = function(e) {{
+    e.preventDefault();
+    var u = promptUser();
+    if (u) {{ user = u; renderUserBadge(); }}
+  }};
 
   function authHeaders() {{
     var h = {{'Content-Type': 'application/json'}};
     if (token) h['Authorization'] = 'Bearer ' + token;
     return h;
+  }}
+
+  // ---- Build chunk_id -> coords map from baseline traces once ----
+  function buildChunkCoords() {{
+    if (chunkCoords !== null) return chunkCoords;
+    chunkCoords = {{}};
+    (gd.data || []).forEach(function(trace) {{
+      if (!trace || !trace.customdata) return;
+      if (trace.name === VALIDATED_NAME || trace.name === FLAGGED_NAME || trace.name === 'Query') return;
+      var xs = trace.x || [], ys = trace.y || [], zs = trace.z || [];
+      trace.customdata.forEach(function(cd, idx) {{
+        // customdata layout comes from _build_hover_customdata:
+        //   [text_preview, section, doc_name, chunk_id]
+        if (!cd || cd.length < 4) return;
+        var cid = String(cd[3]);
+        chunkCoords[cid] = {{x: xs[idx], y: ys[idx], z: zs ? zs[idx] : undefined, section: cd[1]}};
+      }});
+    }});
+    return chunkCoords;
+  }}
+
+  // Deterministic color per user label. Current user gets a distinct
+  // "YOU_COLOR" regardless of their name hash so they can always spot
+  // themselves at a glance.
+  var YOU_COLOR = '#1e66c8';
+  function stringHash(s) {{
+    var h = 2166136261 >>> 0;
+    for (var i = 0; i < s.length; i++) {{ h = Math.imul((h ^ s.charCodeAt(i)) >>> 0, 16777619) >>> 0; }}
+    return h >>> 0;
+  }}
+  function colorForUser(name, isMe) {{
+    if (isMe) return YOU_COLOR;
+    // Golden-angle hue spacing gives good separation even for small sets.
+    var hue = (stringHash(name) * 137.508) % 360;
+    return 'hsl(' + Math.round(hue) + ', 55%, 45%)';
+  }}
+
+  function rebuildCoverageTraces() {{
+    var coords = buildChunkCoords();
+    var perUser = lastCoverage.per_user || {{}};
+    var perChunk = lastCoverage.per_chunk || {{}};
+
+    function makeTrace(name, color, symbol, size, xs, ys, zs, texts) {{
+      if (kind === '3d') {{
+        return {{
+          type: 'scatter3d', mode: 'markers', name: name,
+          x: xs, y: ys, z: zs,
+          marker: {{size: size, color: color, symbol: symbol, line: {{width: 1, color: '#fff'}}}},
+          text: texts,
+          hovertemplate: '<b>%{{text}}</b><extra>' + name + '</extra>',
+          showlegend: true
+        }};
+      }}
+      return {{
+        type: 'scatter', mode: 'markers', name: name,
+        x: xs, y: ys,
+        marker: {{size: size, color: color, symbol: symbol, line: {{width: 1, color: '#fff'}}}},
+        text: texts,
+        hovertemplate: '<b>%{{text}}</b><extra>' + name + '</extra>',
+        showlegend: true
+      }};
+    }}
+
+    var newTraces = [];
+    // Order users so the current user renders on top
+    var keys = Object.keys(perUser).sort(function(a, b) {{
+      if (user && a === user) return -1;
+      if (user && b === user) return 1;
+      return a.localeCompare(b);
+    }});
+
+    keys.forEach(function(userKey) {{
+      var u = perUser[userKey] || {{}};
+      var isMe = user && userKey === user;
+      var color = colorForUser(userKey, isMe);
+      var label = isMe ? 'you (' + userKey + ')' : userKey;
+
+      var cXs = [], cYs = [], cZs = [], cTexts = [];
+      (u.correct_chunks || []).forEach(function(cid) {{
+        var c = coords[cid];
+        if (!c) return;
+        cXs.push(c.x); cYs.push(c.y); if (c.z !== undefined) cZs.push(c.z);
+        var cov = perChunk[cid] || {{}};
+        cTexts.push(cid + ' — ' + (c.section || '') + ' — ' + (cov.correct || 0) + '✓/' + (cov.wrong || 0) + '✗');
+      }});
+      if (cXs.length > 0) {{
+        newTraces.push(makeTrace(
+          '✓ by ' + label,
+          color,
+          'circle-open',
+          kind === '3d' ? (isMe ? 9 : 7) : (isMe ? 15 : 12),
+          cXs, cYs, cZs, cTexts
+        ));
+      }}
+
+      var wXs = [], wYs = [], wZs = [], wTexts = [];
+      (u.wrong_chunks || []).forEach(function(cid) {{
+        var c = coords[cid];
+        if (!c) return;
+        wXs.push(c.x); wYs.push(c.y); if (c.z !== undefined) wZs.push(c.z);
+        var cov = perChunk[cid] || {{}};
+        wTexts.push(cid + ' — ' + (c.section || '') + ' — ' + (cov.correct || 0) + '✓/' + (cov.wrong || 0) + '✗');
+      }});
+      if (wXs.length > 0) {{
+        newTraces.push(makeTrace(
+          '✗ by ' + label,
+          color,
+          'x',
+          kind === '3d' ? (isMe ? 7 : 5) : (isMe ? 13 : 10),
+          wXs, wYs, wZs, wTexts
+        ));
+      }}
+    }});
+
+    // Drop previous overlay traces (current + legacy shared ones)
+    var toDelete = [];
+    (gd.data || []).forEach(function(t, i) {{
+      if (!t || !t.name) return;
+      if (t.name.indexOf('✓ by ') === 0 || t.name.indexOf('✗ by ') === 0) toDelete.push(i);
+      else if (t.name === VALIDATED_NAME || t.name === FLAGGED_NAME) toDelete.push(i);
+    }});
+    toDelete.reverse().forEach(function(i) {{ Plotly.deleteTraces(gd, i); }});
+    if (newTraces.length > 0) Plotly.addTraces(gd, newTraces);
   }}
 
   async function refreshCoverage() {{
@@ -205,38 +393,40 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       return;
     }}
     coverage.textContent = '';
-    var header = el('div', {{text: 'Validation coverage: ' + lastCoverage.total_feedback + ' feedback events, ' + lastCoverage.unique_chunks_validated + ' unique chunks touched', style: 'font-weight:600;margin-bottom:4px;'}});
+    var header = el('div', {{text: 'Validation coverage (shared across all users): ' + lastCoverage.total_feedback + ' feedback events, ' + lastCoverage.unique_chunks_validated + ' unique chunks touched', style: 'font-weight:600;margin-bottom:4px;'}});
     coverage.appendChild(header);
     var sections = lastCoverage.per_section || {{}};
     var keys = Object.keys(sections);
     if (keys.length === 0) {{
       coverage.appendChild(el('div', {{text: 'No sections validated yet. Try a few queries per topic.', style: 'color:#666;'}}));
-      renderMatchList();
-      return;
+    }} else {{
+      var table = el('div', {{style: 'display:grid;grid-template-columns:auto auto auto auto;gap:4px 12px;'}});
+      table.appendChild(el('div', {{text: 'Section', style: 'font-weight:600;'}}));
+      table.appendChild(el('div', {{text: '✓', style: 'font-weight:600;color:#2a7d2a;'}}));
+      table.appendChild(el('div', {{text: '✗', style: 'font-weight:600;color:#a52a2a;'}}));
+      table.appendChild(el('div', {{text: 'Chunks seen', style: 'font-weight:600;'}}));
+      keys.sort().forEach(function(k) {{
+        table.appendChild(el('div', {{text: k}}));
+        table.appendChild(el('div', {{text: String(sections[k].correct || 0)}}));
+        table.appendChild(el('div', {{text: String(sections[k].wrong || 0)}}));
+        table.appendChild(el('div', {{text: String(sections[k].unique_chunks || 0)}}));
+      }});
+      coverage.appendChild(table);
+      var hint = findUnvalidatedHint();
+      if (hint) coverage.appendChild(el('div', {{text: hint, style: 'margin-top:6px;color:#555;font-style:italic;'}}));
     }}
-    var table = el('div', {{style: 'display:grid;grid-template-columns:auto auto auto auto;gap:4px 12px;'}});
-    table.appendChild(el('div', {{text: 'Section', style: 'font-weight:600;'}}));
-    table.appendChild(el('div', {{text: '✓', style: 'font-weight:600;color:#2a7d2a;'}}));
-    table.appendChild(el('div', {{text: '✗', style: 'font-weight:600;color:#a52a2a;'}}));
-    table.appendChild(el('div', {{text: 'Chunks seen', style: 'font-weight:600;'}}));
-    keys.sort().forEach(function(k) {{
-      table.appendChild(el('div', {{text: k}}));
-      table.appendChild(el('div', {{text: String(sections[k].correct || 0)}}));
-      table.appendChild(el('div', {{text: String(sections[k].wrong || 0)}}));
-      table.appendChild(el('div', {{text: String(sections[k].unique_chunks || 0)}}));
-    }});
-    coverage.appendChild(table);
-    var hint = findUnvalidatedHint();
-    if (hint) coverage.appendChild(el('div', {{text: hint, style: 'margin-top:6px;color:#555;font-style:italic;'}}));
+    coverage.appendChild(el('div', {{text: 'Updates every ' + Math.round(pollMs / 1000) + 's while this panel is open.', style: 'margin-top:6px;color:#888;font-size:11px;'}}));
     renderMatchList();
+    rebuildCoverageTraces();
   }}
 
   function findUnvalidatedHint() {{
-    // Sections present in the plot but absent (or barely present) in coverage.
-    // Discover all sections from the current scatter traces' legendgroup/name.
     var plotted = new Set();
     (gd.data || []).forEach(function(trace) {{
-      if (trace.name && trace.name !== 'Query') plotted.add(trace.name);
+      if (!trace.name) return;
+      if (trace.name === 'Query' || trace.name === VALIDATED_NAME || trace.name === FLAGGED_NAME) return;
+      if (trace.name.indexOf('✓ by ') === 0 || trace.name.indexOf('✗ by ') === 0) return;
+      plotted.add(trace.name);
     }});
     var sections = lastCoverage.per_section || {{}};
     var unseen = [];
@@ -246,12 +436,8 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       if (!s || (s.correct + s.wrong) === 0) unseen.push(name);
       else if ((s.correct + s.wrong) < 2) weak.push(name);
     }});
-    if (unseen.length > 0) {{
-      return 'Not yet validated: ' + unseen.slice(0, 5).join(', ');
-    }}
-    if (weak.length > 0) {{
-      return 'Thinly validated (< 2 events): ' + weak.slice(0, 5).join(', ');
-    }}
+    if (unseen.length > 0) return 'Not yet validated: ' + unseen.slice(0, 5).join(', ');
+    if (weak.length > 0) return 'Thinly validated (< 2 events): ' + weak.slice(0, 5).join(', ');
     return '';
   }}
 
@@ -269,10 +455,26 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     }});
   }}
 
+  function startPolling() {{
+    stopPolling();
+    pollTimer = setInterval(function() {{
+      if (!document.hidden && panel.style.display !== 'none') refreshCoverage();
+    }}, pollMs);
+  }}
+  function stopPolling() {{
+    if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
+  }}
+
   toggle.onclick = function() {{
     var showing = panel.style.display !== 'none';
     panel.style.display = showing ? 'none' : 'block';
-    if (!showing) refreshCoverage();
+    if (!showing) {{
+      if (!user) {{ user = promptUser(); renderUserBadge(); }}
+      refreshCoverage();
+      startPolling();
+    }} else {{
+      stopPolling();
+    }}
   }};
 
   ask.onclick = async function() {{
@@ -285,7 +487,9 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     fbStatus.textContent = '';
     fbTextarea.value = '';
     try {{
-      var res = await fetch(embedUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify({{text: q, kind: kind, top_k: 5}})}});
+      var body = {{text: q, kind: kind, top_k: 5}};
+      if (user) body.client_id = user;
+      var res = await fetch(embedUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify(body)}});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       var pos = data.position;
@@ -297,7 +501,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       var existing = gd.data.findIndex(function(t) {{ return t.name === 'Query'; }});
       if (existing >= 0) Plotly.deleteTraces(gd, existing);
       Plotly.addTraces(gd, [trace]);
-      status.textContent = 'Top ' + topK.length + ' matches (legend: ✓ validated correct, ✗ flagged wrong, ± mixed, ? never seen):';
+      status.textContent = 'Top ' + topK.length + ' matches (legend: ✓ validated, ✗ flagged, ± mixed, ? unvalidated):';
       renderMatchList();
       feedback.style.display = 'block';
     }} catch (e) {{
@@ -317,6 +521,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
         top_k: lastQuery.top_k.map(function(m) {{ return {{chunk_id: m.chunk_id, section: m.section || '', score: m.score}}; }}),
       }};
       if (comment) payload.comment = comment;
+      if (user) payload.client_id = user;
       var res = await fetch(feedbackUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify(payload)}});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       fbStatus.textContent = 'Thanks. Recorded.';
@@ -337,6 +542,8 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     if (!c) {{ fbStatus.textContent = 'Comment required for wrong verdict.'; return; }}
     submitFeedback('wrong', c);
   }};
+
+  window.addEventListener('beforeunload', stopPolling);
 }})();
 """
 

@@ -101,6 +101,37 @@ def test_render_with_overlay_injection(tmp_path: Path) -> None:
     assert "innerHTML" not in html_3d or "statusEl.innerHTML" not in html_3d
 
 
+def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
+    """Covers the multi-user features: identity capture + polling + shared traces."""
+    src = tmp_path / "embeddings.json"
+    src.write_text(json.dumps(_synthetic_embeddings()), encoding="utf-8")
+
+    render_viz.render(
+        embeddings_path=src,
+        out_dir=tmp_path,
+        overlay_url="https://example.com/overlay_query",
+    )
+
+    html_3d = (tmp_path / "kb_viz_3d.html").read_text(encoding="utf-8")
+    # User identity: URL param, localStorage, prompt fallback
+    assert "URLSearchParams" in html_3d
+    assert "kb_viz_user" in html_3d
+    assert "You: " in html_3d
+    # Polling: setInterval + pollMs constant piped through
+    assert "setInterval" in html_3d
+    assert str(render_viz.COVERAGE_POLL_MS) in html_3d
+    # Shared overlay traces (user 2 sees user 1's marks)
+    assert render_viz.COVERAGE_VALIDATED_TRACE in html_3d
+    assert render_viz.COVERAGE_FLAGGED_TRACE in html_3d
+    # Per-user colored traces
+    assert render_viz.COVERAGE_USER_TRACE_PREFIX in html_3d
+    assert render_viz.COVERAGE_WRONG_USER_TRACE_PREFIX in html_3d
+    assert "colorForUser" in html_3d
+    assert "YOU_COLOR" in html_3d
+    # client_id wired into both request payloads
+    assert "payload.client_id" in html_3d or "body.client_id" in html_3d
+
+
 def test_truncate_handles_long_text() -> None:
     short = "hello"
     assert render_viz._truncate(short) == "hello"
