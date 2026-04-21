@@ -1,0 +1,13 @@
+# Example queries for `make kb-viz-demo-snapshot-multi` to bake into
+# separate demo HTMLs. One query per line. Blank lines and # comments
+# are ignored. Covers a spread of KB sections (pricing / еrip / offices
+# / documents / availability) so the client sees different corners of
+# the space land different chunks. Edit freely — nothing production
+# depends on these exact strings.
+
+как оплатить лизинг через ЕРИП
+что нужно чтобы оформить лизинг без прав
+график работы офисов в Минске
+какие документы нужны физическому лицу
+можно ли взять лизинг на коммерческую недвижимость
+как перенести дату платежа
