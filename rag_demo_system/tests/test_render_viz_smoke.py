@@ -150,14 +150,18 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     assert "Пропустить" in html_3d     # Skip button
     assert "Скрыть чанки" in html_3d   # Collapse toggle
     assert "markSelected" in html_3d   # Persistent vote highlighting
-    # Checked-chunk halo + filter toggle + query-zone + falling-star
-    assert "★ Проверенные чанки" in html_3d   # investigated halo trace name
-    assert "Только проверенные" in html_3d    # filter button label
+    # Verdict halos + filter toggle + query zone/links + falling star + UMAP note
+    assert "✓ Подтверждено" in html_3d        # green verdict halo trace
+    assert "✗ Есть ошибка" in html_3d         # red verdict halo trace
+    assert "Показать только проверенные" in html_3d  # filter button label
     assert "applyVisibilityFilter" in html_3d # filter applier fn
     assert "onlyInvestigated" in html_3d      # filter state flag
-    assert "Зона запроса" in html_3d          # query zone trace name
+    assert "Top-5 этого запроса" in html_3d   # numbered retrieved-chunk markers
+    assert "Связи запроса" in html_3d         # tether-line trace
     assert "★ Ваш запрос" in html_3d          # centroid star label
     assert "animateFallingStar" in html_3d    # falling-star animation
+    # UMAP projection caveat is visible under the query input.
+    assert "Top-5 — ближайшие по смыслу" in html_3d
 
 
 def test_truncate_handles_long_text() -> None:

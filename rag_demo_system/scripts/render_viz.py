@@ -205,8 +205,11 @@ def _overlay_post_script(
   var pollMs = {poll_ms_js};
   var VALIDATED_NAME = {validated_name_js};
   var FLAGGED_NAME = {flagged_name_js};
-  var INVESTIGATED_NAME = '★ Проверенные чанки';
-  var QUERY_ZONE_NAME = 'Зона запроса';
+  var INVESTIGATED_NAME = '★ Проверенные чанки';  // legacy, kept for filter cleanup
+  var VERIFIED_OK_NAME = '✓ Подтверждено';
+  var VERIFIED_BAD_NAME = '✗ Есть ошибка';
+  var QUERY_ZONE_NAME = 'Top-5 этого запроса';
+  var QUERY_LINKS_NAME = 'Связи запроса';
   var QUERY_STAR_NAME = 'Query';
   // Ground-truth chunk_id -> {{x, y, z, section}} map built from the source
   // records. Do NOT reconstruct this from Plotly's trace.customdata — the
@@ -378,7 +381,11 @@ def _overlay_post_script(
   var panel = el('div', {{style: 'display:none;margin-top:10px;'}});
   var input = el('input', {{type: 'text', placeholder: 'Ask a question (Russian)', style: 'width:60%;padding:6px;'}});
   var ask = el('button', {{text: 'Go', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;'}});
-  var filterBtn = el('button', {{text: 'Только проверенные: выкл', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;background:#f8f8f8;border:1px solid #ccc;border-radius:3px;'}});
+  var filterBtn = el('button', {{text: 'Показать только проверенные', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;background:#f8f8f8;border:1px solid #ccc;border-radius:3px;'}});
+  var umapNote = el('div', {{
+    text: 'Top-5 — ближайшие по смыслу в 1024-мерном пространстве. 3D — это проекция (UMAP), поэтому визуально ближайшие точки не всегда совпадают с top-5. Красные линии показывают, какие именно чанки были извлечены.',
+    style: 'margin-top:6px;color:#666;font-size:11px;line-height:1.5;font-style:italic;max-width:780px;'
+  }});
   var status = el('div', {{style: 'margin-top:6px;color:#666;'}});
   var matches = el('div', {{style: 'margin-top:8px;color:#222;'}});
   var fbStatus = el('div', {{style: 'margin-top:6px;color:#666;font-size:12px;'}});
@@ -386,6 +393,7 @@ def _overlay_post_script(
   panel.appendChild(input);
   panel.appendChild(ask);
   panel.appendChild(filterBtn);
+  panel.appendChild(umapNote);
   panel.appendChild(status);
   panel.appendChild(matches);
   panel.appendChild(fbStatus);
@@ -482,43 +490,62 @@ def _overlay_post_script(
 
     var newTraces = [];
 
-    // Investigated halo: a single grey outlined-diamond trace over every
-    // chunk that has ANY feedback (content or relevance). Drawn first so
-    // the per-user colored rings sit on top. Visually separates "already
-    // looked at" dots from the untouched sea of base dots — the user asked
-    // for a "striped or different-looking" distinction for checked chunks.
-    var haloXs = [], haloYs = [], haloZs = [], haloTexts = [];
+    // Verdict halos: two color-coded open-circle rings instead of one
+    // grey diamond. "Net correct" (last_verdict==correct OR correct>wrong)
+    // gets a green ring; "net wrong" gets a red ring. Relevance-only
+    // chunks (no content vote) get no ring — their presence is already
+    // implied by the per-user scatter traces. Far cleaner and more
+    // informative than the previous undifferentiated diamonds.
+    var okXs = [], okYs = [], okZs = [], okTexts = [];
+    var badXs = [], badYs = [], badZs = [], badTexts = [];
     Object.keys(perChunk).forEach(function(cid) {{
       var c = coords[cid];
       if (!c) return;
       var cov = perChunk[cid] || {{}};
-      haloXs.push(c.x); haloYs.push(c.y); if (c.z !== undefined) haloZs.push(c.z);
-      haloTexts.push(
-        cid + ' — ' + (c.section || '') +
-        ' (' + (cov.correct || 0) + '✓ / ' + (cov.wrong || 0) + '✗)'
-      );
+      var correct = cov.correct || 0;
+      var wrong = cov.wrong || 0;
+      // Relevance-only vote: no content signal, skip the halo.
+      if (correct === 0 && wrong === 0) return;
+      var verdict;
+      if (correct > wrong) verdict = 'ok';
+      else if (wrong > correct) verdict = 'bad';
+      else verdict = (cov.last_verdict === 'wrong') ? 'bad' : 'ok';
+      var label = cid + ' — ' + (c.section || '') +
+        ' (' + correct + '✓ / ' + wrong + '✗)';
+      if (verdict === 'ok') {{
+        okXs.push(c.x); okYs.push(c.y);
+        if (c.z !== undefined) okZs.push(c.z);
+        okTexts.push(label);
+      }} else {{
+        badXs.push(c.x); badYs.push(c.y);
+        if (c.z !== undefined) badZs.push(c.z);
+        badTexts.push(label);
+      }}
     }});
-    if (haloXs.length > 0) {{
+    function pushHaloTrace(name, color, xs, ys, zs, texts) {{
+      if (xs.length === 0) return;
       if (kind === '3d') {{
         newTraces.push({{
-          type: 'scatter3d', mode: 'markers', name: INVESTIGATED_NAME,
-          x: haloXs, y: haloYs, z: haloZs,
-          marker: {{size: 11, color: 'rgba(0,0,0,0)', symbol: 'diamond-open', line: {{width: 2, color: 'rgba(40,40,40,0.7)'}}}},
-          text: haloTexts,
-          hovertemplate: '<b>%{{text}}</b><extra>' + INVESTIGATED_NAME + '</extra>',
+          type: 'scatter3d', mode: 'markers', name: name,
+          x: xs, y: ys, z: zs,
+          marker: {{size: 12, color: 'rgba(0,0,0,0)', symbol: 'circle-open', line: {{width: 2.5, color: color}}}},
+          text: texts,
+          hovertemplate: '<b>%{{text}}</b><extra>' + name + '</extra>',
           showlegend: true
         }});
       }} else {{
         newTraces.push({{
-          type: 'scatter', mode: 'markers', name: INVESTIGATED_NAME,
-          x: haloXs, y: haloYs,
-          marker: {{size: 16, color: 'rgba(0,0,0,0)', symbol: 'diamond-open-dot', line: {{width: 2, color: 'rgba(40,40,40,0.75)'}}}},
-          text: haloTexts,
-          hovertemplate: '<b>%{{text}}</b><extra>' + INVESTIGATED_NAME + '</extra>',
+          type: 'scatter', mode: 'markers', name: name,
+          x: xs, y: ys,
+          marker: {{size: 18, color: 'rgba(0,0,0,0)', symbol: 'circle-open', line: {{width: 2.5, color: color}}}},
+          text: texts,
+          hovertemplate: '<b>%{{text}}</b><extra>' + name + '</extra>',
           showlegend: true
         }});
       }}
     }}
+    pushHaloTrace(VERIFIED_OK_NAME, '#2a7d2a', okXs, okYs, okZs, okTexts);
+    pushHaloTrace(VERIFIED_BAD_NAME, '#b3261e', badXs, badYs, badZs, badTexts);
 
     // Order users so the current user renders on top
     var keys = Object.keys(perUser).sort(function(a, b) {{
@@ -589,6 +616,7 @@ def _overlay_post_script(
       if (t.name.indexOf('✓ by ') === 0 || t.name.indexOf('✗ by ') === 0) toDelete.push(i);
       else if (t.name === VALIDATED_NAME || t.name === FLAGGED_NAME) toDelete.push(i);
       else if (t.name === INVESTIGATED_NAME) toDelete.push(i);
+      else if (t.name === VERIFIED_OK_NAME || t.name === VERIFIED_BAD_NAME) toDelete.push(i);
     }});
     toDelete.reverse().forEach(function(i) {{ Plotly.deleteTraces(gd, i); }});
     if (newTraces.length > 0) Plotly.addTraces(gd, newTraces);
@@ -609,8 +637,10 @@ def _overlay_post_script(
     if (name.indexOf('✓ by ') === 0 || name.indexOf('✗ by ') === 0) return true;
     return (
       name === VALIDATED_NAME || name === FLAGGED_NAME ||
-      name === INVESTIGATED_NAME || name === QUERY_STAR_NAME ||
-      name === QUERY_ZONE_NAME
+      name === INVESTIGATED_NAME ||
+      name === VERIFIED_OK_NAME || name === VERIFIED_BAD_NAME ||
+      name === QUERY_STAR_NAME ||
+      name === QUERY_ZONE_NAME || name === QUERY_LINKS_NAME
     );
   }}
   function applyVisibilityFilter() {{
@@ -629,7 +659,9 @@ def _overlay_post_script(
   }}
   filterBtn.onclick = function() {{
     onlyInvestigated = !onlyInvestigated;
-    filterBtn.textContent = 'Только проверенные: ' + (onlyInvestigated ? 'вкл' : 'выкл');
+    filterBtn.textContent = onlyInvestigated
+      ? 'Показать все чанки'
+      : 'Показать только проверенные';
     filterBtn.style.background = onlyInvestigated ? '#e7f0fb' : '#f8f8f8';
     filterBtn.style.borderColor = onlyInvestigated ? '#7aa4d4' : '#ccc';
     applyVisibilityFilter();
@@ -1007,14 +1039,17 @@ def _overlay_post_script(
       // and the high-dim top-K is computed correctly upstream regardless.
       var coords = buildChunkCoords();
       var cx = 0, cy = 0, cz = 0, n = 0;
-      var zoneXs = [], zoneYs = [], zoneZs = [];
-      topK.forEach(function(m) {{
+      var chunkXs = [], chunkYs = [], chunkZs = [], chunkLabels = [], chunkHovers = [];
+      topK.forEach(function(m, idx) {{
         var c = coords[m.chunk_id];
         if (!c) return;
         cx += c.x; cy += c.y; if (c.z !== undefined) cz += c.z;
         n += 1;
-        zoneXs.push(c.x); zoneYs.push(c.y);
-        if (c.z !== undefined) zoneZs.push(c.z);
+        chunkXs.push(c.x); chunkYs.push(c.y);
+        if (c.z !== undefined) chunkZs.push(c.z);
+        chunkLabels.push(String(idx + 1));
+        var score = (m.score != null) ? ' · score ' + m.score.toFixed(3) : '';
+        chunkHovers.push('#' + (idx + 1) + ' · ' + m.chunk_id + ' — ' + (m.section || '') + score);
       }});
       var pos;
       if (n > 0) {{
@@ -1025,36 +1060,74 @@ def _overlay_post_script(
         pos = data.position;
       }}
 
-      // Build the query zone — a translucent red cloud covering the
-      // top-K chunks. Retrieval returns K points, so showing a single
-      // dot underrepresents the actual "area" the query hit. With large
-      // oversized markers and low opacity the overlaps form a soft blob.
-      var zoneTrace = null;
-      if (zoneXs.length > 0) {{
+      // Tether lines from star → each retrieved chunk. Without this the
+      // plot doesn't show WHICH chunks belong to the current query, and
+      // the user is left wondering why the chunks aren't always visually
+      // closest to the star (answer: UMAP is a lossy projection of the
+      // 1024-dim cosine space; the "closest in 3D" is not necessarily
+      // "closest in meaning"). A line makes the retrieval set obvious.
+      var linkTrace = null;
+      if (chunkXs.length > 0) {{
+        var lx = [], ly = [], lz = [];
+        for (var i = 0; i < chunkXs.length; i++) {{
+          lx.push(pos[0], chunkXs[i], null);
+          ly.push(pos[1], chunkYs[i], null);
+          if (kind === '3d') lz.push(pos[2], chunkZs[i], null);
+        }}
         if (kind === '3d') {{
-          zoneTrace = {{
-            type: 'scatter3d', mode: 'markers', name: QUERY_ZONE_NAME,
-            x: zoneXs, y: zoneYs, z: zoneZs,
-            marker: {{size: 26, color: 'rgba(226, 60, 60, 0.18)', line: {{width: 0}}}},
+          linkTrace = {{
+            type: 'scatter3d', mode: 'lines', name: QUERY_LINKS_NAME,
+            x: lx, y: ly, z: lz,
+            line: {{color: 'rgba(226, 60, 60, 0.55)', width: 3}},
             hoverinfo: 'skip', showlegend: true
           }};
         }} else {{
-          zoneTrace = {{
-            type: 'scatter', mode: 'markers', name: QUERY_ZONE_NAME,
-            x: zoneXs, y: zoneYs,
-            marker: {{size: 40, color: 'rgba(226, 60, 60, 0.16)', line: {{width: 0}}}},
+          linkTrace = {{
+            type: 'scatter', mode: 'lines', name: QUERY_LINKS_NAME,
+            x: lx, y: ly,
+            line: {{color: 'rgba(226, 60, 60, 0.55)', width: 2}},
             hoverinfo: 'skip', showlegend: true
           }};
         }}
       }}
 
-      // Bigger, bolder centroid star so it pops against dense clusters.
-      // The previous size (10 in 3D) disappeared inside heavy sections.
+      // Numbered bubbles 1..K on each retrieved chunk so the user can
+      // see exactly which 5 landed in the top-K (without having to read
+      // the match list below).
+      var chunkMarkerTrace = null;
+      if (chunkXs.length > 0) {{
+        if (kind === '3d') {{
+          chunkMarkerTrace = {{
+            type: 'scatter3d', mode: 'markers+text', name: QUERY_ZONE_NAME,
+            x: chunkXs, y: chunkYs, z: chunkZs,
+            marker: {{size: 14, color: 'rgba(255, 255, 255, 0.95)', line: {{width: 2, color: '#e23c3c'}}}},
+            text: chunkLabels, textposition: 'middle center',
+            textfont: {{size: 11, color: '#c22020', family: 'system-ui, sans-serif'}},
+            customdata: chunkHovers,
+            hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
+            showlegend: true
+          }};
+        }} else {{
+          chunkMarkerTrace = {{
+            type: 'scatter', mode: 'markers+text', name: QUERY_ZONE_NAME,
+            x: chunkXs, y: chunkYs,
+            marker: {{size: 22, color: 'rgba(255, 255, 255, 0.95)', line: {{width: 2, color: '#e23c3c'}}}},
+            text: chunkLabels, textposition: 'middle center',
+            textfont: {{size: 12, color: '#c22020', family: 'system-ui, sans-serif'}},
+            customdata: chunkHovers,
+            hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
+            showlegend: true
+          }};
+        }}
+      }}
+
+      // Compact star. Big enough to spot, small enough not to swallow
+      // the numbered bubbles when the centroid sits inside a dense cluster.
       var starTrace = kind === '3d'
         ? {{
             x:[pos[0]], y:[pos[1]], z:[pos[2]],
             mode:'markers+text', type:'scatter3d',
-            marker:{{size:16, color:'#e23c3c', symbol:'diamond', line:{{width:3, color:'#fff'}}}},
+            marker:{{size:14, color:'#e23c3c', symbol:'diamond', line:{{width:3, color:'#fff'}}}},
             text:['★ Ваш запрос'], textposition:'top center',
             textfont:{{size:13, color:'#c22020'}},
             name: QUERY_STAR_NAME,
@@ -1063,21 +1136,27 @@ def _overlay_post_script(
         : {{
             x:[pos[0]], y:[pos[1]],
             mode:'markers+text', type:'scatter',
-            marker:{{size:22, color:'#e23c3c', symbol:'star', line:{{width:2, color:'#fff'}}}},
+            marker:{{size:20, color:'#e23c3c', symbol:'star', line:{{width:2, color:'#fff'}}}},
             text:['★ Ваш запрос'], textposition:'top center',
             textfont:{{size:13, color:'#c22020'}},
             name: QUERY_STAR_NAME,
             hovertemplate:'%{{text}}<extra></extra>'
           }};
 
-      // Replace old query zone + star atomically so indices stay sane.
+      // Replace old query layer atomically so indices stay sane.
       var toDelete = [];
       gd.data.forEach(function(t, i) {{
-        if (t && (t.name === QUERY_STAR_NAME || t.name === QUERY_ZONE_NAME)) toDelete.push(i);
+        if (!t || !t.name) return;
+        if (
+          t.name === QUERY_STAR_NAME ||
+          t.name === QUERY_ZONE_NAME ||
+          t.name === QUERY_LINKS_NAME
+        ) toDelete.push(i);
       }});
       toDelete.reverse().forEach(function(i) {{ Plotly.deleteTraces(gd, i); }});
       var addList = [];
-      if (zoneTrace) addList.push(zoneTrace);
+      if (linkTrace) addList.push(linkTrace);      // drawn first so it sits under markers
+      if (chunkMarkerTrace) addList.push(chunkMarkerTrace);
       addList.push(starTrace);
       Plotly.addTraces(gd, addList);
       applyVisibilityFilter();
