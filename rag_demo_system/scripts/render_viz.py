@@ -873,6 +873,46 @@ def _overlay_post_script(
     var textBox = el('div', {{text: full, style: 'color:#222;margin:0 0 12px 0;line-height:1.5;white-space:pre-wrap;background:#fafafa;padding:10px;border-radius:4px;border:1px solid #eee;max-height:360px;overflow:auto;'}});
     card.appendChild(textBox);
 
+    // Dedup badge: when this chunk represents a group of same-section
+    // near-duplicates, show how many were folded in and let the reviewer
+    // expand the list. Nothing is lost — the hidden chunks are still in
+    // Qdrant and written to the query log — this just surfaces that the
+    // top-K they see has been cleaned up.
+    var hidden = m.hidden_duplicates || [];
+    if (hidden.length > 0) {{
+      var dupBox = el('div', {{style: 'margin:0 0 10px 0;padding:6px 10px;background:#fff8e1;border:1px dashed #e0b84a;border-radius:4px;font-size:12px;color:#4a3d14;'}});
+      var dupToggle = el('a', {{
+        href: '#',
+        text: '+' + hidden.length + ' похожих из раздела «' + (m.section || 'без раздела') + '» (показать)',
+        style: 'color:#357;cursor:pointer;text-decoration:underline;'
+      }});
+      var dupList = el('div', {{style: 'display:none;margin-top:6px;font-size:11px;line-height:1.5;color:#333;'}});
+      hidden.forEach(function(h) {{
+        var row = el('div', {{style: 'padding:4px 0;border-top:1px solid #f0e4bf;'}});
+        row.appendChild(el('div', {{
+          text: h.chunk_id + ' · score ' + (h.score != null ? h.score.toFixed(3) : '?'),
+          style: 'color:#555;font-family:monospace;font-size:10px;'
+        }}));
+        row.appendChild(el('div', {{
+          text: h.text_preview || '(нет превью)',
+          style: 'color:#222;'
+        }}));
+        dupList.appendChild(row);
+      }});
+      var expanded = false;
+      dupToggle.onclick = function(e) {{
+        e.preventDefault();
+        expanded = !expanded;
+        dupList.style.display = expanded ? 'block' : 'none';
+        dupToggle.textContent = (expanded ? '−' : '+') + hidden.length +
+          ' похожих из раздела «' + (m.section || 'без раздела') + '» ' +
+          (expanded ? '(скрыть)' : '(показать)');
+      }};
+      dupBox.appendChild(dupToggle);
+      dupBox.appendChild(dupList);
+      card.appendChild(dupBox);
+    }}
+
     // --- Content accuracy buttons ---
     var contentRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-bottom:6px;'}});
     contentRow.appendChild(el('span', {{text: 'Точность:', style: 'font-size:12px;color:#555;min-width:110px;'}}));

@@ -162,6 +162,11 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     assert "animateFallingStar" in html_3d    # falling-star animation
     # UMAP projection caveat is visible under the query input.
     assert "Top-5 — ближайшие по смыслу" in html_3d
+    # Dedup badge on match cards: reads m.hidden_duplicates, shows a
+    # toggle with section name + count. Static HTML only carries the
+    # code path; the badge only renders at runtime once a query returns.
+    assert "hidden_duplicates" in html_3d
+    assert "похожих из раздела" in html_3d
 
 
 def test_truncate_handles_long_text() -> None:

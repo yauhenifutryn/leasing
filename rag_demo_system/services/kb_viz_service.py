@@ -63,6 +63,10 @@ QUERY_PREFIX = "query: "
 PROFILES_FILE_NAME = "kb_viz_profiles.json"
 PROFILE_NAME_MAX_CHARS = 128
 FEEDBACK_LOG_NAME = "kb_viz_feedback.jsonl"
+# Diagnostic log: one line per /overlay_query call with raw (pre-dedup)
+# and returned (post-dedup) top-K. Feeds a later audit pass that clusters
+# near-duplicate chunks and decides which to merge vs keep separate.
+QUERY_LOG_NAME = "kb_viz_queries.jsonl"
 MAX_COMMENT_CHARS = 2000
 # Cap the number of remembered queries so the registry can't grow without
 # bound. FIFO eviction when full. 2000 is generous for a single demo
@@ -100,6 +104,7 @@ class _State:
         )
         self._lock = threading.Lock()
         self._feedback_lock = threading.Lock()
+        self._query_log_lock = threading.Lock()
         self._profiles_lock = threading.Lock()
         self._embedder: Any = None
         self._reducers: dict[str, Any] = {}
@@ -141,6 +146,19 @@ class _State:
         path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False) + "\n"
         with self._feedback_lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
+        return path
+
+    def query_log_path(self) -> Path:
+        return self.state_dir / QUERY_LOG_NAME
+
+    def append_query_log(self, record: dict[str, Any]) -> Path:
+        """Append a raw-vs-returned top-K record (thread-safe)."""
+        path = self.query_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with self._query_log_lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
         return path
@@ -237,6 +255,13 @@ class OverlayMatch(BaseModel):
     section: str
     text_preview: str
     text_full: str = ""  # full chunk text, shown on click-to-expand in the UI
+    # Same-section chunks that were folded into this match by the dedup
+    # step. Empty when dedup is off or when no duplicates existed. The UI
+    # surfaces these as "+N похожих из этого раздела" so the reviewer can
+    # inspect what was hidden. Each entry is a trimmed OverlayMatch-like
+    # dict (chunk_id, score, text_preview) — the full text is one
+    # round-trip away if needed.
+    hidden_duplicates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class OverlayResponse(BaseModel):
@@ -514,20 +539,34 @@ def overlay_query(
 
     if STATE.dedupe_sections:
         # Keep the highest-scoring chunk per section (raw is already score-desc
-        # from Qdrant). Fall back to raw top-K if dedupe didn't produce
-        # enough unique sections — better to show duplicates than <K results.
-        seen: set[str] = set()
+        # from Qdrant). Attach same-section chunks we skip to the kept chunk
+        # as hidden_duplicates so the UI can expose a "+N more" badge and a
+        # later audit script can reason about what was hidden. Fall back to
+        # raw top-K if dedupe didn't produce enough unique sections — better
+        # to show duplicates than <K results.
+        section_to_keeper: dict[str, OverlayMatch] = {}
         deduped: list[OverlayMatch] = []
         for m in raw:
             key = (m.section or "").strip().lower() or m.chunk_id
-            if key in seen:
+            keeper = section_to_keeper.get(key)
+            if keeper is None:
+                section_to_keeper[key] = m
+                deduped.append(m)
+            else:
+                keeper.hidden_duplicates.append({
+                    "chunk_id": m.chunk_id,
+                    "score": m.score,
+                    "section": m.section,
+                    "text_preview": m.text_preview,
+                })
+            if len(deduped) >= payload.top_k and len(raw) <= fetch_k:
+                # keep scanning raw so late duplicates of early keepers still
+                # get attached, even after we've filled K unique sections.
                 continue
-            seen.add(key)
-            deduped.append(m)
-            if len(deduped) >= payload.top_k:
-                break
+        # Top up with raw chunks from the same sections if fewer unique
+        # sections than K exist. Preserves the "better to show dupes than <K"
+        # behavior without clobbering hidden_duplicates already collected.
         if len(deduped) < payload.top_k:
-            # Top up with whatever we had (already score-sorted).
             existing_ids = {m.chunk_id for m in deduped}
             for m in raw:
                 if m.chunk_id not in existing_ids:
@@ -546,6 +585,33 @@ def overlay_query(
     # /feedback can reject submissions with fabricated chunk_ids. See
     # _State._query_registry.
     STATE.register_query(query_id, [m.chunk_id for m in matches])
+
+    # Record every query with raw vs. returned top-K so an audit pass
+    # (cluster near-duplicates, decide merge vs. keep-separate) can run
+    # later over real usage data. One JSONL line per call; separate file
+    # from feedback so feedback aggregation stays fast.
+    try:
+        STATE.append_query_log({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "query_id": query_id,
+            "query_text": payload.text,
+            "kind": payload.kind,
+            "client_id": payload.client_id,
+            "dedupe_on": bool(STATE.dedupe_sections),
+            "requested_top_k": payload.top_k,
+            "raw_top_k": [
+                {"chunk_id": m.chunk_id, "score": m.score, "section": m.section}
+                for m in raw
+            ],
+            "returned_top_k": [
+                {"chunk_id": m.chunk_id, "score": m.score, "section": m.section,
+                 "hidden_count": len(m.hidden_duplicates)}
+                for m in matches
+            ],
+        })
+    except Exception:
+        # Query log is diagnostic; never fail the request over a log write.
+        logger.exception("query log append failed")
 
     return OverlayResponse(
         query_id=query_id,

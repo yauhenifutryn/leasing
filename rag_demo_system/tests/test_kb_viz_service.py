@@ -811,3 +811,75 @@ def test_dedupe_disabled_returns_near_duplicates(monkeypatch, tmp_path) -> None:
     body = client.post("/overlay_query", json={"text": "q", "kind": "3d", "top_k": 5}).json()
     assert len(body["top_k"]) == 5
     assert {m["section"] for m in body["top_k"]} == {"monthly-fee"}
+
+
+def test_dedupe_attaches_hidden_duplicates_to_keeper(monkeypatch, tmp_path) -> None:
+    """The keeper chunk carries its same-section siblings in hidden_duplicates
+    so the UI can surface '+N more from this section' without a round-trip."""
+    client, svc = _fresh(monkeypatch, tmp_path, token=None, dedupe=True)
+
+    # Fake returning 15 chunks all in one section (matches DEDUPE_OVERSAMPLE)
+    class _AllSame:
+        def search(self, collection_name, query_vector, limit, with_payload, with_vectors):
+            return [
+                _FakeHit(
+                    id_=f"chunk-{i}", score=0.9 - i * 0.01,
+                    payload={
+                        "chunk_id": f"chunk-{i}",
+                        "text": f"chunk {i} body",
+                        "heading_path": ["pricing", "monthly-fee"],
+                    },
+                )
+                for i in range(limit)
+            ]
+
+    svc.STATE._qdrant = _AllSame()
+    body = client.post("/overlay_query", json={"text": "q", "kind": "3d", "top_k": 5}).json()
+    # First returned chunk should have the rest attached as hidden_duplicates.
+    keeper = body["top_k"][0]
+    assert keeper["chunk_id"] == "chunk-0"
+    # DEDUPE_OVERSAMPLE * 5 = 15 chunks fetched. One keeper + 14 hidden.
+    assert len(keeper["hidden_duplicates"]) >= 10
+    # Every hidden entry has the same section as the keeper.
+    assert all(h["section"] == "monthly-fee" for h in keeper["hidden_duplicates"])
+    # Hidden entries carry score + preview so the UI can show them inline.
+    for h in keeper["hidden_duplicates"]:
+        assert "chunk_id" in h and "score" in h and "text_preview" in h
+
+
+def test_query_log_captures_raw_and_returned(monkeypatch, tmp_path) -> None:
+    """Every /overlay_query writes a JSONL line with raw (pre-dedup) + returned
+    top-K so a later audit pass can cluster near-duplicates across real use."""
+    client, svc = _fresh(monkeypatch, tmp_path, token=None, dedupe=True)
+    body = client.post("/overlay_query", json={"text": "сколько стоит", "kind": "3d", "top_k": 3}).json()
+
+    log_path = svc.STATE.query_log_path()
+    assert log_path.exists()
+    lines = [json.loads(ln) for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 1
+    row = lines[0]
+    assert row["query_id"] == body["query_id"]
+    assert row["query_text"] == "сколько стоит"
+    assert row["dedupe_on"] is True
+    assert row["requested_top_k"] == 3
+    # raw_top_k reflects the pre-dedup oversample; returned is the
+    # post-dedup slice actually handed to the client.
+    assert len(row["raw_top_k"]) >= len(row["returned_top_k"])
+    assert all("chunk_id" in r and "score" in r and "section" in r for r in row["raw_top_k"])
+    assert all("hidden_count" in r for r in row["returned_top_k"])
+
+
+def test_query_log_write_failure_does_not_fail_request(monkeypatch, tmp_path) -> None:
+    """Diagnostic log is best-effort; a write error must not 500 the request."""
+    client, svc = _fresh(monkeypatch, tmp_path, token=None, dedupe=False)
+    original = svc.STATE.append_query_log
+
+    def _boom(_record):
+        raise OSError("disk full")
+
+    svc.STATE.append_query_log = _boom
+    try:
+        res = client.post("/overlay_query", json={"text": "q", "kind": "3d"})
+        assert res.status_code == 200, res.text
+    finally:
+        svc.STATE.append_query_log = original
