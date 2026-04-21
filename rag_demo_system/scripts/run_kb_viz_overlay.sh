@@ -25,6 +25,10 @@ if [ ! -d "$VENV" ]; then
     exit 1
 fi
 
+# Ensure the state dir exists so callers can redirect logs into it without
+# tripping over "No such file or directory" on a fresh clone.
+mkdir -p "$REPO_ROOT/rag_demo_system/.state"
+
 # The overlay service needs sentence-transformers + torch, which are already
 # installed for production in the main repo venv. Install them into .venv-viz
 # on demand so the static-only flow stays lightweight.

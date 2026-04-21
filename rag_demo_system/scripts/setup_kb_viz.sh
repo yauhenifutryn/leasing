@@ -28,6 +28,8 @@ QDRANT_COLLECTION="${QDRANT_COLLECTION:-micro_leasing_kb}"
 OVERLAY_URL="${OVERLAY_URL:-}"
 OVERLAY_TOKEN="${OVERLAY_TOKEN:-}"
 
+mkdir -p rag_demo_system/results rag_demo_system/.state
+
 echo "[kb-viz] venv: $VENV"
 if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
