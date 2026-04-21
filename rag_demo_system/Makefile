@@ -53,5 +53,26 @@ kb-viz-logs:
 	@echo "=== profiles ==="
 	@cat .state/kb_viz_profiles.json 2>/dev/null || echo "(no profiles yet)"
 
+# Static-only fallback: rebuild the HTMLs without overlay wiring. Use this
+# to email emailable files when the overlay service is unavailable.
+kb-viz-static:
+	bash scripts/setup_kb_viz.sh
+
+# Wipe feedback + profiles but leave the service running. Use before a
+# fresh client testing round so the coverage panel starts at zero.
+kb-viz-reset-state:
+	rm -f .state/kb_viz_feedback.jsonl .state/kb_viz_profiles.json
+	@echo "[kb-viz] wiped feedback + profiles"
+
+# Stop any running uvicorn serving the kb-viz app. Safe no-op if none.
+kb-viz-stop:
+	@pkill -f 'uvicorn.*kb_viz_service' && echo "[kb-viz] stopped" || echo "[kb-viz] not running"
+
+# Show whether the service is up, and its PID + listening ports.
+kb-viz-status:
+	@pgrep -af 'uvicorn.*kb_viz_service' || echo "[kb-viz] not running"
+	@ss -tlnp 2>/dev/null | grep ':8500' || true
+
 .PHONY: kb-viz kb-viz-overlay-build kb-viz-overlay-serve kb-viz-test \
-        kb-viz-feedback-report kb-viz-smoke kb-viz-logs
+        kb-viz-feedback-report kb-viz-smoke kb-viz-logs \
+        kb-viz-static kb-viz-reset-state kb-viz-stop kb-viz-status

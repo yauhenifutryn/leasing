@@ -20,14 +20,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 VENV="$REPO_ROOT/.venv-viz"
-if [ ! -d "$VENV" ]; then
-    echo "venv-viz not found. Run setup_kb_viz.sh first." >&2
-    exit 1
-fi
-
 # Ensure the state dir exists so callers can redirect logs into it without
 # tripping over "No such file or directory" on a fresh clone.
 mkdir -p "$REPO_ROOT/rag_demo_system/.state"
+
+if [ ! -d "$VENV" ]; then
+    echo "[kb-viz-overlay] .venv-viz missing — bootstrapping via setup_kb_viz.sh"
+    echo "[kb-viz-overlay] (this also dumps Qdrant embeddings and renders the HTMLs)"
+    bash "$REPO_ROOT/rag_demo_system/scripts/setup_kb_viz.sh"
+fi
 
 # The overlay service needs sentence-transformers + torch, which are already
 # installed for production in the main repo venv. Install them into .venv-viz

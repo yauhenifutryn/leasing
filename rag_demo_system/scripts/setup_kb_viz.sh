@@ -60,3 +60,33 @@ fi
 
 echo "[kb-viz] done. Outputs:"
 ls -lah rag_demo_system/results/kb_viz_*.html 2>/dev/null || true
+
+cat <<'EOT'
+
+-----------------------------------------------------------------------
+Next steps
+-----------------------------------------------------------------------
+  Start the overlay service (background):
+    nohup make -C rag_demo_system kb-viz-overlay-serve \
+        > rag_demo_system/.state/kb_viz_service.log 2>&1 &
+
+  Smoke-test after ~5s:
+    make -C rag_demo_system kb-viz-smoke
+
+  Inspect logs + feedback + profiles (on demand, no streaming):
+    make -C rag_demo_system kb-viz-logs
+
+  Wipe profiles + feedback to start fresh (service keeps running):
+    make -C rag_demo_system kb-viz-reset-state
+
+  Stop the service and wipe everything (new token, new profiles):
+    make -C rag_demo_system kb-viz-stop
+    make -C rag_demo_system kb-viz-reset-state
+
+  If overlay won't start, fall back to emailable static HTMLs only:
+    make -C rag_demo_system kb-viz-static
+
+  Download the static HTMLs to your laptop to email the client:
+    scp <server>:/ephemeral/leasing-kb-viz/rag_demo_system/results/kb_viz_3d.html .
+-----------------------------------------------------------------------
+EOT
