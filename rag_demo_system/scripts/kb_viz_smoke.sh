@@ -53,7 +53,10 @@ done
 
 # ---- 3. Overlay query ----
 QUERY_PAYLOAD='{"text":"smoke test query","kind":"3d","top_k":3,"client_id":"smoke-bot"}'
-resp=$(curl -sS -m 20 -w '\n%{http_code}' \
+# First-call timeout is generous because it can trigger a 2.2 GB model
+# download of intfloat/multilingual-e5-large on a fresh server. Subsequent
+# calls return in < 1s (CPU) or < 100ms (CUDA).
+resp=$(curl -sS -m 240 -w '\n%{http_code}' \
     -H "Content-Type: application/json" \
     "${AUTH_HEADER[@]}" \
     -d "$QUERY_PAYLOAD" \

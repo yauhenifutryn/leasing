@@ -85,7 +85,21 @@ else
     echo "[deploy] step 2/4: sentence-transformers already installed"
 fi
 
-# --- 5. Start service --------------------------------------------------
+# --- 5. Pick embed device (autodetect CUDA if available) ---------------
+DEVICE="${KB_VIZ_EMBED_DEVICE:-}"
+if [ -z "$DEVICE" ]; then
+    if "$VENV/bin/python" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+        DEVICE="cuda"
+        echo "[deploy] CUDA detected — embed device = cuda (fast)"
+    else
+        DEVICE="cpu"
+        echo "[deploy] CUDA unavailable — embed device = cpu (first /overlay_query ~2-5s)"
+    fi
+else
+    echo "[deploy] embed device = ${DEVICE} (honoring KB_VIZ_EMBED_DEVICE)"
+fi
+
+# --- 6. Start service --------------------------------------------------
 echo "[deploy] step 3/4: starting service on 0.0.0.0:${PORT}"
 LOG="rag_demo_system/.state/kb_viz_service.log"
 : > "$LOG"
@@ -94,7 +108,7 @@ LOG="rag_demo_system/.state/kb_viz_service.log"
     export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
     export KB_VIZ_OVERLAY_TOKEN="$TOKEN"
     export KB_VIZ_PORT="$PORT"
-    export KB_VIZ_EMBED_DEVICE="${KB_VIZ_EMBED_DEVICE:-cpu}"
+    export KB_VIZ_EMBED_DEVICE="$DEVICE"
     nohup "$VENV/bin/python" -m uvicorn \
         rag_demo_system.services.kb_viz_service:app \
         --host 0.0.0.0 --port "$PORT" --log-level info \
@@ -124,7 +138,28 @@ if [ "$ready" -ne 1 ]; then
     exit 1
 fi
 
-# --- 7. Smoke test ----------------------------------------------------
+# --- 7. Warm up the embedding model -----------------------------------
+# First POST /overlay_query triggers a 2.2 GB HuggingFace download of
+# intfloat/multilingual-e5-large. Do it here with a long timeout so the
+# subsequent smoke test runs against a warm service.
+echo
+echo "[deploy] warming up embedder (first call downloads ~2.2 GB, up to 5 min)"
+auth_flag=()
+if [ -n "$TOKEN" ]; then
+    auth_flag=(-H "Authorization: Bearer $TOKEN")
+fi
+if curl -sf -m 300 -o /dev/null \
+        -H "Content-Type: application/json" \
+        "${auth_flag[@]}" \
+        -d '{"text":"warmup","kind":"3d","top_k":1,"client_id":"deploy-warmup"}' \
+        "http://localhost:${PORT}/overlay_query"; then
+    echo "[deploy] warmup OK"
+else
+    echo "[deploy] WARNING: warmup call did not return within 300s."
+    echo "[deploy]          Check ${LOG} — model may still be downloading."
+fi
+
+# --- 8. Smoke test ----------------------------------------------------
 echo
 echo "[deploy] running smoke test"
 if KB_VIZ_BASE_URL="http://localhost:${PORT}" KB_VIZ_OVERLAY_TOKEN="$TOKEN" \
