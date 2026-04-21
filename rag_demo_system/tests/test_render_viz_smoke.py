@@ -167,6 +167,14 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     # code path; the badge only renders at runtime once a query returns.
     assert "hidden_duplicates" in html_3d
     assert "похожих из раздела" in html_3d
+    # Demo mode + query picker wiring (runtime-activated when the HTML
+    # was rendered with a demo_snapshot; here we only check the codepath
+    # emitted into the static HTML).
+    assert "applyDemoSnapshot" in html_3d
+    assert "_buildDemoQueryTraces" in html_3d
+    assert "Пример вопроса:" in html_3d       # pill picker label
+    assert "__KB_VIZ_DEMO__" in html_3d
+    assert "Демо-режим" in html_3d            # banner shown in demo mode
 
 
 def test_truncate_handles_long_text() -> None:
@@ -332,3 +340,58 @@ def test_load_embeddings_requires_points(tmp_path: Path) -> None:
     bad.write_text(json.dumps({"points": []}), encoding="utf-8")
     with pytest.raises(ValueError):
         render_viz.load_embeddings(bad)
+
+
+def test_merge_demo_snapshots_rewrites_demo_var(tmp_path: Path) -> None:
+    """merge_demo_snapshots takes N per-query JSONs + a rendered template
+    HTML, bundles them into one {queries: [...]} blob, and rewrites the
+    baked-in __KB_VIZ_DEMO__ variable in-place. Lets you unify a batch of
+    downloaded demo files locally without a server round-trip.
+    """
+    import importlib.util
+    script = Path(__file__).resolve().parents[1] / "scripts" / "merge_demo_snapshots.py"
+    spec = importlib.util.spec_from_file_location("merge_demo_snapshots", script)
+    mod = importlib.util.module_from_spec(spec); assert spec.loader; spec.loader.exec_module(mod)
+
+    # Render a single-query demo to serve as template (mimics kb_viz_3d_demo_1.html).
+    src = tmp_path / "embeddings.json"
+    src.write_text(json.dumps(_synthetic_embeddings()), encoding="utf-8")
+    first = {
+        "query_id": "q-1", "query_text": "первый вопрос",
+        "top_k": [{"chunk_id": "chunk-0", "score": 0.9, "section": "pricing",
+                   "text_preview": "a", "text_full": "a", "hidden_duplicates": []}],
+        "coverage": {"per_chunk": {}, "per_section": {}, "per_user": {},
+                     "total_feedback": 0, "unique_chunks_validated": 0},
+        "user": "Demo",
+    }
+    render_viz.render(
+        embeddings_path=src, out_dir=tmp_path,
+        overlay_url="https://demo.invalid/overlay_query",
+        demo_snapshot=first, html_suffix="_demo_1",
+    )
+    (tmp_path / "kb_viz_demo_snapshot_1.json").write_text(
+        json.dumps(first, ensure_ascii=False), encoding="utf-8")
+    # Second per-query snapshot (no template for this one — merge pulls from JSON only).
+    second = dict(first)
+    second["query_id"] = "q-2"
+    second["query_text"] = "второй вопрос"
+    second["top_k"] = [{"chunk_id": "chunk-5", "score": 0.82, "section": "pricing",
+                        "text_preview": "b", "text_full": "b", "hidden_duplicates": []}]
+    (tmp_path / "kb_viz_demo_snapshot_2.json").write_text(
+        json.dumps(second, ensure_ascii=False), encoding="utf-8")
+
+    rc = mod.main([
+        "--snapshots", str(tmp_path / "kb_viz_demo_snapshot_*.json"),
+        "--template-3d", str(tmp_path / "kb_viz_3d_demo_1.html"),
+        "--out-dir", str(tmp_path),
+    ])
+    assert rc == 0
+
+    unified = (tmp_path / "kb_viz_3d_demo.html").read_text(encoding="utf-8")
+    # Both queries are now baked into the unified HTML.
+    assert "первый вопрос" in unified
+    assert "второй вопрос" in unified
+    # And the merged snapshot file carries both.
+    bundle = json.loads((tmp_path / "kb_viz_demo_snapshot.json").read_text(encoding="utf-8"))
+    assert len(bundle["queries"]) == 2
+    assert {q["query_text"] for q in bundle["queries"]} == {"первый вопрос", "второй вопрос"}

@@ -78,49 +78,63 @@ kb-viz-status:
 	@pgrep -af 'uvicorn.*kb_viz_service' || echo "[kb-viz] not running"
 	@ss -tlnp 2>/dev/null | grep ':8500' || true
 
-# Freeze current overlay state into client-shippable demo HTMLs.
-# Run this BEFORE killing the server. Produces, for each query N:
-#   results/kb_viz_demo_snapshot_N.json   (raw data)
-#   results/kb_viz_3d_demo_N.html         (self-contained preview)
-#   results/kb_viz_2d_demo_N.html
-# Plus:
-#   results/kb_viz_demo_index.json        (one-shot index over all)
+# Freeze current overlay state into a single client-shippable demo HTML.
+# Run this BEFORE killing the server. Produces ONE pair of files
+# regardless of how many queries you bake in — the HTML carries a
+# pill picker when multiple queries are provided, so the client
+# can switch examples without opening different files:
+#   results/kb_viz_demo_snapshot.json     (raw data: coverage + all queries)
+#   results/kb_viz_3d_demo.html           (self-contained 3D preview)
+#   results/kb_viz_2d_demo.html           (self-contained 2D preview)
 #
-# Single-query usage:
+# Default behaviour bakes every query from DEMO_QUERIES_FILE. Override
+# with DEMO_QUERY="..." to bake just one.
+#
+# Batch from the curated example file (one query per line, # comments ok):
+#   make -C rag_demo_system kb-viz-demo-snapshot
+#
+# Single query, override:
 #   make -C rag_demo_system kb-viz-demo-snapshot \
-#       DEMO_QUERY="как оплатить через ерип"
-#
-# Batch from a file (one query per line, # comments allowed):
-#   make -C rag_demo_system kb-viz-demo-snapshot-multi \
-#       DEMO_QUERIES_FILE=scripts/demo_queries.example.txt
+#       DEMO_QUERY="как оплатить через ерип" \
+#       DEMO_QUERIES_FILE=
 #
 # Optional:
-#   DEMO_URL    (default http://localhost:8500)
-#   DEMO_USER   (default Demo)
+#   DEMO_URL            (default http://localhost:8500)
+#   DEMO_USER           (default Demo)
 DEMO_URL           ?= http://localhost:8500
 DEMO_USER          ?= Demo
-DEMO_QUERY         ?= как оплатить через ерип
+DEMO_QUERY         ?=
 DEMO_QUERIES_FILE  ?= scripts/demo_queries.example.txt
+
+# Build the --query / --queries-file args conditionally so the python
+# script never sees an empty string when one variable is unset.
+DEMO_QUERY_ARG        = $(if $(strip $(DEMO_QUERY)),--query $(DEMO_QUERY),)
+DEMO_QUERIES_FILE_ARG = $(if $(strip $(DEMO_QUERIES_FILE)),--queries-file $(DEMO_QUERIES_FILE),)
 
 kb-viz-demo-snapshot:
 	$(PY_VIZ) scripts/make_demo_snapshot.py \
 	    --url "$(DEMO_URL)" \
 	    --token "$$KB_VIZ_OVERLAY_TOKEN" \
-	    --query "$(DEMO_QUERY)" \
+	    $(DEMO_QUERY_ARG) \
+	    $(DEMO_QUERIES_FILE_ARG) \
 	    --user "$(DEMO_USER)" \
 	    --embeddings results/embeddings.json \
 	    --out-dir results
 
-kb-viz-demo-snapshot-multi:
-	$(PY_VIZ) scripts/make_demo_snapshot.py \
-	    --url "$(DEMO_URL)" \
-	    --token "$$KB_VIZ_OVERLAY_TOKEN" \
-	    --queries-file "$(DEMO_QUERIES_FILE)" \
-	    --user "$(DEMO_USER)" \
-	    --embeddings results/embeddings.json \
-	    --out-dir results
+# Offline merge: unify existing per-query demo snapshots (JSON) + a
+# rendered template HTML into a single unified demo HTML with pill
+# picker. No server, no embeddings — everything is done with downloaded
+# files. Defaults auto-detect kb_viz_demo_snapshot_*.json and
+# kb_viz_3d_demo_1.html in DEMO_MERGE_DIR.
+#
+# Usage after you've already downloaded per-query files:
+#   make -C rag_demo_system kb-viz-demo-merge DEMO_MERGE_DIR=~/Downloads/kb-viz-demos
+DEMO_MERGE_DIR ?= results
+kb-viz-demo-merge:
+	$(PY_VIZ) scripts/merge_demo_snapshots.py \
+	    --out-dir "$(DEMO_MERGE_DIR)"
 
 .PHONY: kb-viz-deploy kb-viz kb-viz-overlay-build kb-viz-overlay-serve \
         kb-viz-test kb-viz-feedback-report kb-viz-smoke kb-viz-logs \
         kb-viz-static kb-viz-reset-state kb-viz-stop kb-viz-status \
-        kb-viz-demo-snapshot kb-viz-demo-snapshot-multi
+        kb-viz-demo-snapshot kb-viz-demo-merge

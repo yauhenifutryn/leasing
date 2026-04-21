@@ -1281,119 +1281,185 @@ def _overlay_post_script(
   // no network calls, and disable the Go / vote buttons so the client
   // sees exactly what an interactive session looks like without needing
   // the server to be running.
-  if (__KB_VIZ_DEMO__ && __KB_VIZ_DEMO__.top_k) {{
-    // Pretend the panel is open and the user is already "logged in".
-    panel.style.display = 'block';
-    toggle.textContent = 'Demo · overlay preview';
-    toggle.disabled = true;
-    if (__KB_VIZ_DEMO__.user) {{
-      user = __KB_VIZ_DEMO__.user;
-      renderUserBadge();
-    }}
+  if (__KB_VIZ_DEMO__) {{
+    // Normalize shape: accept either the new {{queries: [...]}} bundle or
+    // the legacy single-snapshot {{top_k, query_text, query_id, ...}}.
+    var demoQueries = (__KB_VIZ_DEMO__.queries && __KB_VIZ_DEMO__.queries.length > 0)
+      ? __KB_VIZ_DEMO__.queries
+      : (__KB_VIZ_DEMO__.top_k
+          ? [{{
+              query_id: __KB_VIZ_DEMO__.query_id || 'demo',
+              query_text: __KB_VIZ_DEMO__.query_text || '',
+              top_k: __KB_VIZ_DEMO__.top_k
+            }}]
+          : []);
 
-    // Demo banner — replace the experimental label at the top of the bar.
-    note.textContent = 'Демо-режим — данные заморожены, сервер отключён.';
-    note.style.color = '#b3261e';
-    note.style.fontWeight = '600';
-
-    // Seed coverage from the snapshot (drives verdict halos + per-user rings).
-    lastCoverage = __KB_VIZ_DEMO__.coverage || {{per_chunk: {{}}, per_section: {{}}, per_user: {{}}, total_feedback: 0, unique_chunks_validated: 0}};
-
-    // Seed lastQuery from the snapshot and draw the query layer.
-    var demoTopK = __KB_VIZ_DEMO__.top_k || [];
-    var demoQueryText = __KB_VIZ_DEMO__.query_text || '';
-    lastQuery = {{query_id: __KB_VIZ_DEMO__.query_id || 'demo', text: demoQueryText, kind: kind, top_k: demoTopK}};
-    input.value = demoQueryText;
-    resetReviewState();
-
-    // Centroid + tether lines + numbered top-K markers + query star.
-    var demoCoords = buildChunkCoords();
-    var dcx = 0, dcy = 0, dcz = 0, dn = 0;
-    var dChunkXs = [], dChunkYs = [], dChunkZs = [], dChunkLabels = [], dChunkHovers = [];
-    demoTopK.forEach(function(m, idx) {{
-      var c = demoCoords[m.chunk_id];
-      if (!c) return;
-      dcx += c.x; dcy += c.y; if (c.z !== undefined) dcz += c.z;
-      dn += 1;
-      dChunkXs.push(c.x); dChunkYs.push(c.y);
-      if (c.z !== undefined) dChunkZs.push(c.z);
-      dChunkLabels.push(String(idx + 1));
-      var s = (m.score != null) ? ' · score ' + m.score.toFixed(3) : '';
-      dChunkHovers.push('#' + (idx + 1) + ' · ' + m.chunk_id + ' — ' + (m.section || '') + s);
-    }});
-    var dpos = dn > 0 ? [dcx / dn, dcy / dn, kind === '3d' ? dcz / dn : undefined] : null;
-
-    var dTraces = [];
-    if (dpos && dChunkXs.length > 0) {{
-      var dLx = [], dLy = [], dLz = [];
-      for (var di = 0; di < dChunkXs.length; di++) {{
-        dLx.push(dpos[0], dChunkXs[di], null);
-        dLy.push(dpos[1], dChunkYs[di], null);
-        if (kind === '3d') dLz.push(dpos[2], dChunkZs[di], null);
+    if (demoQueries.length > 0) {{
+      // Pretend the panel is open and the user is already "logged in".
+      panel.style.display = 'block';
+      toggle.textContent = 'Demo · overlay preview';
+      toggle.disabled = true;
+      if (__KB_VIZ_DEMO__.user) {{
+        user = __KB_VIZ_DEMO__.user;
+        renderUserBadge();
       }}
-      if (kind === '3d') {{
-        dTraces.push({{type:'scatter3d', mode:'lines', name: QUERY_LINKS_NAME,
-          x: dLx, y: dLy, z: dLz,
-          line: {{color: 'rgba(226, 60, 60, 0.55)', width: 3}},
-          hoverinfo: 'skip', showlegend: true}});
-        dTraces.push({{type:'scatter3d', mode:'markers+text', name: QUERY_ZONE_NAME,
-          x: dChunkXs, y: dChunkYs, z: dChunkZs,
-          marker: {{size: 20, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
-          text: dChunkLabels, textposition: 'middle center',
-          textfont: {{size: 13, color: '#b11616', family: 'system-ui, sans-serif'}},
-          customdata: dChunkHovers,
-          hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
-          showlegend: true}});
-        dTraces.push({{x:[dpos[0]], y:[dpos[1]], z:[dpos[2]],
-          mode:'markers+text', type:'scatter3d',
-          marker:{{size:14, color:'#e23c3c', symbol:'diamond', line:{{width:3, color:'#fff'}}}},
-          text:['★ Ваш запрос'], textposition:'top center',
-          textfont:{{size:13, color:'#c22020'}},
-          name: QUERY_STAR_NAME, hovertemplate:'%{{text}}<extra></extra>'}});
+
+      // Demo banner — replace the experimental label at the top of the bar.
+      note.textContent = 'Демо-режим — данные заморожены, сервер отключён.';
+      note.style.color = '#b3261e';
+      note.style.fontWeight = '600';
+
+      // Seed coverage once from the snapshot (drives verdict halos + per-user rings).
+      lastCoverage = __KB_VIZ_DEMO__.coverage || {{per_chunk: {{}}, per_section: {{}}, per_user: {{}}, total_feedback: 0, unique_chunks_validated: 0}};
+
+      // Helper: swap the query layer (tether lines, numbered top-K,
+      // centroid star) for a given snapshot. Called on initial render
+      // and every time the pill picker selects a different query.
+      function _buildDemoQueryTraces(topK) {{
+        var coords = buildChunkCoords();
+        var cx = 0, cy = 0, cz = 0, n = 0;
+        var xs = [], ys = [], zs = [], labels = [], hovers = [];
+        topK.forEach(function(m, idx) {{
+          var c = coords[m.chunk_id];
+          if (!c) return;
+          cx += c.x; cy += c.y; if (c.z !== undefined) cz += c.z;
+          n += 1;
+          xs.push(c.x); ys.push(c.y);
+          if (c.z !== undefined) zs.push(c.z);
+          labels.push(String(idx + 1));
+          var s = (m.score != null) ? ' · score ' + m.score.toFixed(3) : '';
+          hovers.push('#' + (idx + 1) + ' · ' + m.chunk_id + ' — ' + (m.section || '') + s);
+        }});
+        if (n === 0) return [];
+        var pos = [cx / n, cy / n, kind === '3d' ? cz / n : undefined];
+        var lx = [], ly = [], lz = [];
+        for (var i = 0; i < xs.length; i++) {{
+          lx.push(pos[0], xs[i], null);
+          ly.push(pos[1], ys[i], null);
+          if (kind === '3d') lz.push(pos[2], zs[i], null);
+        }}
+        var traces = [];
+        if (kind === '3d') {{
+          traces.push({{type:'scatter3d', mode:'lines', name: QUERY_LINKS_NAME,
+            x: lx, y: ly, z: lz,
+            line: {{color: 'rgba(226, 60, 60, 0.55)', width: 3}},
+            hoverinfo: 'skip', showlegend: true}});
+          traces.push({{type:'scatter3d', mode:'markers+text', name: QUERY_ZONE_NAME,
+            x: xs, y: ys, z: zs,
+            marker: {{size: 20, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
+            text: labels, textposition: 'middle center',
+            textfont: {{size: 13, color: '#b11616', family: 'system-ui, sans-serif'}},
+            customdata: hovers,
+            hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
+            showlegend: true}});
+          traces.push({{x:[pos[0]], y:[pos[1]], z:[pos[2]],
+            mode:'markers+text', type:'scatter3d',
+            marker:{{size:14, color:'#e23c3c', symbol:'diamond', line:{{width:3, color:'#fff'}}}},
+            text:['★ Ваш запрос'], textposition:'top center',
+            textfont:{{size:13, color:'#c22020'}},
+            name: QUERY_STAR_NAME, hovertemplate:'%{{text}}<extra></extra>'}});
+        }} else {{
+          traces.push({{type:'scatter', mode:'lines', name: QUERY_LINKS_NAME,
+            x: lx, y: ly,
+            line: {{color: 'rgba(226, 60, 60, 0.55)', width: 2}},
+            hoverinfo: 'skip', showlegend: true}});
+          traces.push({{type:'scatter', mode:'markers+text', name: QUERY_ZONE_NAME,
+            x: xs, y: ys,
+            marker: {{size: 32, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
+            text: labels, textposition: 'middle center',
+            textfont: {{size: 16, color: '#b11616', family: 'system-ui, sans-serif'}},
+            customdata: hovers,
+            hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
+            showlegend: true}});
+          traces.push({{x:[pos[0]], y:[pos[1]],
+            mode:'markers+text', type:'scatter',
+            marker:{{size:20, color:'#e23c3c', symbol:'star', line:{{width:2, color:'#fff'}}}},
+            text:['★ Ваш запрос'], textposition:'top center',
+            textfont:{{size:13, color:'#c22020'}},
+            name: QUERY_STAR_NAME, hovertemplate:'%{{text}}<extra></extra>'}});
+        }}
+        return traces;
+      }}
+
+      function applyDemoSnapshot(snap) {{
+        lastQuery = {{query_id: snap.query_id || 'demo', text: snap.query_text || '', kind: kind, top_k: snap.top_k || []}};
+        input.value = snap.query_text || '';
+        resetReviewState();
+
+        // Remove old query layer; add the new.
+        var toDelete = [];
+        gd.data.forEach(function(t, i) {{
+          if (!t || !t.name) return;
+          if (t.name === QUERY_STAR_NAME || t.name === QUERY_ZONE_NAME || t.name === QUERY_LINKS_NAME) {{
+            toDelete.push(i);
+          }}
+        }});
+        toDelete.reverse().forEach(function(i) {{ Plotly.deleteTraces(gd, i); }});
+        var newTraces = _buildDemoQueryTraces(lastQuery.top_k);
+        if (newTraces.length > 0) Plotly.addTraces(gd, newTraces);
+
+        applyVisibilityFilter();
+        status.textContent = 'Демо: показано ' + (lastQuery.top_k || []).length + ' чанков для примера запроса.';
+        renderMatchList();
+      }}
+
+      // Query picker: one pill per baked query, highlighted when active.
+      // Inserted between the input row and the UMAP note. Skipped when
+      // only one query is baked in (nothing to switch between).
+      if (demoQueries.length > 1) {{
+        var pickerRow = el('div', {{style: 'margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;'}});
+        pickerRow.appendChild(el('span', {{text: 'Пример вопроса:', style: 'font-size:12px;color:#555;margin-right:4px;'}}));
+        var pills = [];
+        demoQueries.forEach(function(snap, idx) {{
+          var pill = el('button', {{
+            text: (idx + 1) + '. ' + (snap.query_text || '(пустой запрос)'),
+            style: 'padding:5px 10px;font-size:12px;cursor:pointer;border:1px solid #ccc;border-radius:14px;background:#fff;color:#234;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+          }});
+          pill.title = snap.query_text || '';
+          pill.onclick = function() {{
+            pills.forEach(function(p) {{
+              p.style.background = '#fff';
+              p.style.color = '#234';
+              p.style.borderColor = '#ccc';
+              p.style.fontWeight = '400';
+            }});
+            pill.style.background = '#1e66c8';
+            pill.style.color = '#fff';
+            pill.style.borderColor = '#1e66c8';
+            pill.style.fontWeight = '600';
+            applyDemoSnapshot(snap);
+          }};
+          pills.push(pill);
+          pickerRow.appendChild(pill);
+        }});
+        // Insert the picker right after the input/ask/filter row — the
+        // UI order becomes: input + Go + filter → picker → UMAP note → status.
+        panel.insertBefore(pickerRow, umapNote);
+        // Auto-activate the first pill.
+        pills[0].click();
       }} else {{
-        dTraces.push({{type:'scatter', mode:'lines', name: QUERY_LINKS_NAME,
-          x: dLx, y: dLy,
-          line: {{color: 'rgba(226, 60, 60, 0.55)', width: 2}},
-          hoverinfo: 'skip', showlegend: true}});
-        dTraces.push({{type:'scatter', mode:'markers+text', name: QUERY_ZONE_NAME,
-          x: dChunkXs, y: dChunkYs,
-          marker: {{size: 32, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
-          text: dChunkLabels, textposition: 'middle center',
-          textfont: {{size: 16, color: '#b11616', family: 'system-ui, sans-serif'}},
-          customdata: dChunkHovers,
-          hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
-          showlegend: true}});
-        dTraces.push({{x:[dpos[0]], y:[dpos[1]],
-          mode:'markers+text', type:'scatter',
-          marker:{{size:20, color:'#e23c3c', symbol:'star', line:{{width:2, color:'#fff'}}}},
-          text:['★ Ваш запрос'], textposition:'top center',
-          textfont:{{size:13, color:'#c22020'}},
-          name: QUERY_STAR_NAME, hovertemplate:'%{{text}}<extra></extra>'}});
+        // Single query — just bootstrap directly.
+        applyDemoSnapshot(demoQueries[0]);
       }}
-      Plotly.addTraces(gd, dTraces);
+
+      // Verdict halos + per-user rings are computed from coverage, which
+      // is the same across all queries, so only rebuild once.
+      rebuildCoverageTraces();
+      applyVisibilityFilter();
+
+      // Disable live-only actions: Go, Enter, vote buttons.
+      ask.textContent = 'Демо · сервер отключён';
+      ask.disabled = true;
+      ask.style.background = '#eee';
+      ask.style.color = '#888';
+      ask.onclick = function() {{ /* no-op in demo mode */ }};
+      input.readOnly = true;
+      input.style.background = '#f8f8f8';
+      submitChunkFeedback = async function(match, signalType, verdict, comment, rowStatus) {{
+        if (rowStatus) rowStatus.textContent = 'Демо — голоса не сохраняются.';
+        return false;
+      }};
     }}
-
-    // Verdict halos + per-user rings from snapshot coverage.
-    rebuildCoverageTraces();
-    applyVisibilityFilter();
-    status.textContent = 'Демо: показано ' + demoTopK.length + ' чанков для примера запроса.';
-    renderMatchList();
-
-    // Disable live-only actions: Go, Enter, vote buttons.
-    ask.textContent = 'Демо · сервер отключён';
-    ask.disabled = true;
-    ask.style.background = '#eee';
-    ask.style.color = '#888';
-    ask.onclick = function() {{ /* no-op in demo mode */ }};
-    input.readOnly = true;
-    input.style.background = '#f8f8f8';
-    // Neuter submitChunkFeedback so vote buttons surface "демо" instead of
-    // silently hitting a dead server. Keeps the UI alive for the client
-    // to click around and see what happens, without mutating anything.
-    submitChunkFeedback = async function(match, signalType, verdict, comment, rowStatus) {{
-      if (rowStatus) rowStatus.textContent = 'Демо — голоса не сохраняются.';
-      return false;
-    }};
   }}
 }})();
 """

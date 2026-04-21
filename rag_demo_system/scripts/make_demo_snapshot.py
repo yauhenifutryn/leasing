@@ -1,11 +1,11 @@
-"""Freeze the current KB-viz overlay state into self-contained demo HTMLs.
+"""Freeze the current KB-viz overlay state into ONE self-contained demo HTML.
 
-Run this BEFORE killing the overlay server. For each input query it hits
-the live endpoints once, bakes the response into a kb_viz_{2d,3d}_demo_N.html
-pair, and emits a zip-friendly folder you can hand to a client who does
-not have network access to the server. The resulting HTMLs have the
-entire visualisation pre-populated (tether lines, numbered top-K, verdict
-halos, match cards) and all interactive actions neutralised.
+Run this BEFORE killing the overlay server. It hits the live endpoints
+once per requested query, plus /coverage once, and bakes everything into
+a single ``kb_viz_3d_demo.html`` (plus a 2D sibling). The resulting HTML
+carries a pill picker — the client clicks any example question to see
+the corresponding tether lines, numbered top-K, and match cards, all
+without a server.
 
 Single-query usage:
     python scripts/make_demo_snapshot.py \\
@@ -14,7 +14,7 @@ Single-query usage:
         --query "как оплатить через ерип" \\
         --out-dir results
 
-Multi-query batch (repeat --query, or feed a file with one per line):
+Batch (repeat --query, or feed a file with one per line):
     python scripts/make_demo_snapshot.py --url ... \\
         --query "как оплатить через ерип" \\
         --query "что такое лизинг без прав" \\
@@ -24,13 +24,10 @@ Multi-query batch (repeat --query, or feed a file with one per line):
     python scripts/make_demo_snapshot.py --url ... \\
         --queries-file scripts/demo_queries.example.txt
 
-Per-query outputs (N = 1, 2, ...):
-    kb_viz_demo_snapshot_N.json     raw data used for bake N
-    kb_viz_2d_demo_N.html           self-contained 2D preview
-    kb_viz_3d_demo_N.html           self-contained 3D preview
-
-Plus a combined index:
-    kb_viz_demo_index.json          {queries: [{n, query, files}], ...}
+Outputs:
+    kb_viz_demo_snapshot.json   raw data (coverage + all queries)
+    kb_viz_2d_demo.html         self-contained 2D preview (single file)
+    kb_viz_3d_demo.html         self-contained 3D preview (single file)
 """
 from __future__ import annotations
 
@@ -75,7 +72,6 @@ def _load_queries(args: argparse.Namespace) -> list[str]:
             if not stripped or stripped.startswith("#"):
                 continue
             queries.append(stripped)
-    # Dedupe while preserving order so repeating --query doesn't waste calls.
     seen: set[str] = set()
     unique: list[str] = []
     for q in queries:
@@ -104,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    index: list[dict[str, Any]] = []
+    per_query: list[dict[str, Any]] = []
     for n, query in enumerate(queries, start=1):
         print(f"\n[demo {n}/{len(queries)}] query={query!r}", flush=True)
         print(f"[demo {n}]   POST {base}/overlay_query", flush=True)
@@ -113,48 +109,44 @@ def main(argv: list[str] | None = None) -> int:
             args.token,
             {"text": query, "kind": "3d", "top_k": args.top_k, "client_id": args.user},
         )
-        print(f"[demo {n}]   GET  {base}/coverage", flush=True)
-        cov = _http_json(f"{base}/coverage", args.token)
-
-        snapshot = {
+        per_query.append({
             "query_id": q_resp.get("query_id"),
             "query_text": query,
             "top_k": q_resp.get("top_k", []),
-            "coverage": cov,
-            "user": args.user,
-        }
+        })
 
-        suffix = f"_demo_{n}"
-        snapshot_path = out_dir / f"kb_viz_demo_snapshot_{n}.json"
-        snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[demo {n}]   snapshot -> {snapshot_path}", flush=True)
+    # Coverage is session-global; fetch it once at the end so it reflects
+    # the cumulative state including any feedback the baker submitted
+    # while poking around before snapshotting.
+    print(f"\n[demo] GET {base}/coverage", flush=True)
+    cov = _http_json(f"{base}/coverage", args.token)
 
-        rendered = render_viz.render(
-            embeddings_path=Path(args.embeddings),
-            out_dir=out_dir,
-            overlay_url="https://demo.invalid/overlay_query",
-            overlay_token=None,
-            demo_snapshot=snapshot,
-            html_suffix=suffix,
-        )
-        files = {k: str(p) for k, p in rendered.items() if k.endswith("_html")}
-        for k, p in files.items():
-            print(f"[demo {n}]   {k}: {p}", flush=True)
-        index.append({"n": n, "query": query, "files": files, "snapshot": str(snapshot_path)})
+    snapshot = {
+        "user": args.user,
+        "coverage": cov,
+        "queries": per_query,
+    }
 
-    # Combined index for easy browsing.
-    index_path = out_dir / "kb_viz_demo_index.json"
-    index_path.write_text(
-        json.dumps({"count": len(index), "queries": index}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    snapshot_path = out_dir / "kb_viz_demo_snapshot.json"
+    snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[demo] snapshot -> {snapshot_path}", flush=True)
+
+    print("[demo] rendering demo HTMLs...", flush=True)
+    rendered = render_viz.render(
+        embeddings_path=Path(args.embeddings),
+        out_dir=out_dir,
+        overlay_url="https://demo.invalid/overlay_query",
+        overlay_token=None,
+        demo_snapshot=snapshot,
+        html_suffix="_demo",
     )
-
-    print(f"\n[demo] {len(queries)} demo HTML pairs written to {out_dir}/:")
-    for row in index:
-        three_d = row["files"].get("3d_html", "")
-        print(f"  #{row['n']}: {Path(three_d).name}   <- {row['query']}")
-    print(f"\n[demo] index: {index_path}")
-    print("[demo] open any kb_viz_3d_demo_N.html in a browser — no server needed.")
+    for k, p in rendered.items():
+        print(f"  {k}: {p}")
+    print(
+        f"\n[demo] open {out_dir / 'kb_viz_3d_demo.html'} in any browser — "
+        f"{len(queries)} example {'query' if len(queries) == 1 else 'queries'} baked in, "
+        "no server needed."
+    )
     return 0
 
 
