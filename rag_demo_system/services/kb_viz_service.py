@@ -373,8 +373,13 @@ def serve_3d() -> Any:
 
 
 @app.get("/profiles", response_model=ProfilesResponse)
-def list_profiles() -> ProfilesResponse:
-    """List known profile names so returning users can pick instead of retyping."""
+def list_profiles(authorization: str | None = Header(default=None)) -> ProfilesResponse:
+    """List known profile names so returning users can pick instead of retyping.
+
+    Gated behind the same bearer as write endpoints when a token is set, so
+    a cross-origin page cannot silently harvest participant names.
+    """
+    _require_token(authorization)
     return ProfilesResponse(profiles=[ProfileRecord(**p) for p in STATE.list_profiles()])
 
 
@@ -570,7 +575,12 @@ def _user_key(rec: dict[str, Any]) -> str:
 
 
 @app.get("/coverage", response_model=CoverageResponse)
-def coverage() -> CoverageResponse:
+def coverage(authorization: str | None = Header(default=None)) -> CoverageResponse:
+    """Aggregate validation tallies. Gated behind the same bearer as writes
+    so cross-origin pages cannot harvest participant names or IPs when a
+    token is configured.
+    """
+    _require_token(authorization)
     return _compute_coverage()
 
 

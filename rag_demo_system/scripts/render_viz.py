@@ -118,6 +118,18 @@ COVERAGE_USER_TRACE_PREFIX: str = "✓ by "
 COVERAGE_WRONG_USER_TRACE_PREFIX: str = "✗ by "
 
 
+def _json_for_script(value: Any) -> str:
+    """JSON-encode a value safely for inlining into an HTML <script> block.
+
+    Why not plain ``json.dumps``: json does not escape ``</``, so a hostile
+    or careless string containing ``</script>`` would close the surrounding
+    script tag and let subsequent characters be parsed as markup. Replacing
+    ``</`` with ``<\\/`` within the JSON output neutralizes this without
+    changing the semantic value of any string in JavaScript.
+    """
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
 def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     """Inject the overlay UI: query input, feedback buttons, coverage panel.
 
@@ -129,12 +141,17 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     # ensure_ascii=False keeps the UTF-8 glyphs (✓ ✗) intact in the emitted
     # JS literals so the smoke test and legend strings match the configured
     # constants. The output HTML is served as UTF-8 so this is safe.
-    token_js = json.dumps(token, ensure_ascii=False) if token else "null"
-    url_js = json.dumps(embed_url, ensure_ascii=False)
-    kind_js = json.dumps(kind, ensure_ascii=False)
-    poll_ms_js = json.dumps(COVERAGE_POLL_MS)
-    validated_name_js = json.dumps(COVERAGE_VALIDATED_TRACE, ensure_ascii=False)
-    flagged_name_js = json.dumps(COVERAGE_FLAGGED_TRACE, ensure_ascii=False)
+    #
+    # _json_for_script also escapes ``</`` as ``<\/`` so a hostile string
+    # (e.g., an operator pasting a crafted --overlay-url) cannot close the
+    # surrounding <script> block and inject markup. json.dumps does not do
+    # this escaping by default.
+    token_js = _json_for_script(token) if token else "null"
+    url_js = _json_for_script(embed_url)
+    kind_js = _json_for_script(kind)
+    poll_ms_js = _json_for_script(COVERAGE_POLL_MS)
+    validated_name_js = _json_for_script(COVERAGE_VALIDATED_TRACE)
+    flagged_name_js = _json_for_script(COVERAGE_FLAGGED_TRACE)
     return f"""
 (function() {{
   var embedUrl = {url_js};
@@ -206,7 +223,8 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
 
   async function fetchProfiles() {{
     try {{
-      var res = await fetch(profilesUrl);
+      var headers = token ? {{Authorization: 'Bearer ' + token}} : {{}};
+      var res = await fetch(profilesUrl, {{headers: headers}});
       if (!res.ok) return [];
       var data = await res.json();
       return (data.profiles || []).map(function(p) {{ return p.name; }});

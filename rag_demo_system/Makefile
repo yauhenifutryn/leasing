@@ -40,4 +40,18 @@ kb-viz-test:
 kb-viz-feedback-report:
 	$(PY_VIZ) scripts/kb_viz_feedback_report.py
 
-.PHONY: kb-viz kb-viz-overlay-build kb-viz-overlay-serve kb-viz-test kb-viz-feedback-report
+kb-viz-smoke:
+	bash scripts/kb_viz_smoke.sh
+
+kb-viz-logs:
+	@echo "=== service log (last 30 lines) ==="
+	@tail -n 30 .state/kb_viz_service.log 2>/dev/null || echo "(no service log yet: run kb-viz-overlay-serve | tee .state/kb_viz_service.log)"
+	@echo
+	@echo "=== feedback log (last 10 lines) ==="
+	@tail -n 10 .state/kb_viz_feedback.jsonl 2>/dev/null || echo "(no feedback yet)"
+	@echo
+	@echo "=== profiles ==="
+	@cat .state/kb_viz_profiles.json 2>/dev/null || echo "(no profiles yet)"
+
+.PHONY: kb-viz kb-viz-overlay-build kb-viz-overlay-serve kb-viz-test \
+        kb-viz-feedback-report kb-viz-smoke kb-viz-logs

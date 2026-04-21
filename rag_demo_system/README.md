@@ -198,13 +198,32 @@ make -C rag_demo_system kb-viz-overlay-serve             # uvicorn on :8500
 
 # Terminal B: rebuild HTMLs with overlay URL baked in
 export KB_VIZ_PUBLIC_URL=https://<your-server>:8500/overlay_query
-export KB_VIZ_OVERLAY_TOKEN=$(openssl rand -hex 16)       # optional
+export KB_VIZ_OVERLAY_TOKEN=$(openssl rand -hex 16)       # optional soft gate
 make -C rag_demo_system kb-viz-overlay-build
 ```
 
 The overlay service uses the same `intfloat/multilingual-e5-large`
 embedding model as production, with the matching `query:` prefix, so
 retrieval geometry matches the bot exactly.
+
+#### Trust model for `KB_VIZ_OVERLAY_TOKEN`
+
+The bearer token is a **soft gate**, not real auth.
+
+- When set, it gates `POST /overlay_query`, `POST /feedback`,
+  `POST /profiles`, `GET /profiles`, and `GET /coverage` so a random
+  cross-origin page cannot silently harvest participant names or hit
+  compute endpoints.
+- It is **baked into the generated HTML** so the client's browser can
+  make authenticated calls. Anyone who can fetch `/` or `/3d` can read
+  the token from page source.
+- Acceptable because the whole service is recreated on every fresh
+  server spin-up. Rotate by re-running `make kb-viz-overlay-build` with
+  a new `KB_VIZ_OVERLAY_TOKEN`.
+- **Do not put anything behind this endpoint that would be costly or
+  damaging if abused.** Embedding + Qdrant reads only.
+- If you ever need real auth, replace with a cookie-based session or a
+  short-lived server-vended nonce. Out of scope for the current demo.
 
 ### Feedback report
 

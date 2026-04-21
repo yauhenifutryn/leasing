@@ -490,15 +490,26 @@ def test_profiles_reject_blank(open_client) -> None:
 
 
 def test_profiles_respects_token(secured_client) -> None:
+    """Both GET and POST must require the bearer when a token is configured,
+    so a cross-origin page cannot harvest participant names via the open
+    wildcard CORS policy.
+    """
     client, _ = secured_client
     assert client.post("/profiles", json={"name": "x"}).status_code == 401
+    assert client.get("/profiles").status_code == 401
+    headers = {"Authorization": "Bearer secret-xyz"}
     assert (
-        client.post(
-            "/profiles",
-            json={"name": "x"},
-            headers={"Authorization": "Bearer secret-xyz"},
-        ).status_code
+        client.post("/profiles", json={"name": "x"}, headers=headers).status_code
         == 200
     )
-    # GET remains open so the picker can load profiles before the user knows the token
-    assert client.get("/profiles").status_code == 200
+    assert client.get("/profiles", headers=headers).status_code == 200
+
+
+def test_coverage_respects_token(secured_client) -> None:
+    """/coverage leaks per-user + IP info, must be gated when token is set."""
+    client, _ = secured_client
+    assert client.get("/coverage").status_code == 401
+    assert (
+        client.get("/coverage", headers={"Authorization": "Bearer secret-xyz"}).status_code
+        == 200
+    )

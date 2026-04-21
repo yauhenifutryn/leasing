@@ -146,6 +146,37 @@ def test_truncate_handles_long_text() -> None:
     assert out.endswith("…")
 
 
+def test_json_for_script_escapes_closing_tag() -> None:
+    """Codex adversarial finding 3: </script> breakout via crafted URL/token."""
+    hostile_token = "abc</script><script>alert(1)</script>"
+    out = render_viz._json_for_script(hostile_token)
+    # No raw </ sequence survives — every occurrence is escaped to <\/.
+    assert "</" not in out
+    assert "<\\/script>" in out
+    # Still valid JSON after the escape (the backslash is a JSON escape).
+    import json as _json
+    assert _json.loads(out) == hostile_token
+
+
+def test_render_with_hostile_token_does_not_break_out(tmp_path: Path) -> None:
+    """End-to-end: a crafted token must not terminate the <script> block."""
+    src = tmp_path / "embeddings.json"
+    src.write_text(json.dumps(_synthetic_embeddings()), encoding="utf-8")
+    render_viz.render(
+        embeddings_path=src,
+        out_dir=tmp_path,
+        overlay_url="https://example.com/overlay_query",
+        overlay_token="x</script><script>alert(1)</script>",
+    )
+    html = (tmp_path / "kb_viz_3d.html").read_text(encoding="utf-8")
+    # The hostile literal must NOT appear verbatim; the injected script block
+    # must only close where the renderer intended.
+    assert "x</script><script>alert(1)</script>" not in html
+    # The escaped form does appear, carrying the same semantic value back to
+    # JSON.parse / the JS string literal at runtime.
+    assert "x<\\/script><script>alert(1)<\\/script>" in html
+
+
 def test_load_embeddings_requires_points(tmp_path: Path) -> None:
     bad = tmp_path / "empty.json"
     bad.write_text(json.dumps({"points": []}), encoding="utf-8")
