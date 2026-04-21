@@ -165,6 +165,7 @@ def _overlay_post_script(
     embed_url: str,
     token: str | None,
     chunk_coords: dict[str, list[float]],
+    demo_snapshot: dict[str, Any] | None = None,
 ) -> str:
     """Inject the overlay UI: query input, feedback buttons, coverage panel.
 
@@ -197,6 +198,7 @@ def _overlay_post_script(
     validated_name_js = _json_for_script(COVERAGE_VALIDATED_TRACE)
     flagged_name_js = _json_for_script(COVERAGE_FLAGGED_TRACE)
     chunk_coords_js = _json_for_script(chunk_coords)
+    demo_snapshot_js = _json_for_script(demo_snapshot) if demo_snapshot else "null"
     return f"""
 (function() {{
   var embedUrl = {url_js};
@@ -217,6 +219,11 @@ def _overlay_post_script(
   // NOT line up 1:1 with the shared customdata array, which silently
   // misplaces every chunk on any KB with more than one color group.
   var __KB_VIZ_CHUNK_COORDS__ = {chunk_coords_js};
+  // Non-null when the HTML was rendered with a pre-baked snapshot of a
+  // live query + coverage response. The overlay boots into a "demo" mode
+  // where the visualisation is fully populated but the server is never
+  // contacted — used to hand clients a self-contained preview file.
+  var __KB_VIZ_DEMO__ = {demo_snapshot_js};
   var feedbackUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/feedback$1');
   var coverageUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/coverage$1');
   var profilesUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/profiles$1');
@@ -1266,6 +1273,128 @@ def _overlay_post_script(
   }}
 
   window.addEventListener('beforeunload', stopPolling);
+
+  // ---- Demo bootstrap ----
+  // When the HTML is rendered with a live snapshot baked in, pre-populate
+  // lastQuery + lastCoverage from the snapshot, draw the full overlay
+  // (tether lines, numbered top-K, verdict halos, per-user rings) with
+  // no network calls, and disable the Go / vote buttons so the client
+  // sees exactly what an interactive session looks like without needing
+  // the server to be running.
+  if (__KB_VIZ_DEMO__ && __KB_VIZ_DEMO__.top_k) {{
+    // Pretend the panel is open and the user is already "logged in".
+    panel.style.display = 'block';
+    toggle.textContent = 'Demo · overlay preview';
+    toggle.disabled = true;
+    if (__KB_VIZ_DEMO__.user) {{
+      user = __KB_VIZ_DEMO__.user;
+      renderUserBadge();
+    }}
+
+    // Demo banner — replace the experimental label at the top of the bar.
+    note.textContent = 'Демо-режим — данные заморожены, сервер отключён.';
+    note.style.color = '#b3261e';
+    note.style.fontWeight = '600';
+
+    // Seed coverage from the snapshot (drives verdict halos + per-user rings).
+    lastCoverage = __KB_VIZ_DEMO__.coverage || {{per_chunk: {{}}, per_section: {{}}, per_user: {{}}, total_feedback: 0, unique_chunks_validated: 0}};
+
+    // Seed lastQuery from the snapshot and draw the query layer.
+    var demoTopK = __KB_VIZ_DEMO__.top_k || [];
+    var demoQueryText = __KB_VIZ_DEMO__.query_text || '';
+    lastQuery = {{query_id: __KB_VIZ_DEMO__.query_id || 'demo', text: demoQueryText, kind: kind, top_k: demoTopK}};
+    input.value = demoQueryText;
+    resetReviewState();
+
+    // Centroid + tether lines + numbered top-K markers + query star.
+    var demoCoords = buildChunkCoords();
+    var dcx = 0, dcy = 0, dcz = 0, dn = 0;
+    var dChunkXs = [], dChunkYs = [], dChunkZs = [], dChunkLabels = [], dChunkHovers = [];
+    demoTopK.forEach(function(m, idx) {{
+      var c = demoCoords[m.chunk_id];
+      if (!c) return;
+      dcx += c.x; dcy += c.y; if (c.z !== undefined) dcz += c.z;
+      dn += 1;
+      dChunkXs.push(c.x); dChunkYs.push(c.y);
+      if (c.z !== undefined) dChunkZs.push(c.z);
+      dChunkLabels.push(String(idx + 1));
+      var s = (m.score != null) ? ' · score ' + m.score.toFixed(3) : '';
+      dChunkHovers.push('#' + (idx + 1) + ' · ' + m.chunk_id + ' — ' + (m.section || '') + s);
+    }});
+    var dpos = dn > 0 ? [dcx / dn, dcy / dn, kind === '3d' ? dcz / dn : undefined] : null;
+
+    var dTraces = [];
+    if (dpos && dChunkXs.length > 0) {{
+      var dLx = [], dLy = [], dLz = [];
+      for (var di = 0; di < dChunkXs.length; di++) {{
+        dLx.push(dpos[0], dChunkXs[di], null);
+        dLy.push(dpos[1], dChunkYs[di], null);
+        if (kind === '3d') dLz.push(dpos[2], dChunkZs[di], null);
+      }}
+      if (kind === '3d') {{
+        dTraces.push({{type:'scatter3d', mode:'lines', name: QUERY_LINKS_NAME,
+          x: dLx, y: dLy, z: dLz,
+          line: {{color: 'rgba(226, 60, 60, 0.55)', width: 3}},
+          hoverinfo: 'skip', showlegend: true}});
+        dTraces.push({{type:'scatter3d', mode:'markers+text', name: QUERY_ZONE_NAME,
+          x: dChunkXs, y: dChunkYs, z: dChunkZs,
+          marker: {{size: 20, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
+          text: dChunkLabels, textposition: 'middle center',
+          textfont: {{size: 13, color: '#b11616', family: 'system-ui, sans-serif'}},
+          customdata: dChunkHovers,
+          hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
+          showlegend: true}});
+        dTraces.push({{x:[dpos[0]], y:[dpos[1]], z:[dpos[2]],
+          mode:'markers+text', type:'scatter3d',
+          marker:{{size:14, color:'#e23c3c', symbol:'diamond', line:{{width:3, color:'#fff'}}}},
+          text:['★ Ваш запрос'], textposition:'top center',
+          textfont:{{size:13, color:'#c22020'}},
+          name: QUERY_STAR_NAME, hovertemplate:'%{{text}}<extra></extra>'}});
+      }} else {{
+        dTraces.push({{type:'scatter', mode:'lines', name: QUERY_LINKS_NAME,
+          x: dLx, y: dLy,
+          line: {{color: 'rgba(226, 60, 60, 0.55)', width: 2}},
+          hoverinfo: 'skip', showlegend: true}});
+        dTraces.push({{type:'scatter', mode:'markers+text', name: QUERY_ZONE_NAME,
+          x: dChunkXs, y: dChunkYs,
+          marker: {{size: 32, color: '#fff4f4', symbol: 'circle', line: {{width: 3, color: '#e23c3c'}}}},
+          text: dChunkLabels, textposition: 'middle center',
+          textfont: {{size: 16, color: '#b11616', family: 'system-ui, sans-serif'}},
+          customdata: dChunkHovers,
+          hovertemplate: '%{{customdata}}<extra>' + QUERY_ZONE_NAME + '</extra>',
+          showlegend: true}});
+        dTraces.push({{x:[dpos[0]], y:[dpos[1]],
+          mode:'markers+text', type:'scatter',
+          marker:{{size:20, color:'#e23c3c', symbol:'star', line:{{width:2, color:'#fff'}}}},
+          text:['★ Ваш запрос'], textposition:'top center',
+          textfont:{{size:13, color:'#c22020'}},
+          name: QUERY_STAR_NAME, hovertemplate:'%{{text}}<extra></extra>'}});
+      }}
+      Plotly.addTraces(gd, dTraces);
+    }}
+
+    // Verdict halos + per-user rings from snapshot coverage.
+    rebuildCoverageTraces();
+    applyVisibilityFilter();
+    status.textContent = 'Демо: показано ' + demoTopK.length + ' чанков для примера запроса.';
+    renderMatchList();
+
+    // Disable live-only actions: Go, Enter, vote buttons.
+    ask.textContent = 'Демо · сервер отключён';
+    ask.disabled = true;
+    ask.style.background = '#eee';
+    ask.style.color = '#888';
+    ask.onclick = function() {{ /* no-op in demo mode */ }};
+    input.readOnly = true;
+    input.style.background = '#f8f8f8';
+    // Neuter submitChunkFeedback so vote buttons surface "демо" instead of
+    // silently hitting a dead server. Keeps the UI alive for the client
+    // to click around and see what happens, without mutating anything.
+    submitChunkFeedback = async function(match, signalType, verdict, comment, rowStatus) {{
+      if (rowStatus) rowStatus.textContent = 'Демо — голоса не сохраняются.';
+      return false;
+    }};
+  }}
 }})();
 """
 
@@ -1278,6 +1407,7 @@ def _render_one(
     title: str,
     overlay_url: str | None,
     overlay_token: str | None,
+    demo_snapshot: dict[str, Any] | None = None,
 ) -> None:
     import pandas as pd
     import plotly.express as px
@@ -1352,7 +1482,7 @@ def _render_one(
             ]
 
     post_script = (
-        _overlay_post_script(kind, overlay_url, overlay_token, chunk_coords)
+        _overlay_post_script(kind, overlay_url, overlay_token, chunk_coords, demo_snapshot)
         if overlay_url
         else None
     )
@@ -1369,15 +1499,27 @@ def render(
     out_dir: Path,
     overlay_url: str | None = None,
     overlay_token: str | None = None,
+    demo_snapshot: dict[str, Any] | None = None,
+    html_suffix: str = "",
 ) -> dict[str, Path]:
+    """Render 2D/3D plots.
+
+    ``demo_snapshot`` bakes a live query + coverage response into the
+    emitted HTML so the overlay runs in read-only demo mode without a
+    server. ``html_suffix`` appends to the output filenames (e.g. "_demo")
+    so demo renders don't clobber the live-facing ``kb_viz_{2d,3d}.html``.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     data = load_embeddings(embeddings_path)
 
     coords_2d, reducer_2d = _fit_umap(
         data.vectors, n_components=2, n_neighbors=UMAP_2D_N_NEIGHBORS, min_dist=UMAP_2D_MIN_DIST
     )
-    out_2d = out_dir / "kb_viz_2d.html"
-    _render_one(coords_2d, data.records, "2d", out_2d, TITLE_2D, overlay_url, overlay_token)
+    out_2d = out_dir / f"kb_viz_2d{html_suffix}.html"
+    _render_one(
+        coords_2d, data.records, "2d", out_2d, TITLE_2D,
+        overlay_url, overlay_token, demo_snapshot,
+    )
 
     written = {"2d_html": out_2d}
     _save_reducer(reducer_2d, out_dir / "umap_2d.joblib")
@@ -1387,8 +1529,11 @@ def render(
         coords_3d, reducer_3d = _fit_umap(
             data.vectors, n_components=3, n_neighbors=UMAP_3D_N_NEIGHBORS, min_dist=UMAP_3D_MIN_DIST
         )
-        out_3d = out_dir / "kb_viz_3d.html"
-        _render_one(coords_3d, data.records, "3d", out_3d, TITLE_3D, overlay_url, overlay_token)
+        out_3d = out_dir / f"kb_viz_3d{html_suffix}.html"
+        _render_one(
+            coords_3d, data.records, "3d", out_3d, TITLE_3D,
+            overlay_url, overlay_token, demo_snapshot,
+        )
         written["3d_html"] = out_3d
         _save_reducer(reducer_3d, out_dir / "umap_3d.joblib")
         written["3d_reducer"] = out_dir / "umap_3d.joblib"
@@ -1438,13 +1583,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", default="rag_demo_system/results")
     parser.add_argument("--overlay-url", default=None, help="If set, inject overlay button pointing at this endpoint.")
     parser.add_argument("--overlay-token", default=None, help="Bearer token to include in overlay requests.")
+    parser.add_argument(
+        "--demo-snapshot",
+        default=None,
+        help=(
+            "Path to a JSON file with {query_id, query_text, top_k, coverage, [user]} "
+            "captured from a live server. Emits read-only demo HTMLs (vote buttons "
+            "disabled, server never contacted). Implies --overlay-url; a placeholder "
+            "is used if --overlay-url is not provided."
+        ),
+    )
+    parser.add_argument(
+        "--html-suffix",
+        default="",
+        help="Append this to output filenames (e.g. '_demo'). Keeps demo renders "
+             "from overwriting the live kb_viz_{2d,3d}.html.",
+    )
     args = parser.parse_args(argv)
+
+    demo_snapshot = None
+    if args.demo_snapshot:
+        demo_snapshot = json.loads(Path(args.demo_snapshot).read_text(encoding="utf-8"))
+
+    overlay_url = args.overlay_url
+    # Demo mode needs an overlay script block to exist in the HTML;
+    # the URL inside it is never called but the JS won't emit otherwise.
+    if demo_snapshot and not overlay_url:
+        overlay_url = "https://demo.invalid/overlay_query"
 
     out = render(
         embeddings_path=Path(args.in_path),
         out_dir=Path(args.out_dir),
-        overlay_url=args.overlay_url,
+        overlay_url=overlay_url,
         overlay_token=args.overlay_token,
+        demo_snapshot=demo_snapshot,
+        html_suffix=args.html_suffix,
     )
     for k, p in out.items():
         print(f"  {k}: {p}")

@@ -78,6 +78,29 @@ kb-viz-status:
 	@pgrep -af 'uvicorn.*kb_viz_service' || echo "[kb-viz] not running"
 	@ss -tlnp 2>/dev/null | grep ':8500' || true
 
+# Freeze current overlay state into a client-shippable demo HTML.
+# Run this BEFORE killing the server. Produces:
+#   results/kb_viz_demo_snapshot.json  (raw data)
+#   results/kb_viz_3d_demo.html        (self-contained preview)
+#   results/kb_viz_2d_demo.html
+# Usage:
+#   make -C rag_demo_system kb-viz-demo-snapshot DEMO_QUERY="как оплатить через ерип"
+# Optional:
+#   DEMO_URL    (default http://localhost:8500)
+#   DEMO_USER   (default Demo)
+DEMO_URL   ?= http://localhost:8500
+DEMO_USER  ?= Demo
+DEMO_QUERY ?= как оплатить через ерип
+kb-viz-demo-snapshot:
+	$(PY_VIZ) scripts/make_demo_snapshot.py \
+	    --url "$(DEMO_URL)" \
+	    --token "$$KB_VIZ_OVERLAY_TOKEN" \
+	    --query "$(DEMO_QUERY)" \
+	    --user "$(DEMO_USER)" \
+	    --embeddings results/embeddings.json \
+	    --out-dir results
+
 .PHONY: kb-viz-deploy kb-viz kb-viz-overlay-build kb-viz-overlay-serve \
         kb-viz-test kb-viz-feedback-report kb-viz-smoke kb-viz-logs \
-        kb-viz-static kb-viz-reset-state kb-viz-stop kb-viz-status
+        kb-viz-static kb-viz-reset-state kb-viz-stop kb-viz-status \
+        kb-viz-demo-snapshot
