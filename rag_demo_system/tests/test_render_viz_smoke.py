@@ -150,6 +150,14 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     assert "Пропустить" in html_3d     # Skip button
     assert "Скрыть чанки" in html_3d   # Collapse toggle
     assert "markSelected" in html_3d   # Persistent vote highlighting
+    # Checked-chunk halo + filter toggle + query-zone + falling-star
+    assert "★ Проверенные чанки" in html_3d   # investigated halo trace name
+    assert "Только проверенные" in html_3d    # filter button label
+    assert "applyVisibilityFilter" in html_3d # filter applier fn
+    assert "onlyInvestigated" in html_3d      # filter state flag
+    assert "Зона запроса" in html_3d          # query zone trace name
+    assert "★ Ваш запрос" in html_3d          # centroid star label
+    assert "animateFallingStar" in html_3d    # falling-star animation
 
 
 def test_truncate_handles_long_text() -> None:
@@ -224,6 +232,90 @@ def test_render_with_hostile_token_does_not_break_out(tmp_path: Path) -> None:
     # The escaped form does appear, carrying the same semantic value back to
     # JSON.parse / the JS string literal at runtime.
     assert "x<\\/script><script>alert(1)<\\/script>" in html
+
+
+def test_chunk_coords_map_is_correct_under_multi_section_split(tmp_path: Path) -> None:
+    """Regression test for Codex finding #2.
+
+    Plotly Express splits one trace per color_group, so the emitted figure
+    has multiple traces. Earlier versions reconstructed the chunk_id ->
+    coords mapping by walking trace.customdata, but that silently used the
+    shared full-length customdata array against per-trace x/y subsets,
+    mis-attributing every chunk on any multi-section KB.
+
+    Fix: the renderer now injects a server-computed chunk_id -> coords
+    map directly as JSON. Verify here that every chunk appears in the
+    map, and that the coords match the actual per-chunk UMAP projection
+    (not some other chunk's coords sharing a trace index).
+    """
+    import numpy as np
+
+    # Build a dataset where heading_path[1] is unique per cluster so the
+    # Plotly color split produces multiple traces AND each trace's section
+    # is distinguishable.
+    rng = np.random.default_rng(0)
+    points = []
+    cluster_sections = ["Стоимость", "Документы", "Офисы"]
+    per_cluster = 10
+    for c, sec in enumerate(cluster_sections):
+        center = rng.normal(0, 1, size=(32,))
+        for i in range(per_cluster):
+            vec = center + rng.normal(0, 0.15, size=(32,))
+            vec = vec / np.linalg.norm(vec)
+            idx = c * per_cluster + i
+            points.append({
+                "id": f"id-{idx}",
+                "vector": vec.tolist(),
+                "payload": {
+                    "chunk_id": f"chunk-{idx}",
+                    "text": f"text {idx}",
+                    "heading_path": ["Knowledge Base", sec],
+                },
+            })
+    src = tmp_path / "embeddings.json"
+    src.write_text(json.dumps({"points": points, "vector_dim": 32, "count": len(points)}), encoding="utf-8")
+
+    outputs = render_viz.render(
+        embeddings_path=src,
+        out_dir=tmp_path,
+        overlay_url="https://example.com/overlay_query",
+    )
+
+    # Ground truth: re-run load_embeddings + _fit_umap to get the coords
+    # we expect every chunk to land at.
+    loaded = render_viz.load_embeddings(src)
+    import joblib
+    reducer = joblib.load(outputs["3d_reducer"])
+    expected = reducer.transform(loaded.vectors)
+
+    html = (tmp_path / "kb_viz_3d.html").read_text(encoding="utf-8")
+    import re as _re
+    m = _re.search(r"var __KB_VIZ_CHUNK_COORDS__ = (\{.*?\});", html, _re.DOTALL)
+    assert m, "chunk coords var not present"
+    coords_map = json.loads(m.group(1))
+
+    # Every chunk present exactly once.
+    assert len(coords_map) == 30
+    assert set(coords_map.keys()) == {f"chunk-{i}" for i in range(30)}
+
+    # Each chunk's recorded coords should match its ground-truth UMAP
+    # projection within a tight tolerance. Under the old (wrong) code,
+    # chunks would have been mapped to whichever trace's last
+    # customdata[*][3] referenced them — producing systematic mis-attribution.
+    import math
+    for idx, rec in enumerate(loaded.records):
+        cid = rec["chunk_id"]
+        row = coords_map[cid]
+        assert len(row) == 4, f"{cid} should be [x, y, z, section] in 3D mode"
+        assert math.isclose(row[0], float(expected[idx, 0]), abs_tol=1e-4)
+        assert math.isclose(row[1], float(expected[idx, 1]), abs_tol=1e-4)
+        assert math.isclose(row[2], float(expected[idx, 2]), abs_tol=1e-4)
+        # The section label should be the chunk's own section, not a neighbor's.
+        assert row[3] == rec["section"]
+
+    # Distinct sections should survive the color-group split: we gave
+    # each cluster its own heading_path[1], so exactly 3 sections appear.
+    assert {row[3] for row in coords_map.values()} == set(cluster_sections)
 
 
 def test_load_embeddings_requires_points(tmp_path: Path) -> None:

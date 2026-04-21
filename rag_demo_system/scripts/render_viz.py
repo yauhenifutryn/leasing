@@ -160,13 +160,27 @@ def _json_for_script(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
 
 
-def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
+def _overlay_post_script(
+    kind: str,
+    embed_url: str,
+    token: str | None,
+    chunk_coords: dict[str, list[float]],
+) -> str:
     """Inject the overlay UI: query input, feedback buttons, coverage panel.
 
     Uses DOM API only (createElement + textContent + appendChild) so response
     data from the server is never interpolated as HTML. No XSS surface.
     Coverage polls every COVERAGE_POLL_MS while the panel is open, so
     concurrent users see each other's validation within that interval.
+
+    ``chunk_coords`` is a server-computed ``chunk_id -> [x, y, (z,) section]``
+    map. Injecting it directly fixes a subtle correctness bug: Plotly Express
+    splits the figure into one trace per color_group, but ``update_traces(
+    customdata=...)`` sets the FULL customdata array on EVERY trace, so
+    per-trace rows and per-trace x/y no longer line up. Reconstructing coords
+    from ``trace.customdata[idx]`` therefore mis-attributes chunks on any
+    multi-section KB. We bypass that entirely by feeding the JS a
+    ground-truth dict.
     """
     # ensure_ascii=False keeps the UTF-8 glyphs (✓ ✗) intact in the emitted
     # JS literals so the smoke test and legend strings match the configured
@@ -182,6 +196,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     poll_ms_js = _json_for_script(COVERAGE_POLL_MS)
     validated_name_js = _json_for_script(COVERAGE_VALIDATED_TRACE)
     flagged_name_js = _json_for_script(COVERAGE_FLAGGED_TRACE)
+    chunk_coords_js = _json_for_script(chunk_coords)
     return f"""
 (function() {{
   var embedUrl = {url_js};
@@ -190,6 +205,15 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   var pollMs = {poll_ms_js};
   var VALIDATED_NAME = {validated_name_js};
   var FLAGGED_NAME = {flagged_name_js};
+  var INVESTIGATED_NAME = '★ Проверенные чанки';
+  var QUERY_ZONE_NAME = 'Зона запроса';
+  var QUERY_STAR_NAME = 'Query';
+  // Ground-truth chunk_id -> {{x, y, z, section}} map built from the source
+  // records. Do NOT reconstruct this from Plotly's trace.customdata — the
+  // Plotly Express split-by-color produces per-trace x/y arrays that do
+  // NOT line up 1:1 with the shared customdata array, which silently
+  // misplaces every chunk on any KB with more than one color group.
+  var __KB_VIZ_CHUNK_COORDS__ = {chunk_coords_js};
   var feedbackUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/feedback$1');
   var coverageUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/coverage$1');
   var profilesUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/profiles$1');
@@ -354,12 +378,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   var panel = el('div', {{style: 'display:none;margin-top:10px;'}});
   var input = el('input', {{type: 'text', placeholder: 'Ask a question (Russian)', style: 'width:60%;padding:6px;'}});
   var ask = el('button', {{text: 'Go', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;'}});
+  var filterBtn = el('button', {{text: 'Только проверенные: выкл', style: 'padding:6px 10px;margin-left:6px;cursor:pointer;background:#f8f8f8;border:1px solid #ccc;border-radius:3px;'}});
   var status = el('div', {{style: 'margin-top:6px;color:#666;'}});
   var matches = el('div', {{style: 'margin-top:8px;color:#222;'}});
   var fbStatus = el('div', {{style: 'margin-top:6px;color:#666;font-size:12px;'}});
   var coverage = el('div', {{style: 'margin-top:10px;padding:8px;background:#f4f8ff;border:1px solid #cfe0f5;font-size:12px;color:#234;'}});
   panel.appendChild(input);
   panel.appendChild(ask);
+  panel.appendChild(filterBtn);
   panel.appendChild(status);
   panel.appendChild(matches);
   panel.appendChild(fbStatus);
@@ -387,21 +413,27 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     return h;
   }}
 
-  // ---- Build chunk_id -> coords map from baseline traces once ----
+  // ---- chunk_id -> coords lookup ----
+  // The server emits a ground-truth {{chunk_id: [x, y, z, section]}} map
+  // baked into the HTML at render time. Earlier versions rebuilt this by
+  // walking Plotly traces, but that was silently wrong once Plotly Express
+  // split the figure into per-color-group traces (the shared customdata
+  // array does not line up with per-trace x/y). See the docstring of
+  // _overlay_post_script() for the full story.
   function buildChunkCoords() {{
     if (chunkCoords !== null) return chunkCoords;
     chunkCoords = {{}};
-    (gd.data || []).forEach(function(trace) {{
-      if (!trace || !trace.customdata) return;
-      if (trace.name === VALIDATED_NAME || trace.name === FLAGGED_NAME || trace.name === 'Query') return;
-      var xs = trace.x || [], ys = trace.y || [], zs = trace.z || [];
-      trace.customdata.forEach(function(cd, idx) {{
-        // customdata layout comes from _build_hover_customdata:
-        //   [text_preview, section, doc_name, chunk_id]
-        if (!cd || cd.length < 4) return;
-        var cid = String(cd[3]);
-        chunkCoords[cid] = {{x: xs[idx], y: ys[idx], z: zs ? zs[idx] : undefined, section: cd[1]}};
-      }});
+    var raw = __KB_VIZ_CHUNK_COORDS__ || {{}};
+    Object.keys(raw).forEach(function(cid) {{
+      var row = raw[cid] || [];
+      if (row.length < 3) return;
+      var has_z = (typeof row[2] === 'number');
+      chunkCoords[String(cid)] = {{
+        x: row[0],
+        y: row[1],
+        z: has_z ? row[2] : undefined,
+        section: row[has_z ? 3 : 2] || ''
+      }};
     }});
     return chunkCoords;
   }}
@@ -449,6 +481,45 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     }}
 
     var newTraces = [];
+
+    // Investigated halo: a single grey outlined-diamond trace over every
+    // chunk that has ANY feedback (content or relevance). Drawn first so
+    // the per-user colored rings sit on top. Visually separates "already
+    // looked at" dots from the untouched sea of base dots — the user asked
+    // for a "striped or different-looking" distinction for checked chunks.
+    var haloXs = [], haloYs = [], haloZs = [], haloTexts = [];
+    Object.keys(perChunk).forEach(function(cid) {{
+      var c = coords[cid];
+      if (!c) return;
+      var cov = perChunk[cid] || {{}};
+      haloXs.push(c.x); haloYs.push(c.y); if (c.z !== undefined) haloZs.push(c.z);
+      haloTexts.push(
+        cid + ' — ' + (c.section || '') +
+        ' (' + (cov.correct || 0) + '✓ / ' + (cov.wrong || 0) + '✗)'
+      );
+    }});
+    if (haloXs.length > 0) {{
+      if (kind === '3d') {{
+        newTraces.push({{
+          type: 'scatter3d', mode: 'markers', name: INVESTIGATED_NAME,
+          x: haloXs, y: haloYs, z: haloZs,
+          marker: {{size: 11, color: 'rgba(0,0,0,0)', symbol: 'diamond-open', line: {{width: 2, color: 'rgba(40,40,40,0.7)'}}}},
+          text: haloTexts,
+          hovertemplate: '<b>%{{text}}</b><extra>' + INVESTIGATED_NAME + '</extra>',
+          showlegend: true
+        }});
+      }} else {{
+        newTraces.push({{
+          type: 'scatter', mode: 'markers', name: INVESTIGATED_NAME,
+          x: haloXs, y: haloYs,
+          marker: {{size: 16, color: 'rgba(0,0,0,0)', symbol: 'diamond-open-dot', line: {{width: 2, color: 'rgba(40,40,40,0.75)'}}}},
+          text: haloTexts,
+          hovertemplate: '<b>%{{text}}</b><extra>' + INVESTIGATED_NAME + '</extra>',
+          showlegend: true
+        }});
+      }}
+    }}
+
     // Order users so the current user renders on top
     var keys = Object.keys(perUser).sort(function(a, b) {{
       if (user && a === user) return -1;
@@ -517,9 +588,94 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       if (!t || !t.name) return;
       if (t.name.indexOf('✓ by ') === 0 || t.name.indexOf('✗ by ') === 0) toDelete.push(i);
       else if (t.name === VALIDATED_NAME || t.name === FLAGGED_NAME) toDelete.push(i);
+      else if (t.name === INVESTIGATED_NAME) toDelete.push(i);
     }});
     toDelete.reverse().forEach(function(i) {{ Plotly.deleteTraces(gd, i); }});
     if (newTraces.length > 0) Plotly.addTraces(gd, newTraces);
+    // Re-apply the "only-investigated" visibility filter after the trace
+    // set has changed, otherwise newly-added traces come back visible even
+    // when the user had the filter toggled on.
+    applyVisibilityFilter();
+  }}
+
+  // ---- Visibility filter: show only investigated chunks ----
+  // When enabled, dim the entire base Plotly Express trace set to
+  // 'legendonly' so only the investigated halo + per-user colored rings
+  // + query markers remain on screen. Re-applied every time the trace
+  // stack changes (coverage refresh, new query) so it survives redraws.
+  var onlyInvestigated = false;
+  function isOverlayTraceName(name) {{
+    if (!name) return false;
+    if (name.indexOf('✓ by ') === 0 || name.indexOf('✗ by ') === 0) return true;
+    return (
+      name === VALIDATED_NAME || name === FLAGGED_NAME ||
+      name === INVESTIGATED_NAME || name === QUERY_STAR_NAME ||
+      name === QUERY_ZONE_NAME
+    );
+  }}
+  function applyVisibilityFilter() {{
+    if (!gd.data || gd.data.length === 0) return;
+    var vis = [];
+    gd.data.forEach(function(t) {{
+      if (isOverlayTraceName(t.name)) {{
+        vis.push(t.visible === false ? false : true);
+      }} else {{
+        vis.push(onlyInvestigated ? 'legendonly' : true);
+      }}
+    }});
+    try {{
+      Plotly.restyle(gd, {{visible: vis}});
+    }} catch (e) {{ /* plotly not ready yet */ }}
+  }}
+  filterBtn.onclick = function() {{
+    onlyInvestigated = !onlyInvestigated;
+    filterBtn.textContent = 'Только проверенные: ' + (onlyInvestigated ? 'вкл' : 'выкл');
+    filterBtn.style.background = onlyInvestigated ? '#e7f0fb' : '#f8f8f8';
+    filterBtn.style.borderColor = onlyInvestigated ? '#7aa4d4' : '#ccc';
+    applyVisibilityFilter();
+  }};
+
+  // ---- Falling-star animation ----
+  // Visual cue that the query has been "cast" at the plot: a red star
+  // flies from the input row to the center of the plot in ~900ms, then
+  // fades. Runs in parallel with the embed+search request so the user
+  // has feedback while the server is thinking. Pure DOM + CSS, no Plotly.
+  function animateFallingStar() {{
+    try {{
+      var inputRect = input.getBoundingClientRect();
+      var plotRect = gd.getBoundingClientRect();
+      var star = document.createElement('div');
+      star.textContent = '★';
+      star.setAttribute('aria-hidden', 'true');
+      var startX = inputRect.left + Math.min(inputRect.width * 0.5, 220);
+      var startY = inputRect.top + inputRect.height / 2 - 14;
+      star.style.cssText = (
+        'position:fixed;' +
+        'left:' + startX + 'px;' +
+        'top:' + startY + 'px;' +
+        'font-size:28px;line-height:28px;' +
+        'color:#e23c3c;' +
+        'text-shadow:0 0 8px rgba(255,180,180,0.95), 0 0 2px #fff;' +
+        'pointer-events:none;z-index:9998;' +
+        'transition:left 900ms cubic-bezier(0.45,0.05,0.55,0.95),' +
+        ' top 900ms cubic-bezier(0.45,0.05,0.55,0.95),' +
+        ' transform 900ms cubic-bezier(0.45,0.05,0.55,0.95),' +
+        ' opacity 900ms ease-out;' +
+        'transform:rotate(0deg) scale(1);'
+      );
+      document.body.appendChild(star);
+      var endX = plotRect.left + plotRect.width / 2 - 14;
+      var endY = plotRect.top + plotRect.height / 2 - 14;
+      requestAnimationFrame(function() {{
+        star.style.left = endX + 'px';
+        star.style.top = endY + 'px';
+        star.style.transform = 'rotate(540deg) scale(0.45)';
+        star.style.opacity = '0.25';
+      }});
+      setTimeout(function() {{
+        if (star.parentNode) star.parentNode.removeChild(star);
+      }}, 980);
+    }} catch (e) {{ /* animation is best-effort, never block the fetch */ }}
   }}
 
   async function refreshCoverage() {{
@@ -563,8 +719,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     var plotted = new Set();
     (gd.data || []).forEach(function(trace) {{
       if (!trace.name) return;
-      if (trace.name === 'Query' || trace.name === VALIDATED_NAME || trace.name === FLAGGED_NAME) return;
-      if (trace.name.indexOf('✓ by ') === 0 || trace.name.indexOf('✗ by ') === 0) return;
+      if (isOverlayTraceName(trace.name)) return;
       plotted.add(trace.name);
     }});
     var sections = lastCoverage.per_section || {{}};
@@ -718,35 +873,57 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     matches.appendChild(card);
 
     // Wire up vote buttons — each records the signal and re-renders for
-    // the highlight state, but does NOT auto-advance. User clicks "Дальше"
-    // when they're done with this chunk.
+    // the highlight state. Local state is only mutated after the server
+    // confirms the POST, otherwise a failed /feedback silently "records"
+    // a vote that was never persisted. Buttons are disabled while a
+    // submission is in flight so the user can't double-click.
+    function setInFlight(on) {{
+      ok.disabled = on; no.disabled = on;
+      rel.disabled = on; notRel.disabled = on;
+      nextBtn.disabled = on; skipBtn.disabled = on;
+    }}
     ok.onclick = async function() {{
-      await submitChunkFeedback(m, 'content', 'correct', null, rowStatus);
+      setInFlight(true);
+      var okResult = await submitChunkFeedback(m, 'content', 'correct', null, rowStatus);
+      setInFlight(false);
+      if (!okResult) return;
       state.content = 'correct';
       state.contentComment = null;
       renderMatchList();
     }};
     no.onclick = function() {{
+      // No submission yet — the wrong verdict requires a comment, which
+      // is collected in the textarea. State flips locally so the comment
+      // box opens, but nothing has been logged server-side yet.
       state.content = 'wrong';
       renderMatchList();
       setTimeout(function() {{ ta.focus(); }}, 10);
     }};
     // When the comment textarea loses focus and has content + we're in
-    // 'wrong' state, submit the wrong verdict.
+    // 'wrong' state, submit the wrong verdict. Only record the comment
+    // as persisted (state.contentComment) if the POST actually succeeded.
     ta.addEventListener('blur', async function() {{
       var c = ta.value.trim();
       if (state.content === 'wrong' && c && state.contentComment !== c) {{
-        await submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
-        state.contentComment = c;
+        setInFlight(true);
+        var okResult = await submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
+        setInFlight(false);
+        if (okResult) state.contentComment = c;
       }}
     }});
     rel.onclick = async function() {{
-      await submitChunkFeedback(m, 'relevance', 'relevant', null, rowStatus);
+      setInFlight(true);
+      var okResult = await submitChunkFeedback(m, 'relevance', 'relevant', null, rowStatus);
+      setInFlight(false);
+      if (!okResult) return;
       state.relevance = 'relevant';
       renderMatchList();
     }};
     notRel.onclick = async function() {{
-      await submitChunkFeedback(m, 'relevance', 'not_relevant', null, rowStatus);
+      setInFlight(true);
+      var okResult = await submitChunkFeedback(m, 'relevance', 'not_relevant', null, rowStatus);
+      setInFlight(false);
+      if (!okResult) return;
       state.relevance = 'not_relevant';
       renderMatchList();
     }};
@@ -756,7 +933,10 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
         var c = ta.value.trim();
         if (!c) {{ rowStatus.textContent = 'Нужен комментарий к ошибке.'; ta.focus(); return; }}
         if (state.contentComment !== c) {{
-          await submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
+          setInFlight(true);
+          var okResult = await submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
+          setInFlight(false);
+          if (!okResult) return;  // stay on this chunk so the user retries
           state.contentComment = c;
         }}
       }}
@@ -801,9 +981,13 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   ask.onclick = async function() {{
     var q = input.value.trim();
     if (!q) return;
-    status.textContent = 'Embedding + projecting...';
+    status.textContent = 'Поиск в KB...';
     matches.textContent = '';
     fbStatus.textContent = '';
+    // Fire the visual cue immediately so the user sees motion while the
+    // embed+qdrant call is in flight. Animation lasts ~900 ms and is
+    // independent of the fetch result.
+    animateFallingStar();
     try {{
       var body = {{text: q, kind: kind, top_k: 5}};
       if (user) body.client_id = user;
@@ -823,11 +1007,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       // and the high-dim top-K is computed correctly upstream regardless.
       var coords = buildChunkCoords();
       var cx = 0, cy = 0, cz = 0, n = 0;
+      var zoneXs = [], zoneYs = [], zoneZs = [];
       topK.forEach(function(m) {{
         var c = coords[m.chunk_id];
         if (!c) return;
         cx += c.x; cy += c.y; if (c.z !== undefined) cz += c.z;
         n += 1;
+        zoneXs.push(c.x); zoneYs.push(c.y);
+        if (c.z !== undefined) zoneZs.push(c.z);
       }});
       var pos;
       if (n > 0) {{
@@ -837,12 +1024,63 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
         // chunks missing from coords, e.g., KB re-indexed mid-session).
         pos = data.position;
       }}
-      var trace = kind === '3d'
-        ? {{x:[pos[0]], y:[pos[1]], z:[pos[2]], mode:'markers+text', type:'scatter3d', marker:{{size:10, color:'red', symbol:'diamond'}}, text:['Your query'], textposition:'top center', name:'Query', hovertemplate:'%{{text}}<extra></extra>'}}
-        : {{x:[pos[0]], y:[pos[1]], mode:'markers+text', type:'scatter', marker:{{size:16, color:'red', symbol:'star'}}, text:['Your query'], textposition:'top center', name:'Query', hovertemplate:'%{{text}}<extra></extra>'}};
-      var existing = gd.data.findIndex(function(t) {{ return t.name === 'Query'; }});
-      if (existing >= 0) Plotly.deleteTraces(gd, existing);
-      Plotly.addTraces(gd, [trace]);
+
+      // Build the query zone — a translucent red cloud covering the
+      // top-K chunks. Retrieval returns K points, so showing a single
+      // dot underrepresents the actual "area" the query hit. With large
+      // oversized markers and low opacity the overlaps form a soft blob.
+      var zoneTrace = null;
+      if (zoneXs.length > 0) {{
+        if (kind === '3d') {{
+          zoneTrace = {{
+            type: 'scatter3d', mode: 'markers', name: QUERY_ZONE_NAME,
+            x: zoneXs, y: zoneYs, z: zoneZs,
+            marker: {{size: 26, color: 'rgba(226, 60, 60, 0.18)', line: {{width: 0}}}},
+            hoverinfo: 'skip', showlegend: true
+          }};
+        }} else {{
+          zoneTrace = {{
+            type: 'scatter', mode: 'markers', name: QUERY_ZONE_NAME,
+            x: zoneXs, y: zoneYs,
+            marker: {{size: 40, color: 'rgba(226, 60, 60, 0.16)', line: {{width: 0}}}},
+            hoverinfo: 'skip', showlegend: true
+          }};
+        }}
+      }}
+
+      // Bigger, bolder centroid star so it pops against dense clusters.
+      // The previous size (10 in 3D) disappeared inside heavy sections.
+      var starTrace = kind === '3d'
+        ? {{
+            x:[pos[0]], y:[pos[1]], z:[pos[2]],
+            mode:'markers+text', type:'scatter3d',
+            marker:{{size:16, color:'#e23c3c', symbol:'diamond', line:{{width:3, color:'#fff'}}}},
+            text:['★ Ваш запрос'], textposition:'top center',
+            textfont:{{size:13, color:'#c22020'}},
+            name: QUERY_STAR_NAME,
+            hovertemplate:'%{{text}}<extra></extra>'
+          }}
+        : {{
+            x:[pos[0]], y:[pos[1]],
+            mode:'markers+text', type:'scatter',
+            marker:{{size:22, color:'#e23c3c', symbol:'star', line:{{width:2, color:'#fff'}}}},
+            text:['★ Ваш запрос'], textposition:'top center',
+            textfont:{{size:13, color:'#c22020'}},
+            name: QUERY_STAR_NAME,
+            hovertemplate:'%{{text}}<extra></extra>'
+          }};
+
+      // Replace old query zone + star atomically so indices stay sane.
+      var toDelete = [];
+      gd.data.forEach(function(t, i) {{
+        if (t && (t.name === QUERY_STAR_NAME || t.name === QUERY_ZONE_NAME)) toDelete.push(i);
+      }});
+      toDelete.reverse().forEach(function(i) {{ Plotly.deleteTraces(gd, i); }});
+      var addList = [];
+      if (zoneTrace) addList.push(zoneTrace);
+      addList.push(starTrace);
+      Plotly.addTraces(gd, addList);
+      applyVisibilityFilter();
       status.textContent = 'Найдено ' + topK.length + ' чанков. Проверяйте по одному.';
       renderMatchList();
     }} catch (e) {{
@@ -857,8 +1095,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   // signalType: 'content' | 'relevance'
   // content verdicts: 'correct' | 'wrong'
   // relevance verdicts: 'relevant' | 'not_relevant'
+  //
+  // Returns true on 2xx response (vote persisted), false otherwise. The
+  // caller must check the return value and only mutate local review
+  // state after a confirmed success — earlier versions always updated
+  // state, which caused a 401/400/network failure to look like a
+  // successful vote while nothing was logged server-side.
   async function submitChunkFeedback(match, signalType, verdict, comment, rowStatus) {{
-    if (!lastQuery || !match) return;
+    if (!lastQuery || !match) return false;
     rowStatus.textContent = 'Отправка...';
     try {{
       var payload = {{
@@ -872,7 +1116,11 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       if (comment) payload.comment = comment;
       if (user) payload.client_id = user;
       var res = await fetch(feedbackUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify(payload)}});
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {{
+        var errText = '';
+        try {{ errText = (await res.json()).detail || ''; }} catch (e) {{ /* body not json */ }}
+        throw new Error('HTTP ' + res.status + (errText ? ' — ' + errText : ''));
+      }}
       var labels = {{
         correct: '✓ записано',
         wrong: '✗ записано',
@@ -881,8 +1129,10 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       }};
       rowStatus.textContent = labels[verdict] || 'записано';
       if (signalType === 'content') await refreshCoverage();
+      return true;
     }} catch (e) {{
-      rowStatus.textContent = 'Ошибка: ' + e.message;
+      rowStatus.textContent = 'Не записано: ' + e.message;
+      return false;
     }}
   }}
 
@@ -908,10 +1158,6 @@ def _render_one(
 
     color_groups = [r.get("color_group") or r["section"] for r in records]
     hover_customdata = _build_hover_customdata(records)
-    # Intentionally compact: Plotly tooltips clip off-screen on very wide
-    # content, so the hover shows just enough to identify the chunk
-    # (section + short preview + id). Full text lives in the match list
-    # below the plot, which supports click-to-expand.
     hovertemplate = (
         "<b>%{customdata[1]}</b><br>"
         "%{customdata[0]}<br>"
@@ -919,26 +1165,38 @@ def _render_one(
         "<extra></extra>"
     )
 
+    # Plotly Express splits one trace per unique color value. If we set
+    # customdata via fig.update_traces() AFTER the split, the FULL array
+    # ends up on every trace while per-trace x/y only hold that group's
+    # rows, so hover shows the wrong chunk on any multi-section KB. The
+    # correct path is to pass per-row customdata columns through the
+    # dataframe and let px route them alongside x/y via custom_data=...
     frame_cols: dict[str, Any] = {
         "x": coords[:, 0],
         "y": coords[:, 1],
-        # Plotly Express creates one trace per unique value of the color
-        # column. We pass color_group (capped at MAX_COLOR_GROUPS + 1) to
-        # bound trace count — without this a KB with many headings blows
-        # HTML size up to hundreds of MB and the page never loads.
         "color_group": color_groups,
+        "cd_text": [row[0] for row in hover_customdata],
+        "cd_section": [row[1] for row in hover_customdata],
+        "cd_doc": [row[2] for row in hover_customdata],
+        "cd_chunk_id": [row[3] for row in hover_customdata],
     }
     if is_3d:
         frame_cols["z"] = coords[:, 2]
     df = pd.DataFrame(frame_cols)
 
+    cd_cols = ["cd_text", "cd_section", "cd_doc", "cd_chunk_id"]
     if is_3d:
-        fig = px.scatter_3d(df, x="x", y="y", z="z", color="color_group", title=title, opacity=0.85)
+        fig = px.scatter_3d(
+            df, x="x", y="y", z="z", color="color_group",
+            custom_data=cd_cols, title=title, opacity=0.85,
+        )
     else:
-        fig = px.scatter(df, x="x", y="y", color="color_group", title=title, opacity=0.85)
+        fig = px.scatter(
+            df, x="x", y="y", color="color_group",
+            custom_data=cd_cols, title=title, opacity=0.85,
+        )
 
     fig.update_traces(
-        customdata=hover_customdata,
         hovertemplate=hovertemplate,
         marker=dict(size=6 if is_3d else 8),
     )
@@ -947,7 +1205,28 @@ def _render_one(
         margin=dict(l=30, r=30, t=60, b=30),
     )
 
-    post_script = _overlay_post_script(kind, overlay_url, overlay_token) if overlay_url else None
+    # Ground-truth chunk_id -> coord map for the overlay JS. Format:
+    #   3D -> {chunk_id: [x, y, z, section]}
+    #   2D -> {chunk_id: [x, y, section]}
+    # Numpy floats are not JSON-serializable without coercion.
+    chunk_coords: dict[str, list[Any]] = {}
+    for idx, r in enumerate(records):
+        cid = str(r["chunk_id"])
+        section = r.get("section") or _DEFAULT_SECTION
+        if is_3d:
+            chunk_coords[cid] = [
+                float(coords[idx, 0]), float(coords[idx, 1]), float(coords[idx, 2]), section,
+            ]
+        else:
+            chunk_coords[cid] = [
+                float(coords[idx, 0]), float(coords[idx, 1]), section,
+            ]
+
+    post_script = (
+        _overlay_post_script(kind, overlay_url, overlay_token, chunk_coords)
+        if overlay_url
+        else None
+    )
     html = fig.to_html(
         include_plotlyjs="inline",
         full_html=True,

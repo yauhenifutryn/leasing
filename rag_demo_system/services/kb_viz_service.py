@@ -64,6 +64,10 @@ PROFILES_FILE_NAME = "kb_viz_profiles.json"
 PROFILE_NAME_MAX_CHARS = 128
 FEEDBACK_LOG_NAME = "kb_viz_feedback.jsonl"
 MAX_COMMENT_CHARS = 2000
+# Cap the number of remembered queries so the registry can't grow without
+# bound. FIFO eviction when full. 2000 is generous for a single demo
+# session (~1 query every ~5s for 3 hours) but keeps memory trivial.
+QUERY_REGISTRY_MAX = 2000
 
 
 def _env(name: str, default: str) -> str:
@@ -88,6 +92,30 @@ class _State:
         self._embedder: Any = None
         self._reducers: dict[str, Any] = {}
         self._qdrant: Any = None
+        # In-memory map of query_id -> frozenset of chunk_ids actually
+        # returned for that query. /feedback rejects submissions that
+        # reference chunks outside this set, so a caller cannot poison
+        # the coverage report with fabricated chunk_ids or with chunks
+        # that were never in their top-K. Process-local; on restart all
+        # in-flight queries are invalidated, which is acceptable for a
+        # daily-redeployed audit tool.
+        self._query_registry_lock = threading.Lock()
+        self._query_registry: dict[str, frozenset[str]] = {}
+        self._query_registry_order: list[str] = []
+
+    def register_query(self, query_id: str, chunk_ids: list[str]) -> None:
+        ids = frozenset(str(c) for c in chunk_ids if c)
+        with self._query_registry_lock:
+            self._query_registry[query_id] = ids
+            self._query_registry_order.append(query_id)
+            # FIFO eviction once above the cap.
+            while len(self._query_registry_order) > QUERY_REGISTRY_MAX:
+                evict = self._query_registry_order.pop(0)
+                self._query_registry.pop(evict, None)
+
+    def issued_chunks(self, query_id: str) -> frozenset[str] | None:
+        with self._query_registry_lock:
+            return self._query_registry.get(query_id)
 
     def feedback_log_path(self) -> Path:
         return self.state_dir / FEEDBACK_LOG_NAME
@@ -471,8 +499,14 @@ def overlay_query(
 
     _maybe_touch_profile(payload.client_id)
 
+    query_id = uuid.uuid4().hex
+    # Remember which chunks were actually returned for this query so
+    # /feedback can reject submissions with fabricated chunk_ids. See
+    # _State._query_registry.
+    STATE.register_query(query_id, [m.chunk_id for m in matches])
+
     return OverlayResponse(
-        query_id=uuid.uuid4().hex,
+        query_id=query_id,
         kind=payload.kind,
         position=position,
         top_k=matches,
@@ -509,6 +543,28 @@ def feedback(
         raise HTTPException(
             status_code=422,
             detail="comment is required when content verdict is 'wrong'",
+        )
+
+    # Enforce query_id binding: submitted chunk_ids must be a subset of
+    # what /overlay_query actually returned for that query. Without this
+    # the coverage report can be trivially poisoned by a client replaying
+    # /feedback with arbitrary chunk_ids and sections. Unknown query_id
+    # also rejected so feedback cannot be back-dated to a fabricated id.
+    issued = STATE.issued_chunks(payload.query_id)
+    if issued is None:
+        raise HTTPException(
+            status_code=400,
+            detail="unknown query_id: submit /overlay_query first, then /feedback with the returned query_id",
+        )
+    submitted = {str(m.chunk_id) for m in payload.top_k}
+    stray = submitted - issued
+    if stray:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "top_k contains chunk_ids that were not returned for this query_id: "
+                + ", ".join(sorted(stray))
+            ),
         )
 
     record = {

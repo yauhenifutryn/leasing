@@ -342,7 +342,11 @@ def test_feedback_invalid_verdict(open_client) -> None:
 
 
 def test_feedback_respects_token(secured_client) -> None:
-    client, _ = secured_client
+    client, svc = secured_client
+    # Seed the query registry with an empty top_k so the post-auth-success
+    # branch of /feedback passes. Empty top_k is trivially a subset of the
+    # issued set, so validation doesn't reject it.
+    svc.STATE.register_query("q", [])
     payload = {
         "query_id": "q",
         "query_text": "q",
@@ -395,11 +399,16 @@ def test_coverage_empty(open_client) -> None:
 
 
 def test_coverage_aggregates_feedback(open_client) -> None:
-    client, _ = open_client
+    client, svc = open_client
 
     def submit(verdict: str, chunk_ids: list[str], section: str, comment: str | None = None) -> None:
+        query_id = f"q-{verdict}-{'-'.join(chunk_ids)}"
+        # /feedback validates chunk_ids against what /overlay_query returned
+        # for this query_id. Seed the registry so the submission is treated
+        # as legitimate rather than as a poisoning attempt.
+        svc.STATE.register_query(query_id, chunk_ids)
         payload = {
-            "query_id": f"q-{verdict}-{'-'.join(chunk_ids)}",
+            "query_id": query_id,
             "query_text": "test query",
             "kind": "3d",
             "verdict": verdict,
@@ -443,11 +452,13 @@ def test_per_chunk_attribution_lists(open_client) -> None:
     """per_chunk.validated_by / flagged_by should list the users who touched
     each chunk so the UI hover can show multi-user attribution at a glance.
     """
-    client, _ = open_client
+    client, svc = open_client
 
     def submit(user: str, verdict: str, chunk_ids: list[str], comment: str | None = None) -> None:
+        query_id = f"q-{user}-{verdict}"
+        svc.STATE.register_query(query_id, chunk_ids)
         payload = {
-            "query_id": f"q-{user}-{verdict}",
+            "query_id": query_id,
             "query_text": "q",
             "kind": "3d",
             "verdict": verdict,
@@ -456,7 +467,8 @@ def test_per_chunk_attribution_lists(open_client) -> None:
         }
         if comment:
             payload["comment"] = comment
-        assert client.post("/feedback", json=payload).status_code == 200
+        res = client.post("/feedback", json=payload)
+        assert res.status_code == 200, res.text
 
     submit("sasha", "correct", ["c-1", "c-2"])
     submit("john", "correct", ["c-1"])
@@ -497,11 +509,13 @@ def test_coverage_ignores_malformed_jsonl_lines(open_client, tmp_path) -> None:
 
 
 def test_coverage_per_user_breakdown(open_client) -> None:
-    client, _ = open_client
+    client, svc = open_client
 
     def submit(user: str, verdict: str, chunk_ids: list[str], section: str, comment: str | None = None) -> None:
+        query_id = f"q-{user}-{verdict}-{'-'.join(chunk_ids)}"
+        svc.STATE.register_query(query_id, chunk_ids)
         payload = {
-            "query_id": f"q-{user}-{verdict}-{'-'.join(chunk_ids)}",
+            "query_id": query_id,
             "query_text": f"q from {user}",
             "kind": "3d",
             "verdict": verdict,
@@ -519,6 +533,7 @@ def test_coverage_per_user_breakdown(open_client) -> None:
     # john validates 2 chunks correct (one overlaps with sasha)
     submit("john", "correct", ["c-2", "c-3"], "Стоимость")
     # anonymous (no client_id) adds one more correct
+    svc.STATE.register_query("q-anon", ["c-4"])
     res = client.post(
         "/feedback",
         json={
@@ -637,3 +652,82 @@ def test_coverage_respects_token(secured_client) -> None:
         client.get("/coverage", headers={"Authorization": "Bearer secret-xyz"}).status_code
         == 200
     )
+
+
+def test_feedback_rejects_unknown_query_id(open_client) -> None:
+    """Cannot post feedback for a query_id the server never issued."""
+    client, _ = open_client
+    res = client.post(
+        "/feedback",
+        json={
+            "query_id": "never-issued-abc",
+            "query_text": "q",
+            "kind": "3d",
+            "verdict": "correct",
+            "top_k": [{"chunk_id": "chunk-0", "section": "S", "score": 0.5}],
+        },
+    )
+    assert res.status_code == 400
+    assert "unknown query_id" in res.json()["detail"].lower()
+
+
+def test_feedback_rejects_unissued_chunk(open_client) -> None:
+    """Cannot submit feedback for chunks not returned in the query's top_k.
+
+    Without this validation a client could poison the coverage report by
+    replaying /feedback with arbitrary chunk_ids and fake sections.
+    """
+    client, _ = open_client
+    q = client.post("/overlay_query", json={"text": "test", "kind": "3d", "top_k": 3}).json()
+    issued_ids = {m["chunk_id"] for m in q["top_k"]}
+    assert "rogue-chunk-42" not in issued_ids
+
+    res = client.post(
+        "/feedback",
+        json={
+            "query_id": q["query_id"],
+            "query_text": "test",
+            "kind": "3d",
+            "verdict": "correct",
+            "top_k": [{"chunk_id": "rogue-chunk-42", "section": "Fake", "score": 0.5}],
+        },
+    )
+    assert res.status_code == 400
+    assert "rogue-chunk-42" in res.json()["detail"]
+
+
+def test_feedback_accepts_issued_chunk(open_client) -> None:
+    """Happy path: /overlay_query → /feedback with real chunk_id → 200."""
+    client, _ = open_client
+    q = client.post("/overlay_query", json={"text": "test", "kind": "3d", "top_k": 3}).json()
+    cid = q["top_k"][0]["chunk_id"]
+    res = client.post(
+        "/feedback",
+        json={
+            "query_id": q["query_id"],
+            "query_text": "test",
+            "kind": "3d",
+            "verdict": "correct",
+            "top_k": [{"chunk_id": cid, "section": "S", "score": 0.5}],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_query_registry_evicts_oldest_fifo(open_client) -> None:
+    """Registry has bounded memory; oldest entries evict when capacity hit."""
+    client, svc = open_client
+    # Drop the cap to something tiny for the test
+    original_cap = svc.QUERY_REGISTRY_MAX
+    svc.QUERY_REGISTRY_MAX = 3
+    try:
+        for i in range(5):
+            svc.STATE.register_query(f"q{i}", [f"chunk-{i}"])
+        # Oldest two should have been evicted.
+        assert svc.STATE.issued_chunks("q0") is None
+        assert svc.STATE.issued_chunks("q1") is None
+        # Newest three are retained.
+        assert svc.STATE.issued_chunks("q2") == frozenset({"chunk-2"})
+        assert svc.STATE.issued_chunks("q4") == frozenset({"chunk-4"})
+    finally:
+        svc.QUERY_REGISTRY_MAX = original_cap
