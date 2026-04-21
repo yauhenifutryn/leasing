@@ -39,20 +39,26 @@ def report(records: list[dict[str, Any]]) -> str:
     if not records:
         return "No feedback recorded yet.\n"
 
+    content_recs = [r for r in records if r.get("signal_type", "content") == "content"]
+    relevance_recs = [r for r in records if r.get("signal_type") == "relevance"]
+
     lines: list[str] = []
     n = len(records)
-    correct = sum(1 for r in records if r.get("verdict") == "correct")
-    wrong = sum(1 for r in records if r.get("verdict") == "wrong")
+    correct = sum(1 for r in content_recs if r.get("verdict") == "correct")
+    wrong = sum(1 for r in content_recs if r.get("verdict") == "wrong")
+    relevant = sum(1 for r in relevance_recs if r.get("verdict") == "relevant")
+    not_relevant = sum(1 for r in relevance_recs if r.get("verdict") == "not_relevant")
     lines.append(f"Total feedback events: {n}")
-    lines.append(f"  correct: {correct}  ({_pct(correct, n)}%)")
-    lines.append(f"  wrong:   {wrong}   ({_pct(wrong, n)}%)")
+    lines.append(f"  Content signals:   {len(content_recs)} ({correct} ✓ / {wrong} ✗)")
+    lines.append(f"  Relevance signals: {len(relevance_recs)} ({relevant} ◯ / {not_relevant} ⊘)")
 
-    # Per-section rollup
+    # Per-section rollup — content only; relevance is analyzed separately.
     per_section: dict[str, dict[str, int]] = defaultdict(lambda: {"correct": 0, "wrong": 0})
     chunk_wrong: dict[str, list[str]] = defaultdict(list)
     chunk_correct: dict[str, int] = defaultdict(int)
+    chunk_not_relevant: dict[str, list[str]] = defaultdict(list)
     comments: list[tuple[str, str, str]] = []  # (query_text, comment, sections)
-    for r in records:
+    for r in content_recs:
         verdict = r.get("verdict", "")
         sections_seen: set[str] = set()
         for m in r.get("top_k") or []:
@@ -72,6 +78,13 @@ def report(records: list[dict[str, Any]]) -> str:
                 str(r.get("comment", "")),
                 ", ".join(sorted(sections_seen)),
             ))
+
+    for r in relevance_recs:
+        if r.get("verdict") != "not_relevant":
+            continue
+        for m in r.get("top_k") or []:
+            cid = str(m.get("chunk_id", ""))
+            chunk_not_relevant[cid].append(r.get("query_text", ""))
 
     lines.append("")
     lines.append("Per-section tally (correct / wrong events):")
@@ -94,13 +107,26 @@ def report(records: list[dict[str, Any]]) -> str:
                 lines.append(f"    ... +{len(qs) - 3} more")
 
     lines.append("")
-    lines.append("Client comments (wrong verdict only):")
+    lines.append("Client comments (content=wrong only):")
     if not comments:
         lines.append("  (none)")
     else:
         for q, c, sections in comments:
             lines.append(f"  [{sections}] query: {q}")
             lines.append(f"    comment: {c}")
+
+    lines.append("")
+    lines.append("Most-often-flagged irrelevant chunks (relevance signal, top 10):")
+    nr_ranked = sorted(chunk_not_relevant.items(), key=lambda kv: len(kv[1]), reverse=True)[:10]
+    if not nr_ranked:
+        lines.append("  (none)")
+    else:
+        for cid, qs in nr_ranked:
+            lines.append(f"  {cid}: {len(qs)} not-relevant flag(s)")
+            for q in qs[:3]:
+                lines.append(f"    - query: {q}")
+            if len(qs) > 3:
+                lines.append(f"    ... +{len(qs) - 3} more")
 
     return "\n".join(lines) + "\n"
 

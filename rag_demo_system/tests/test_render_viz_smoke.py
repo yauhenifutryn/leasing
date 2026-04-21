@@ -135,6 +135,16 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     assert "showProfilePicker" in html_3d
     assert "fetchProfiles" in html_3d
     assert "Who is using this viz?" in html_3d
+    # Per-chunk dual-signal buttons with Russian copy
+    assert "Точность" in html_3d      # content accuracy label
+    assert "Релевантность" in html_3d  # relevance label
+    assert "✓ Верно" in html_3d
+    assert "✗ Ошибка" in html_3d
+    assert "◯ Подходит" in html_3d
+    assert "⊘ Не подходит" in html_3d
+    assert "signal_type" in html_3d
+    # Click-to-expand + text_full wiring
+    assert "text_full" in html_3d
 
 
 def test_truncate_handles_long_text() -> None:

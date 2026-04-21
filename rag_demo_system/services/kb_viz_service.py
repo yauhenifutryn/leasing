@@ -219,10 +219,24 @@ class FeedbackMatchRef(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
+    """One feedback event.
+
+    signal_type differentiates the two orthogonal signals the UI can collect:
+    - "content":  is this chunk's text factually correct? (primary,
+                  drives the /coverage aggregation + per-chunk icons.)
+    - "relevance": is this chunk a reasonable answer to the query?
+                  (optional, stored for later retrieval-quality analysis.)
+
+    verdict values are scoped to signal_type:
+    - content:   "correct" | "wrong"
+    - relevance: "relevant" | "not_relevant"
+    """
+
     query_id: str = Field(..., min_length=1, max_length=64)
     query_text: str = Field(..., min_length=1, max_length=2000)
     kind: str = Field(..., pattern="^(2d|3d)$")
-    verdict: str = Field(..., pattern="^(correct|wrong)$")
+    signal_type: str = Field("content", pattern="^(content|relevance)$")
+    verdict: str = Field(..., pattern="^(correct|wrong|relevant|not_relevant)$")
     comment: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
     top_k: list[FeedbackMatchRef] = Field(default_factory=list, max_length=20)
     client_id: str | None = Field(default=None, max_length=128)
@@ -468,10 +482,28 @@ def feedback(
 ) -> FeedbackResponse:
     _require_token(authorization)
 
-    if payload.verdict == "wrong" and not (payload.comment and payload.comment.strip()):
+    # Scope the verdict vocabulary to the signal type.
+    content_verdicts = {"correct", "wrong"}
+    relevance_verdicts = {"relevant", "not_relevant"}
+    if payload.signal_type == "content" and payload.verdict not in content_verdicts:
         raise HTTPException(
             status_code=422,
-            detail="comment is required when verdict is 'wrong'",
+            detail="signal_type=content requires verdict in {correct, wrong}",
+        )
+    if payload.signal_type == "relevance" and payload.verdict not in relevance_verdicts:
+        raise HTTPException(
+            status_code=422,
+            detail="signal_type=relevance requires verdict in {relevant, not_relevant}",
+        )
+
+    if (
+        payload.signal_type == "content"
+        and payload.verdict == "wrong"
+        and not (payload.comment and payload.comment.strip())
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="comment is required when content verdict is 'wrong'",
         )
 
     record = {
@@ -479,6 +511,7 @@ def feedback(
         "query_id": payload.query_id,
         "query_text": payload.query_text,
         "kind": payload.kind,
+        "signal_type": payload.signal_type,
         "verdict": payload.verdict,
         "comment": (payload.comment or "").strip() or None,
         "top_k": [m.model_dump() for m in payload.top_k],
@@ -517,6 +550,12 @@ def _compute_coverage() -> CoverageResponse:
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            # Coverage / icons are about content correctness only. Relevance
+            # events (signal_type == 'relevance') are persisted for later
+            # retrieval-quality analysis but do not touch the per-chunk
+            # ✓/✗ state the UI renders.
+            if rec.get("signal_type", "content") != "content":
                 continue
             total_feedback += 1
             verdict = rec.get("verdict", "")

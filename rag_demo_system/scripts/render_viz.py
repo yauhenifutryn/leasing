@@ -548,25 +548,38 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     return '';
   }}
 
-  // Per-chunk verdict: each row carries its own ✓/✗ pair. Voting is
-  // content-only ("is this chunk's text factually correct?"), not
-  // relevance-to-query. Clients skip chunks they can't judge. This keeps
-  // the feedback log unambiguous: 'wrong' means a factual KB error, not a
-  // retrieval miss.
+  // Per-chunk feedback: each row collects two orthogonal signals.
+  //   • Точность (content):  "is this chunk's text factually correct?"
+  //     — mandatory signal, drives the coverage icons.
+  //   • Релевантность (relevance): "is this chunk a good answer to the
+  //     query?" — optional secondary signal, logged for later analysis,
+  //     does not change coverage.
+  // Clients are encouraged to skip chunks they can't confidently judge.
   function renderMatchList() {{
     matches.textContent = '';
     if (!lastQuery) return;
 
-    var instruction = el('div', {{
-      text: 'Judge each chunk on its own facts — not whether it matched your question. Click ✓ if the chunk content is factually correct, ✗ if it has an error. Skip chunks you can\\'t judge.',
-      style: 'margin-bottom:8px;padding:8px 10px;background:#fff8e1;border-left:3px solid #e0b84a;color:#4a3d14;font-size:12px;line-height:1.4;'
-    }});
+    var instruction = el('div', {{style: 'margin-bottom:8px;padding:8px 10px;background:#fff8e1;border-left:3px solid #e0b84a;color:#4a3d14;font-size:12px;line-height:1.5;'}});
+    instruction.appendChild(el('div', {{
+      text: 'Как проверять:',
+      style: 'font-weight:600;margin-bottom:4px;'
+    }}));
+    instruction.appendChild(el('div', {{
+      text: '• Точность (главное) — верны ли факты в тексте чанка: цифры, телефоны, условия. ✓ если всё верно, ✗ если есть ошибка (нужен комментарий).'
+    }}));
+    instruction.appendChild(el('div', {{
+      text: '• Релевантность (по желанию) — подходит ли этот чанк как ответ на ваш вопрос. Не обязательно, но полезно для будущего анализа поиска.'
+    }}));
+    instruction.appendChild(el('div', {{
+      text: '• Пропустите чанк, если не уверены. Не голосуйте просто так.',
+      style: 'margin-top:4px;color:#6d5210;'
+    }}));
     matches.appendChild(instruction);
 
     lastQuery.top_k.forEach(function(m, i) {{
       var cov = (lastCoverage.per_chunk || {{}})[m.chunk_id];
       var icon = coverageIcon(cov);
-      var counts = cov ? cov.correct + '✓ / ' + cov.wrong + '✗' : 'new';
+      var counts = cov ? cov.correct + '✓ / ' + cov.wrong + '✗' : 'ещё не проверялось';
       var score = (m.score != null) ? m.score.toFixed(3) : '?';
 
       var row = el('div', {{
@@ -579,13 +592,13 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       }});
       head.appendChild(el('span', {{text: icon + ' #' + (i + 1), style: 'font-weight:600;min-width:38px;'}}));
       head.appendChild(el('span', {{text: score, style: 'color:#888;font-size:11px;min-width:42px;'}}));
-      head.appendChild(el('span', {{text: m.section || '(no section)', style: 'color:#223;flex:1;'}}));
+      head.appendChild(el('span', {{text: m.section || '(без раздела)', style: 'color:#223;flex:1;'}}));
       head.appendChild(el('span', {{text: counts, style: 'color:#555;font-size:11px;'}}));
       row.appendChild(head);
 
       // Preview text with click-to-expand
       var preview = m.text_preview || '';
-      var full = m.text_full || preview;  // field added in a moment
+      var full = m.text_full || preview;
       var textBox = el('div', {{
         text: preview,
         style: 'color:#333;margin:4px 0 6px 0;line-height:1.45;max-height:3.8em;overflow:hidden;white-space:pre-wrap;cursor:pointer;'
@@ -598,35 +611,51 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       }});
       row.appendChild(textBox);
 
-      // Per-chunk vote buttons
-      var btnRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;'}});
+      // --- Content accuracy buttons (primary signal) ---
+      var contentRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-top:4px;'}});
+      contentRow.appendChild(el('span', {{text: 'Точность:', style: 'font-size:11px;color:#555;min-width:80px;'}}));
       var ok = el('button', {{
-        text: '✓ Correct', style: 'padding:4px 10px;cursor:pointer;background:#e7f7e7;border:1px solid #7bc97b;border-radius:3px;font-size:12px;'
+        text: '✓ Верно', style: 'padding:4px 10px;cursor:pointer;background:#e7f7e7;border:1px solid #7bc97b;border-radius:3px;font-size:12px;'
       }});
       var no = el('button', {{
-        text: '✗ Wrong', style: 'padding:4px 10px;cursor:pointer;background:#fbeaea;border:1px solid #d98080;border-radius:3px;font-size:12px;'
+        text: '✗ Ошибка', style: 'padding:4px 10px;cursor:pointer;background:#fbeaea;border:1px solid #d98080;border-radius:3px;font-size:12px;'
       }});
       var rowStatus = el('span', {{style: 'color:#666;font-size:11px;margin-left:4px;'}});
-      btnRow.appendChild(ok);
-      btnRow.appendChild(no);
-      btnRow.appendChild(rowStatus);
-      row.appendChild(btnRow);
+      contentRow.appendChild(ok);
+      contentRow.appendChild(no);
+      contentRow.appendChild(rowStatus);
+      row.appendChild(contentRow);
 
-      // Lazy comment input, appears only on ✗ Wrong
+      // --- Relevance buttons (optional secondary signal) ---
+      var relRow = el('div', {{style: 'display:flex;gap:6px;align-items:center;margin-top:4px;'}});
+      relRow.appendChild(el('span', {{text: 'Релевантность:', style: 'font-size:11px;color:#555;min-width:110px;'}}));
+      var rel = el('button', {{
+        text: '◯ Подходит', style: 'padding:4px 10px;cursor:pointer;background:#eef3fb;border:1px solid #7aa4d4;border-radius:3px;font-size:12px;'
+      }});
+      var notRel = el('button', {{
+        text: '⊘ Не подходит', style: 'padding:4px 10px;cursor:pointer;background:#f5f0f8;border:1px solid #a989c2;border-radius:3px;font-size:12px;'
+      }});
+      var relStatus = el('span', {{style: 'color:#666;font-size:11px;margin-left:4px;'}});
+      relRow.appendChild(rel);
+      relRow.appendChild(notRel);
+      relRow.appendChild(relStatus);
+      row.appendChild(relRow);
+
+      // Lazy comment input, appears only on ✗ Ошибка
       var commentBox = el('div', {{style: 'display:none;margin-top:6px;'}});
       var ta = el('textarea', {{
-        placeholder: 'What is wrong about this chunk? (required)',
+        placeholder: 'Что именно неверно в этом чанке? (обязательно)',
         style: 'width:100%;min-height:50px;padding:6px;box-sizing:border-box;font-size:12px;'
       }});
       var send = el('button', {{
-        text: 'Send', style: 'padding:4px 10px;cursor:pointer;margin-top:4px;font-size:12px;'
+        text: 'Отправить', style: 'padding:4px 10px;cursor:pointer;margin-top:4px;font-size:12px;'
       }});
       commentBox.appendChild(ta);
       commentBox.appendChild(send);
       row.appendChild(commentBox);
 
       ok.onclick = function() {{
-        submitChunkFeedback(m, 'correct', null, rowStatus);
+        submitChunkFeedback(m, 'content', 'correct', null, rowStatus);
       }};
       no.onclick = function() {{
         commentBox.style.display = 'block';
@@ -634,9 +663,15 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       }};
       send.onclick = function() {{
         var c = ta.value.trim();
-        if (!c) {{ rowStatus.textContent = 'Comment required.'; return; }}
-        submitChunkFeedback(m, 'wrong', c, rowStatus);
+        if (!c) {{ rowStatus.textContent = 'Нужен комментарий.'; return; }}
+        submitChunkFeedback(m, 'content', 'wrong', c, rowStatus);
         commentBox.style.display = 'none';
+      }};
+      rel.onclick = function() {{
+        submitChunkFeedback(m, 'relevance', 'relevant', null, relStatus);
+      }};
+      notRel.onclick = function() {{
+        submitChunkFeedback(m, 'relevance', 'not_relevant', null, relStatus);
       }};
 
       matches.appendChild(row);
@@ -700,14 +735,18 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   // for that specific chunk. The feedback payload still carries the
   // same top_k shape (with one entry) so the coverage endpoint and the
   // JSONL-backed aggregation keep working unchanged.
-  async function submitChunkFeedback(match, verdict, comment, rowStatus) {{
+  // signalType: 'content' | 'relevance'
+  // content verdicts: 'correct' | 'wrong'
+  // relevance verdicts: 'relevant' | 'not_relevant'
+  async function submitChunkFeedback(match, signalType, verdict, comment, rowStatus) {{
     if (!lastQuery || !match) return;
-    rowStatus.textContent = 'Sending...';
+    rowStatus.textContent = 'Отправка...';
     try {{
       var payload = {{
         query_id: lastQuery.query_id,
         query_text: lastQuery.text,
         kind: lastQuery.kind,
+        signal_type: signalType,
         verdict: verdict,
         top_k: [{{chunk_id: match.chunk_id, section: match.section || '', score: match.score}}],
       }};
@@ -715,10 +754,16 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
       if (user) payload.client_id = user;
       var res = await fetch(feedbackUrl, {{method: 'POST', headers: authHeaders(), body: JSON.stringify(payload)}});
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      rowStatus.textContent = (verdict === 'correct' ? '✓ recorded' : '✗ recorded');
-      await refreshCoverage();
+      var labels = {{
+        correct: '✓ записано',
+        wrong: '✗ записано',
+        relevant: '◯ подходит',
+        not_relevant: '⊘ не подходит'
+      }};
+      rowStatus.textContent = labels[verdict] || 'записано';
+      if (signalType === 'content') await refreshCoverage();
     }} catch (e) {{
-      rowStatus.textContent = 'Failed: ' + e.message;
+      rowStatus.textContent = 'Ошибка: ' + e.message;
     }}
   }}
 

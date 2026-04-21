@@ -242,6 +242,90 @@ def test_feedback_wrong_requires_comment(open_client) -> None:
     assert good.status_code == 200
 
 
+def test_feedback_relevance_signal(open_client) -> None:
+    """Relevance is the optional secondary signal. Schema accepts it under
+    signal_type=relevance with verdict in {relevant, not_relevant}. Comment
+    is optional (unlike content=wrong which mandates a comment).
+    """
+    client, svc = open_client
+    q = client.post("/overlay_query", json={"text": "сколько стоит", "kind": "3d"}).json()
+    top_k = [{"chunk_id": q["top_k"][0]["chunk_id"], "section": q["top_k"][0]["section"], "score": 0.5}]
+
+    for verdict in ("relevant", "not_relevant"):
+        res = client.post(
+            "/feedback",
+            json={
+                "query_id": q["query_id"],
+                "query_text": "сколько стоит",
+                "kind": "3d",
+                "signal_type": "relevance",
+                "verdict": verdict,
+                "top_k": top_k,
+            },
+        )
+        assert res.status_code == 200, res.text
+
+    log = svc.STATE.feedback_log_path()
+    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    relevance_records = [r for r in records if r.get("signal_type") == "relevance"]
+    assert len(relevance_records) == 2
+    assert {r["verdict"] for r in relevance_records} == {"relevant", "not_relevant"}
+
+
+def test_feedback_signal_verdict_mismatch(open_client) -> None:
+    """Cross-using verdicts between signals is rejected with 422."""
+    client, _ = open_client
+    q = client.post("/overlay_query", json={"text": "q", "kind": "3d"}).json()
+    base = {
+        "query_id": q["query_id"],
+        "query_text": "q",
+        "kind": "3d",
+        "top_k": [],
+    }
+    # content verdict on relevance signal
+    res = client.post(
+        "/feedback",
+        json={**base, "signal_type": "relevance", "verdict": "correct"},
+    )
+    assert res.status_code == 422
+
+    # relevance verdict on content signal
+    res = client.post(
+        "/feedback",
+        json={**base, "signal_type": "content", "verdict": "relevant"},
+    )
+    assert res.status_code == 422
+
+
+def test_coverage_ignores_relevance_events(open_client) -> None:
+    """Coverage icons reflect content accuracy only. Relevance votes are
+    stored for future analysis but do not flip ✓/✗ on any chunk.
+    """
+    client, _ = open_client
+    q = client.post("/overlay_query", json={"text": "foo", "kind": "3d"}).json()
+    target = q["top_k"][0]
+    top_k = [{"chunk_id": target["chunk_id"], "section": target["section"], "score": 0.5}]
+
+    # Only submit a relevance event — no content vote
+    res = client.post(
+        "/feedback",
+        json={
+            "query_id": q["query_id"],
+            "query_text": "foo",
+            "kind": "3d",
+            "signal_type": "relevance",
+            "verdict": "not_relevant",
+            "top_k": top_k,
+        },
+    )
+    assert res.status_code == 200
+
+    cov = client.get("/coverage").json()
+    # Zero content events → coverage is empty even though the JSONL has 1 line
+    assert cov["total_feedback"] == 0
+    assert cov["unique_chunks_validated"] == 0
+
+
 def test_feedback_invalid_verdict(open_client) -> None:
     client, _ = open_client
     res = client.post(
