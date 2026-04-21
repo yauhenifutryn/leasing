@@ -145,6 +145,7 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
   var FLAGGED_NAME = {flagged_name_js};
   var feedbackUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/feedback$1');
   var coverageUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/coverage$1');
+  var profilesUrl = embedUrl.replace(/\\/overlay_query(\\?.*)?$/, '/profiles$1');
   var gd = document.getElementsByClassName('plotly-graph-div')[0];
   if (!gd) return;
 
@@ -187,16 +188,106 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     return null;
   }}
 
-  function promptUser() {{
-    var u = window.prompt('Your name or initials (stays in this browser only, included in feedback):');
-    if (!u) return null;
-    u = u.trim().slice(0, 128);
-    if (!u) return null;
-    try {{ localStorage.setItem('kb_viz_user', u); }} catch (e) {{}}
-    return u;
+  function setUser(name) {{
+    if (!name) return null;
+    name = String(name).trim().slice(0, 128);
+    if (!name) return null;
+    try {{ localStorage.setItem('kb_viz_user', name); }} catch (e) {{}}
+    // Register with the server so it appears in other users' pickers.
+    try {{
+      fetch(profilesUrl, {{
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({{name: name}})
+      }}).catch(function() {{}});
+    }} catch (e) {{}}
+    return name;
+  }}
+
+  async function fetchProfiles() {{
+    try {{
+      var res = await fetch(profilesUrl);
+      if (!res.ok) return [];
+      var data = await res.json();
+      return (data.profiles || []).map(function(p) {{ return p.name; }});
+    }} catch (e) {{ return []; }}
+  }}
+
+  // Lightweight inline picker: shows existing profiles as clickable buttons
+  // plus an input for a new profile. Resolves with the chosen name (or null
+  // if the user dismisses).
+  function showProfilePicker(existingNames) {{
+    return new Promise(function(resolve) {{
+      var backdrop = el('div', {{style: 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;'}});
+      var modal = el('div', {{style: 'background:#fff;border-radius:8px;padding:20px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.25);'}});
+      var title = el('div', {{text: 'Who is using this viz?', style: 'font-size:16px;font-weight:600;margin-bottom:4px;'}});
+      var sub = el('div', {{text: 'Pick an existing profile or create a new one. No password — this is a lightweight identifier so feedback is attributable across devices.', style: 'font-size:12px;color:#666;margin-bottom:12px;'}});
+      modal.appendChild(title);
+      modal.appendChild(sub);
+
+      if (existingNames && existingNames.length > 0) {{
+        var existingLabel = el('div', {{text: 'Existing profiles:', style: 'font-size:12px;color:#666;margin-bottom:6px;'}});
+        modal.appendChild(existingLabel);
+        var row = el('div', {{style: 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;'}});
+        existingNames.forEach(function(n) {{
+          var btn = el('button', {{text: n, style: 'padding:6px 10px;border:1px solid #ccc;border-radius:4px;background:#f8f8f8;cursor:pointer;'}});
+          btn.onclick = function() {{
+            document.body.removeChild(backdrop);
+            resolve(n);
+          }};
+          row.appendChild(btn);
+        }});
+        modal.appendChild(row);
+      }} else {{
+        modal.appendChild(el('div', {{text: '(No profiles yet — be the first.)', style: 'font-size:12px;color:#888;margin-bottom:12px;'}}));
+      }}
+
+      var newLabel = el('div', {{text: 'Or create new:', style: 'font-size:12px;color:#666;margin-bottom:4px;'}});
+      var newInput = el('input', {{type: 'text', placeholder: 'Your name or initials', style: 'width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;'}});
+      var btnRow = el('div', {{style: 'display:flex;justify-content:flex-end;gap:8px;margin-top:12px;'}});
+      var cancelBtn = el('button', {{text: 'Cancel', style: 'padding:6px 12px;cursor:pointer;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;'}});
+      var createBtn = el('button', {{text: 'Create', style: 'padding:6px 12px;cursor:pointer;background:#1e66c8;color:#fff;border:none;border-radius:4px;'}});
+      modal.appendChild(newLabel);
+      modal.appendChild(newInput);
+      btnRow.appendChild(cancelBtn);
+      btnRow.appendChild(createBtn);
+      modal.appendChild(btnRow);
+
+      cancelBtn.onclick = function() {{ document.body.removeChild(backdrop); resolve(null); }};
+      createBtn.onclick = function() {{
+        var v = newInput.value.trim();
+        if (!v) {{ newInput.focus(); return; }}
+        document.body.removeChild(backdrop);
+        resolve(v);
+      }};
+      newInput.addEventListener('keydown', function(ev) {{
+        if (ev.key === 'Enter') createBtn.click();
+        if (ev.key === 'Escape') cancelBtn.click();
+      }});
+
+      backdrop.appendChild(modal);
+      document.body.appendChild(backdrop);
+      setTimeout(function() {{ newInput.focus(); }}, 50);
+    }});
+  }}
+
+  async function chooseUser() {{
+    var names = await fetchProfiles();
+    var picked = await showProfilePicker(names);
+    return picked ? setUser(picked) : null;
   }}
 
   var user = currentUser();
+  // If ?user= was present, also register it server-side so other devices see it.
+  if (user) {{
+    try {{
+      fetch(profilesUrl, {{
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({{name: user}})
+      }}).catch(function() {{}});
+    }} catch (e) {{}}
+  }}
 
   // ---- State ----
   var lastQuery = null;  // {{query_id, text, kind, top_k}}
@@ -248,9 +339,9 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     userBadge.textContent = user ? ('You: ' + user) : '(no user set)';
   }}
   renderUserBadge();
-  userChange.onclick = function(e) {{
+  userChange.onclick = async function(e) {{
     e.preventDefault();
-    var u = promptUser();
+    var u = await chooseUser();
     if (u) {{ user = u; renderUserBadge(); }}
   }};
 
@@ -465,11 +556,14 @@ def _overlay_post_script(kind: str, embed_url: str, token: str | None) -> str:
     if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
   }}
 
-  toggle.onclick = function() {{
+  toggle.onclick = async function() {{
     var showing = panel.style.display !== 'none';
     panel.style.display = showing ? 'none' : 'block';
     if (!showing) {{
-      if (!user) {{ user = promptUser(); renderUserBadge(); }}
+      if (!user) {{
+        var picked = await chooseUser();
+        if (picked) {{ user = picked; renderUserBadge(); }}
+      }}
       refreshCoverage();
       startPolling();
     }} else {{

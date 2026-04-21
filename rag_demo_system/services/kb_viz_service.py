@@ -60,6 +60,8 @@ DEFAULT_TOP_K = 5
 TEXT_PREVIEW_CHARS = 180
 PASSAGE_PREFIX = "passage: "
 QUERY_PREFIX = "query: "
+PROFILES_FILE_NAME = "kb_viz_profiles.json"
+PROFILE_NAME_MAX_CHARS = 128
 FEEDBACK_LOG_NAME = "kb_viz_feedback.jsonl"
 MAX_COMMENT_CHARS = 2000
 
@@ -82,12 +84,16 @@ class _State:
         self.token = os.getenv("KB_VIZ_OVERLAY_TOKEN") or None
         self._lock = threading.Lock()
         self._feedback_lock = threading.Lock()
+        self._profiles_lock = threading.Lock()
         self._embedder: Any = None
         self._reducers: dict[str, Any] = {}
         self._qdrant: Any = None
 
     def feedback_log_path(self) -> Path:
         return self.state_dir / FEEDBACK_LOG_NAME
+
+    def profiles_path(self) -> Path:
+        return self.state_dir / PROFILES_FILE_NAME
 
     def append_feedback(self, record: dict[str, Any]) -> Path:
         """Append a feedback record to the JSONL log (thread-safe)."""
@@ -98,6 +104,46 @@ class _State:
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
         return path
+
+    def list_profiles(self) -> list[dict[str, Any]]:
+        """Return stored profiles sorted by last_seen_ts desc."""
+        path = self.profiles_path()
+        if not path.exists():
+            return []
+        with self._profiles_lock:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return []
+        profiles = data.get("profiles") or []
+        return sorted(profiles, key=lambda p: p.get("last_seen_ts") or "", reverse=True)
+
+    def upsert_profile(self, name: str) -> dict[str, Any]:
+        """Create profile if new, else touch last_seen_ts. Thread-safe."""
+        name = (name or "").strip()[:PROFILE_NAME_MAX_CHARS]
+        if not name:
+            raise ValueError("profile name required")
+        path = self.profiles_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._profiles_lock:
+            data: dict[str, Any] = {"profiles": []}
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    data = {"profiles": []}
+            profiles = data.get("profiles") or []
+            match = next((p for p in profiles if p.get("name") == name), None)
+            if match:
+                match["last_seen_ts"] = now
+                result = match
+            else:
+                result = {"name": name, "created_ts": now, "last_seen_ts": now}
+                profiles.append(result)
+            data["profiles"] = profiles
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return result
 
     def get_embedder(self) -> Any:
         with self._lock:
@@ -209,6 +255,20 @@ class CoverageResponse(BaseModel):
     per_user: dict[str, UserCoverage] = Field(default_factory=dict)
 
 
+class ProfileRecord(BaseModel):
+    name: str
+    created_ts: str
+    last_seen_ts: str
+
+
+class ProfilesResponse(BaseModel):
+    profiles: list[ProfileRecord]
+
+
+class ProfileUpsertRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=PROFILE_NAME_MAX_CHARS)
+
+
 app = FastAPI(title="KB Viz Overlay Service")
 app.add_middleware(
     CORSMiddleware,
@@ -312,6 +372,36 @@ def serve_3d() -> Any:
     return FileResponse(path, media_type="text/html")
 
 
+@app.get("/profiles", response_model=ProfilesResponse)
+def list_profiles() -> ProfilesResponse:
+    """List known profile names so returning users can pick instead of retyping."""
+    return ProfilesResponse(profiles=[ProfileRecord(**p) for p in STATE.list_profiles()])
+
+
+@app.post("/profiles", response_model=ProfileRecord)
+def upsert_profile(
+    payload: ProfileUpsertRequest,
+    authorization: str | None = Header(default=None),
+) -> ProfileRecord:
+    """Create a new profile or touch an existing one."""
+    _require_token(authorization)
+    try:
+        rec = STATE.upsert_profile(payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return ProfileRecord(**rec)
+
+
+def _maybe_touch_profile(name: str | None) -> None:
+    """Best-effort profile touch. Never fails the caller."""
+    if not name or not name.strip():
+        return
+    try:
+        STATE.upsert_profile(name)
+    except Exception:
+        logger.exception("profile touch failed for %s", name)
+
+
 @app.post("/overlay_query", response_model=OverlayResponse)
 def overlay_query(
     payload: OverlayRequest,
@@ -339,6 +429,8 @@ def overlay_query(
     except Exception as exc:
         logger.exception("Qdrant search failed")
         raise HTTPException(status_code=503, detail=f"Qdrant search failed: {exc}")
+
+    _maybe_touch_profile(payload.client_id)
 
     return OverlayResponse(
         query_id=uuid.uuid4().hex,
@@ -374,6 +466,7 @@ def feedback(
         "remote_addr": request.client.host if request.client else None,
     }
     path = STATE.append_feedback(record)
+    _maybe_touch_profile(payload.client_id)
     return FeedbackResponse(ok=True, log_path=str(path))
 
 

@@ -130,6 +130,11 @@ def test_overlay_has_user_identity_and_polling(tmp_path: Path) -> None:
     assert "YOU_COLOR" in html_3d
     # client_id wired into both request payloads
     assert "payload.client_id" in html_3d or "body.client_id" in html_3d
+    # Server-backed profile picker
+    assert "profilesUrl" in html_3d
+    assert "showProfilePicker" in html_3d
+    assert "fetchProfiles" in html_3d
+    assert "Who is using this viz?" in html_3d
 
 
 def test_truncate_handles_long_text() -> None:

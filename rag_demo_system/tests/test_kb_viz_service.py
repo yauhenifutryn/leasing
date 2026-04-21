@@ -427,3 +427,78 @@ def test_coverage_per_user_breakdown(open_client) -> None:
 
     # Aggregate consistency: c-2 should have correct=2 (sasha + john)
     assert body["per_chunk"]["c-2"]["correct"] == 2
+
+
+def test_profiles_empty(open_client) -> None:
+    client, _ = open_client
+    res = client.get("/profiles")
+    assert res.status_code == 200
+    assert res.json() == {"profiles": []}
+
+
+def test_profiles_upsert_create_then_touch(open_client) -> None:
+    client, svc = open_client
+    r1 = client.post("/profiles", json={"name": "sasha"})
+    assert r1.status_code == 200, r1.text
+    rec1 = r1.json()
+    assert rec1["name"] == "sasha"
+    assert rec1["created_ts"]
+    assert rec1["last_seen_ts"] == rec1["created_ts"]
+
+    # Same name touches last_seen but preserves created_ts
+    r2 = client.post("/profiles", json={"name": "sasha"})
+    assert r2.status_code == 200
+    rec2 = r2.json()
+    assert rec2["created_ts"] == rec1["created_ts"]
+    assert rec2["last_seen_ts"] >= rec1["last_seen_ts"]
+
+    client.post("/profiles", json={"name": "john"})
+    listing = client.get("/profiles").json()["profiles"]
+    names = [p["name"] for p in listing]
+    assert sorted(names) == ["john", "sasha"]
+
+
+def test_profiles_auto_touch_on_feedback(open_client) -> None:
+    client, svc = open_client
+    q = client.post(
+        "/overlay_query",
+        json={"text": "сколько", "kind": "3d", "client_id": "maria"},
+    ).json()
+    client.post(
+        "/feedback",
+        json={
+            "query_id": q["query_id"],
+            "query_text": "сколько",
+            "kind": "3d",
+            "verdict": "correct",
+            "client_id": "maria",
+            "top_k": [],
+        },
+    )
+    listing = client.get("/profiles").json()["profiles"]
+    names = [p["name"] for p in listing]
+    assert "maria" in names
+
+
+def test_profiles_reject_blank(open_client) -> None:
+    client, _ = open_client
+    res = client.post("/profiles", json={"name": "   "})
+    # Either 422 from pydantic min_length (after strip happens upstream in client)
+    # or 422 from upsert ValueError (the body passes min_length=1 because it is
+    # whitespace, but upsert strips and rejects).
+    assert res.status_code == 422
+
+
+def test_profiles_respects_token(secured_client) -> None:
+    client, _ = secured_client
+    assert client.post("/profiles", json={"name": "x"}).status_code == 401
+    assert (
+        client.post(
+            "/profiles",
+            json={"name": "x"},
+            headers={"Authorization": "Bearer secret-xyz"},
+        ).status_code
+        == 200
+    )
+    # GET remains open so the picker can load profiles before the user knows the token
+    assert client.get("/profiles").status_code == 200

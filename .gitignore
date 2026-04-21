@@ -62,3 +62,5 @@ rag_demo_system/results/kb_viz_*.html
 rag_demo_system/results/umap_*.joblib
 rag_demo_system/results/viz_meta.json
 rag_demo_system/.overlay_token
+rag_demo_system/.state/kb_viz_feedback.jsonl
+rag_demo_system/.state/kb_viz_profiles.json
