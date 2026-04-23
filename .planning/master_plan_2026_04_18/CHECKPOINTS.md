@@ -35,7 +35,7 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 - [x] CP-3.1 — `backend/profile_state.py` with pure functions + unit tests (c0de06d..f7ed575, 2026-04-23). 23 tests, 100% line coverage. build_snapshot + partition_patches + derive_implied_flips + build_calc_params.
 - [x] CP-3.2 — `TurnAction` ADT + `apply_turn` with 100% coverage (1a77245..[task-14-commit], 2026-04-23). 69 tests (29 apply_turn + 17 turn_action + 23 profile_state). 100% line coverage on turn_action.py, profile_state.py, turn_dispatcher.py (162 stmts). All 8 dispatch steps wired with RED→GREEN per step. 580 total tests pass, 8 pre-existing env failures unchanged.
-- [ ] CP-3.3 — Orchestrator wired to `apply_turn`
+- [x] CP-3.3 — Orchestrator wired to `apply_turn` (Tasks 16-21, 2026-04-24). `execute_action` handlers (FireCalc + EmitReadback + EmitClarify + EmitChangeConfirm + FireOORMessage + Noop + FireLLMFallback) complete with calc circuit breaker + tool-call history. Four production adapters (`LLMStreamBackend`, `TtsSink`, `CalcAdapter`, `RagFuture`) bridge execute_action to `_stream_voice_response`. `APPLY_TURN_ENABLED` flag gates the new path (default "0" — legacy still live until CP-3.5 passes). 99 Phase 3 tests + 11 adapter tests green on both flag values.
 - [ ] CP-3.4 — Dead code removed; `app.py` down ~800 lines
 - [ ] CP-3.5 — Live regression sweep green
 - [ ] CP-3.6 — Code review resolved

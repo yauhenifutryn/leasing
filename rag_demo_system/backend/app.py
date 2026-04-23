@@ -949,6 +949,15 @@ async def _stream_voice_response(
     # tool_calls_this_turn persisting across turns (see voice_session.py).
     session.reset_turn_state()
 
+    # Phase 3.D: monotonic stamp on each VAD-finalized utterance. Used by
+    # the APPLY_TURN_ENABLED path to reject out-of-order classifier
+    # results (§7.2 invariant #6). Legacy path ignores it — safe to stamp
+    # unconditionally.
+    session.latest_finalized_turn_id = (
+        getattr(session, "latest_finalized_turn_id", 0) or 0
+    ) + 1
+    turn_id = session.latest_finalized_turn_id
+
     backend = session.backend
     brain_model = session.brain_model
 
@@ -1024,6 +1033,12 @@ async def _stream_voice_response(
     _sa_wants_readback = False
     _sa_change_field = None
     _sa_change_value = None
+    # Phase 3.D: holds the parsed ClassifierOutput once the classifier
+    # returns. Pre-declared at function scope so the APPLY_TURN_ENABLED
+    # dispatch can read it even if the classifier API call failed (the
+    # except block leaves `_sa_output` as None and the apply-turn branch
+    # falls through to the legacy keyword heuristic).
+    _sa_output = None
     # Fix 29 helper: True when the classifier-output block staged a fresh
     # pending_change this turn (via explicit change_field or implicit delta
     # detection from Fix 30). Read by the always-on state gate to decide
@@ -1622,6 +1637,91 @@ async def _stream_voice_response(
         return  # no LLM response; bot goes silent
     elif _sa_is_stop and not contains_stop_word(message or ""):
         print(f"[SessionAgent] is_stop_request TRUE but no literal stop-word in '{(message or '')[:60]}' -> ignored", flush=True)
+
+    # --- Phase 3.D: APPLY_TURN_ENABLED dispatch ---
+    # When the feature flag is set (deploy-time opt-in, default off until
+    # CP-3.5 live validation), route through the structural apply_turn /
+    # execute_action pipeline instead of the legacy 5-gate block + sentence
+    # queue. The legacy path stays resident as the else-branch fallback so
+    # operators can flip the flag to "0" without a git revert if the new
+    # path regresses (§7.1).
+    if os.environ.get("APPLY_TURN_ENABLED", "0") == "1" and _sa_output is not None:
+        # §7.2 invariant #6 — stale-result guard. Another utterance
+        # finalised ahead of this one can bump `latest_finalized_turn_id`
+        # beyond our stamped `turn_id` during any pending await above; in
+        # that case this dispatch would clobber fresh state and we drop it.
+        if turn_id < session.latest_finalized_turn_id:
+            print(f"[apply_turn] stale turn_id={turn_id} < latest={session.latest_finalized_turn_id}; drop", flush=True)
+            return
+
+        from .execute_adapters import (
+            LLMStreamBackend, TtsSink, CalcAdapter, RagFuture,
+        )
+        from .turn_dispatcher import apply_turn, execute_action
+
+        _llm_backend = LLMStreamBackend(
+            base_url=effective_base_url,
+            model=effective_model,
+            temperature=settings.llm.temperature,
+            max_tokens=200,
+            timeout_sec=settings.llm.timeout_sec,
+            system_prompt=system_prompt,
+        )
+        _tts_sink = TtsSink(
+            websocket=websocket,
+            session_id=session_id,
+            session=session,
+            rtc_handler=rtc_handler,
+        )
+        _calc_adapter = CalcAdapter(
+            session_id=session_id,
+            client_phone=session.client_phone,
+        )
+        _rag_future_adapter = RagFuture(_rag_task)
+
+        _action = apply_turn(
+            session.client_profile, _sa_output, message or "",
+            turn_id=turn_id,
+        )
+        print(f"[apply_turn] turn_id={turn_id} action={type(_action).__name__}", flush=True)
+
+        session.assistant_speaking = True
+        session.interrupted = False
+        _chunks: list[str] = []
+        try:
+            async for _chunk in execute_action(
+                _action,
+                ws=websocket,
+                session=session,
+                backend=_llm_backend,
+                tts=_tts_sink,
+                calc=_calc_adapter,
+                rag_future=_rag_future_adapter,
+            ):
+                _chunks.append(_chunk)
+        finally:
+            session.assistant_speaking = False
+
+        _full_answer = " ".join(_chunks).strip()
+        if session.interrupted and _full_answer:
+            _full_answer += " [прервано клиентом]"
+        if _full_answer:
+            _append_turn(chat_session, message, _full_answer, settings.app.memory_turns)
+            state.update(chat_session)
+            session.turn_count += 1
+
+        try:
+            await websocket.send_json({
+                "type": "response.done",
+                "session_id": session_id,
+                "backend": backend,
+                "used_knowledge": [],
+                "citations": [],
+                "timings": {},
+            })
+        except (RuntimeError, WebSocketDisconnect):
+            pass
+        return
 
     # --- Skip RAG for pure name-capture turns (prevents KB hallucinations on names) ---
     # Skip-RAG name-capture path only applies on the VERY FIRST name turn.
