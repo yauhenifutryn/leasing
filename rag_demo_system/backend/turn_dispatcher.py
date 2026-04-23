@@ -340,11 +340,42 @@ async def execute_action(
     client / speculative-RAG future instances.
     """
     if isinstance(action, FireCalc):
-        # Spec §7.2 invariant #7: run calc → render → TTS, LLM bypassed.
+        # Spec §7.2 invariants #3, #4, #7:
+        #   - LLM bypassed: renderer drives the spoken text verbatim.
+        #   - Tool-call history: success path appends to
+        #     `session.tool_calls_this_turn` so SMS replay + prior-result
+        #     reuse (app.py:2142-2155 / app.py:2332-2355) still see the
+        #     record after the refactor.
+        #   - Circuit breaker: repeated same-signature failures route
+        #     to a deterministic OOR message on the third attempt
+        #     instead of re-raising into the user's ear.
         from .profile_prompts import render_calc_result  # lazy import
 
-        result = await calc.calculate(action.calc_params)
-        spoken = render_calc_result(result)
+        calc_sig = _calc_signature(action.calc_params)
+        try:
+            result = await calc.calculate(action.calc_params)
+        except Exception:
+            _bump_calc_failure(session, calc_sig)
+            if _circuit_open(session):
+                oor = _CALC_CIRCUIT_OOR
+                await tts.say(oor)
+                yield oor
+                return
+            raise
+
+        if _result_ok(result):
+            _reset_calc_failure(session, calc_sig)
+            _append_tool_call(session, action.calc_params, result)
+            spoken = render_calc_result(result)
+        else:
+            _bump_calc_failure(session, calc_sig)
+            if _circuit_open(session):
+                oor = _CALC_CIRCUIT_OOR
+                await tts.say(oor)
+                yield oor
+                return
+            spoken = render_calc_result(result)
+
         await tts.say(spoken)
         yield spoken
         return
@@ -413,6 +444,89 @@ async def execute_action(
 
     return
     yield  # unreachable; keeps the function classified as async generator
+
+
+# ---- Circuit breaker + tool-call history helpers (Task 20) ----
+
+# Deterministic message for FireCalc's 3rd consecutive same-signature
+# failure (spec §7.2 #4). Kept as a module constant so tests can
+# substring-match without hardcoding the phrasing in two places.
+_CALC_CIRCUIT_OOR = (
+    "Извините, не могу посчитать, давайте перепроверим параметры."
+)
+
+# Threshold for circuit-open. Matches legacy semantics: on the third
+# consecutive failure the handler stops trying and speaks the OOR line.
+_CALC_FAILURE_THRESHOLD = 3
+
+
+def _calc_signature(params) -> str:
+    """Signature used to detect same-params-failing-again. Matches the
+    legacy shape at app.py:2639 / app.py:2346.
+    """
+    if isinstance(params, dict):
+        return str(sorted(params.items()))
+    return ""
+
+
+def _bump_calc_failure(session, sig: str) -> None:
+    """Increment the consecutive-failure counter. Same-signature failure
+    increments; different-signature failure resets to 1. Mirrors
+    app.py:2641-2648 verbatim. No-op when `session` is None (unit-test
+    shortcut)."""
+    if session is None or not sig:
+        return
+    prev_sig = getattr(session, "last_calc_signature", "")
+    if prev_sig == sig:
+        session.consecutive_calc_failures = (
+            getattr(session, "consecutive_calc_failures", 0) + 1
+        )
+    else:
+        session.consecutive_calc_failures = 1
+        session.last_calc_signature = sig
+
+
+def _reset_calc_failure(session, sig: str) -> None:
+    """Zero the consecutive-failure counter on a successful calc and
+    record the new signature. Mirrors app.py:2643-2645."""
+    if session is None:
+        return
+    session.consecutive_calc_failures = 0
+    if sig:
+        session.last_calc_signature = sig
+
+
+def _circuit_open(session) -> bool:
+    """True once consecutive same-signature failures hit the threshold.
+    When open, the FireCalc handler yields the OOR line instead of
+    propagating the error."""
+    if session is None:
+        return False
+    return (
+        getattr(session, "consecutive_calc_failures", 0)
+        >= _CALC_FAILURE_THRESHOLD
+    )
+
+
+def _result_ok(result) -> bool:
+    return isinstance(result, dict) and bool(result.get("ok", True))
+
+
+def _append_tool_call(session, params, result) -> None:
+    """Append a calculator invocation to the voice_session's per-turn
+    tool-call log. Orchestrator rolls this into `chat_history` at turn
+    end (voice_session.reset_turn_state). Spec §7.2 #3."""
+    if session is None:
+        return
+    log = getattr(session, "tool_calls_this_turn", None)
+    if log is None:
+        return
+    log.append({
+        "tool": "calculator",
+        "params": params,
+        "result": result,
+        "ok": _result_ok(result),
+    })
 
 
 def _session_interrupted(session) -> bool:

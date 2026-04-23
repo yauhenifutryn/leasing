@@ -512,3 +512,193 @@ async def test_fire_llm_fallback_respects_session_interrupted() -> None:
 
     # First sentence emitted; subsequent sentences suppressed.
     assert tts.chunks == ["Один."]
+
+
+# ---------------------------------------------------------------- Task 20
+# Calc-failure circuit breaker + tool-call history append.
+# Matches legacy shape: session.consecutive_calc_failures counts
+# same-signature failures (different signature resets to 1). On third
+# consecutive failure the FireCalc handler routes to the OOR message
+# instead of re-raising.
+
+
+class FakeVoiceSession:
+    """Minimal voice_session stand-in exposing the fields the FireCalc
+    handler reads / writes for circuit breaker + tool-call history."""
+    def __init__(self) -> None:
+        self.interrupted = False
+        self.tool_calls_this_turn: list[dict] = []
+        self.last_calc_signature: str = ""
+        self.consecutive_calc_failures: int = 0
+
+
+_CALC_PARAMS = {"cost": 240000, "currency": "BYN", "prepaid": 30}
+_CALC_RESULT_OK = {
+    "params": _CALC_PARAMS,
+    "advance_sum": 72000,
+    "payment_min": 8109,
+    "buyout_sum": 10000,
+    "total": 342317,
+    "num_payments": 36,
+    "increase_percent": 12.5,
+}
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_appends_tool_call_on_success() -> None:
+    """Spec §7.2 #3: FireCalc appends the invocation to
+    `session.tool_calls_this_turn` so SMS replay + prior-result reuse
+    still work after the refactor."""
+    from backend.turn_dispatcher import execute_action
+
+    session = FakeVoiceSession()
+    tts = FakeTts()
+    calc = FakeCalc(result=dict(_CALC_RESULT_OK))
+    fire = FireCalc(
+        snapshot=_complete_snapshot_usd_to_byn(),
+        calc_params=dict(_CALC_PARAMS),
+    )
+
+    async for _ in execute_action(
+        fire, ws=None, session=session, backend=FakeLLMBackend(),
+        tts=tts, calc=calc, rag_future=None,
+    ):
+        pass
+
+    assert len(session.tool_calls_this_turn) == 1
+    entry = session.tool_calls_this_turn[0]
+    assert entry["tool"] == "calculator"
+    assert entry["params"] == _CALC_PARAMS
+    assert entry["result"]["advance_sum"] == 72000
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_resets_failure_counter_on_success() -> None:
+    """Spec §7.2 #4: a successful calc zeroes the consecutive-failure
+    counter, matching legacy shape at app.py:2642-2648."""
+    from backend.turn_dispatcher import execute_action
+
+    session = FakeVoiceSession()
+    session.consecutive_calc_failures = 2  # prior failures
+    session.last_calc_signature = "stale"
+    calc = FakeCalc(result=dict(_CALC_RESULT_OK))
+    fire = FireCalc(
+        snapshot=_complete_snapshot_usd_to_byn(),
+        calc_params=dict(_CALC_PARAMS),
+    )
+
+    async for _ in execute_action(
+        fire, ws=None, session=session, backend=FakeLLMBackend(),
+        tts=FakeTts(), calc=calc, rag_future=None,
+    ):
+        pass
+
+    assert session.consecutive_calc_failures == 0
+    # New signature is recorded on success.
+    assert session.last_calc_signature == str(sorted(_CALC_PARAMS.items()))
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_increments_failure_counter_on_same_sig_exception() -> None:
+    """Same-signature failure → counter += 1. First failure propagates
+    so the orchestrator can log / route, matching current behaviour."""
+    from backend.turn_dispatcher import execute_action
+
+    session = FakeVoiceSession()
+    session.last_calc_signature = str(sorted(_CALC_PARAMS.items()))
+    session.consecutive_calc_failures = 1  # one prior same-sig fail
+    calc = FakeCalc(raises=RuntimeError("calc 500"))
+    fire = FireCalc(
+        snapshot=_complete_snapshot_usd_to_byn(),
+        calc_params=dict(_CALC_PARAMS),
+    )
+
+    with pytest.raises(RuntimeError, match="calc 500"):
+        async for _ in execute_action(
+            fire, ws=None, session=session, backend=FakeLLMBackend(),
+            tts=FakeTts(), calc=calc, rag_future=None,
+        ):
+            pass
+
+    assert session.consecutive_calc_failures == 2
+    assert session.last_calc_signature == str(sorted(_CALC_PARAMS.items()))
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_resets_counter_to_one_on_different_sig_exception() -> None:
+    """Different-signature failure → counter resets to 1 (legacy shape
+    at app.py:2646-2648). Prior signature is replaced."""
+    from backend.turn_dispatcher import execute_action
+
+    session = FakeVoiceSession()
+    session.last_calc_signature = "other"
+    session.consecutive_calc_failures = 2
+    calc = FakeCalc(raises=RuntimeError("calc 500"))
+    fire = FireCalc(
+        snapshot=_complete_snapshot_usd_to_byn(),
+        calc_params=dict(_CALC_PARAMS),
+    )
+
+    with pytest.raises(RuntimeError):
+        async for _ in execute_action(
+            fire, ws=None, session=session, backend=FakeLLMBackend(),
+            tts=FakeTts(), calc=calc, rag_future=None,
+        ):
+            pass
+
+    assert session.consecutive_calc_failures == 1
+    assert session.last_calc_signature == str(sorted(_CALC_PARAMS.items()))
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_routes_to_oor_on_third_consecutive_failure() -> None:
+    """Spec §7.2 #4: on the third consecutive same-signature failure
+    the handler yields the deterministic OOR text instead of re-raising
+    so the user hears something sane. LLM is NOT invoked."""
+    from backend.turn_dispatcher import execute_action
+
+    session = FakeVoiceSession()
+    session.last_calc_signature = str(sorted(_CALC_PARAMS.items()))
+    session.consecutive_calc_failures = 2  # two prior same-sig fails
+    calc = FakeCalc(raises=RuntimeError("calc 500"))
+    llm = FakeLLMBackend()
+    tts = FakeTts()
+    fire = FireCalc(
+        snapshot=_complete_snapshot_usd_to_byn(),
+        calc_params=dict(_CALC_PARAMS),
+    )
+
+    # Third failure MUST NOT raise — OOR routing instead.
+    chunks: list[str] = []
+    async for chunk in execute_action(
+        fire, ws=None, session=session, backend=llm,
+        tts=tts, calc=calc, rag_future=None,
+    ):
+        chunks.append(chunk)
+
+    assert session.consecutive_calc_failures == 3
+    # OOR text shipped to TTS.
+    spoken = tts.collected_text().lower()
+    assert "перепровер" in spoken or "не могу посчитать" in spoken
+    assert chunks  # yielded at least the OOR sentence
+    assert llm.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_tolerates_session_none() -> None:
+    """When no session is provided (unit-test shortcut) the handler
+    still runs calc + renders + propagates exceptions, but skips the
+    circuit-breaker bookkeeping."""
+    from backend.turn_dispatcher import execute_action
+
+    calc = FakeCalc(raises=RuntimeError("boom"))
+    with pytest.raises(RuntimeError, match="boom"):
+        async for _ in execute_action(
+            FireCalc(
+                snapshot=_complete_snapshot_usd_to_byn(),
+                calc_params=dict(_CALC_PARAMS),
+            ),
+            ws=None, session=None, backend=FakeLLMBackend(),
+            tts=FakeTts(), calc=calc, rag_future=None,
+        ):
+            pass
