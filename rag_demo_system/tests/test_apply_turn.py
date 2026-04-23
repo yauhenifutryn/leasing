@@ -350,3 +350,59 @@ def test_e8a_fire_calc_does_not_emit_when_profile_incomplete() -> None:
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="рассчитывай")
     assert not isinstance(action, FireCalc)
+
+
+# ---------------------------------------------------------------- Step 1
+# Step 1 — CHANGE_PENDING + is_confirmation → apply the staged change,
+# transition to CONFIRMED, and RE-DISPATCH (the now-complete + confirmed
+# state may unlock step 6 FireCalc on the second loop iteration).
+
+
+def test_change_pending_confirm_applies_change_and_fires_calc() -> None:
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 60}}}
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да, верно")
+    # Re-dispatch lands in step 6 FireCalc because profile is complete
+    # + CONFIRMED + is_confirmation.
+    assert isinstance(action, FireCalc)
+    assert profile.term_months == 60
+    assert profile.state == ProfileState.CONFIRMED
+    assert profile.pending_change is None
+
+
+def test_change_pending_confirm_applies_multi_field_changes() -> None:
+    profile = make_complete_profile(
+        subject="Легковой автомобиль",
+        client_type="Физическое лицо",
+    )
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {
+        "changes": {
+            "subject": {"old": "Легковой автомобиль", "new": "Грузовой автомобиль"},
+            "client_type": {"old": "Физическое лицо", "new": "Юридическое лицо"},
+        }
+    }
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+    assert profile.subject == "Грузовой автомобиль"
+    assert profile.client_type == "Юридическое лицо"
+    assert profile.state == ProfileState.CONFIRMED
+    assert profile.pending_change is None
+    # Calc fires on the re-dispatch pass (profile complete + CONFIRMED).
+    assert isinstance(action, FireCalc)
+
+
+def test_change_pending_deny_does_not_apply_and_stays_in_change_pending() -> None:
+    # is_confirmation=False on CHANGE_PENDING means the user rejected
+    # the change; staged data stays, profile stays in CHANGE_PENDING
+    # for the next turn's clarification.
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 60}}}
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="нет, подожди")
+    assert profile.term_months == 36
+    assert profile.state == ProfileState.CHANGE_PENDING
+    assert profile.pending_change is not None

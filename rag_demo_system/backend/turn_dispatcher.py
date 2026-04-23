@@ -104,6 +104,17 @@ def _project_snapshot(
     )
 
 
+# Sentinel reasons for Noop-as-redispatch-signal from _dispatch_once
+# back into apply_turn's loop. Step 1 / step 3 transitions consume the
+# classifier's confirmation semantics and want the top of the dispatch
+# to re-run against the now-mutated state (so e.g. CHANGE_PENDING+confirm
+# can cascade into FireCalc in the same turn).
+_REDISPATCH_REASONS = frozenset({
+    "redispatch_change",
+    "redispatch_deny",
+})
+
+
 def apply_turn(
     profile: ClientProfile,
     classifier_output: ClassifierOutput,
@@ -118,7 +129,55 @@ def apply_turn(
       - state-machine transitions (steps 1, 2, 5a)
     Never mutates on change proposals (step 4); mutation happens only
     when the user confirms on the next turn, re-entering step 1.
+
+    Re-dispatch bound: at most two iterations (spec §5). The second
+    pass cannot re-enter steps 1 or 3 because the state transition
+    that enabled them is consumed on the first pass.
     """
+    action: TurnAction = Noop(reason="uninitialized")
+    for _ in range(2):
+        action = _dispatch_once(profile, classifier_output, utterance)
+        if isinstance(action, Noop) and action.reason in _REDISPATCH_REASONS:
+            continue
+        break
+    return action
+
+
+def _dispatch_once(
+    profile: ClientProfile,
+    classifier_output: ClassifierOutput,
+    utterance: str,
+) -> TurnAction:
+    """Single-iteration body of the apply_turn dispatch. Returns a
+    Noop with reason ∈ _REDISPATCH_REASONS when the caller's loop
+    should re-enter; otherwise returns a terminal TurnAction.
+    """
+    # STEP 1 (post-change apply): CHANGE_PENDING + is_confirmation →
+    # apply the staged change, transition to CONFIRMED, re-dispatch
+    # so the mutated state can unlock step 6 FireCalc.
+    if (
+        profile.state == ProfileState.CHANGE_PENDING
+        and classifier_output.is_confirmation
+        and profile.pending_change
+    ):
+        changes = profile.pending_change.get("changes", {}) or {}
+        # Legacy single-field payload support (ClientProfile.pending_change
+        # allows either {"field":..,"new_value":..} or {"changes": {...}}).
+        if not changes and "field" in profile.pending_change:
+            field_name = profile.pending_change["field"]
+            new_value = profile.pending_change.get(
+                "new_value",
+                profile.pending_change.get("new"),
+            )
+            changes = {field_name: {"old": getattr(profile, field_name, None),
+                                    "new": new_value}}
+        for field_name, change in changes.items():
+            if hasattr(profile, field_name):
+                setattr(profile, field_name, change["new"])
+        profile.pending_change = None
+        profile.state = ProfileState.CONFIRMED
+        return Noop(reason="redispatch_change")
+
     # -------- pre-compute: grounded patches + implied flips + partition
     proposed = _grounded_proposed_patches(classifier_output, utterance)
     proposed.update(derive_implied_flips(profile, proposed))
