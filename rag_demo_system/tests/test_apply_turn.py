@@ -528,3 +528,70 @@ def test_step_5b_no_patches_applied_still_emits_clarify_when_incomplete() -> Non
     assert isinstance(action, EmitClarify)
     assert action.snapshot.cost == 80000.0
     assert "subject" in action.missing
+
+
+# ---------------------------------------------------------------- Step 7
+# Step 7 — classifier flags invalid_param (cost bounds violated,
+# unsupported currency, etc.) → FireOORMessage with deterministic text.
+# Fires BEFORE step 8 (LLM fallback) to avoid wasting an LLM call on
+# a structurally-rejected input.
+
+
+def test_step_7_invalid_param_routes_to_fire_oor_message() -> None:
+    profile = make_partial_profile()
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        action="invalid_param",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance="миллиард рублей")
+    assert isinstance(action, FireOORMessage)
+    assert len(action.message) > 0
+
+
+# ---------------------------------------------------------------- Step 8
+# Step 8 — catch-all → FireLLMFallback. Fires when no structural
+# dispatch matched and the user's utterance is a freeform question.
+# Snapshot carries any captured values as anti-hallucination anchor (E7).
+
+
+def test_step_8_fires_llm_fallback_for_freeform_question_from_confirmed() -> None:
+    # Profile is CONFIRMED (passed through readback earlier); user now
+    # asks a freeform question. No structural branch matches; step 8
+    # catches it.
+    profile = make_complete_profile()
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="RAG", is_confirmation=False)
+    action = apply_turn(
+        profile, classifier,
+        utterance="Какие документы нужны для оформления?",
+    )
+    assert isinstance(action, FireLLMFallback)
+    assert action.user_utterance == "Какие документы нужны для оформления?"
+    # Snapshot carries the confirmed profile as anchor.
+    assert action.snapshot is not None
+    assert action.snapshot.cost == 80000.0
+
+
+def test_step_8_snapshot_is_none_when_profile_is_empty() -> None:
+    # Profile has no captures (but in a non-COLLECTING terminal state).
+    profile = make_partial_profile()
+    profile.state = ProfileState.CONFIRMED  # edge case — forced
+    classifier = make_classifier(intent="RAG", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="что такое КАСКО?")
+    assert isinstance(action, FireLLMFallback)
+    assert action.snapshot is None
+
+
+def test_step_8_readback_pending_deny_no_correction_falls_to_llm_fallback() -> None:
+    # Plain "нет" on readback with no grounded correction: step 2 skipped
+    # (!is_confirmation), pre-compute yields no delta, no other step
+    # matches — FireLLMFallback handles the denial naturally (LLM will
+    # ask "что хотите изменить?").
+    profile = make_complete_profile()
+    profile.state = ProfileState.READBACK_PENDING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="нет, неправильно")
+    assert isinstance(action, FireLLMFallback)
+    # Profile state NOT changed by FireLLMFallback.
+    assert profile.state == ProfileState.READBACK_PENDING

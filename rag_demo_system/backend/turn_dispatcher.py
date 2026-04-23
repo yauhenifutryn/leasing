@@ -242,6 +242,12 @@ def _dispatch_once(
             calc_params=build_calc_params(profile),
         )
 
+    # STEP 7: classifier-flagged out-of-range → FireOORMessage with a
+    # deterministic text body. Fires BEFORE step 5b so an OOR during
+    # a COLLECTING turn doesn't get masked by the clarify branch.
+    if classifier_output.action == "invalid_param":
+        return FireOORMessage(message=_default_oor_message())
+
     # STEP 5b: profile incomplete AND state is COLLECTING → EmitClarify
     # with missing-fields list + snapshot anchor. Fires whether or not
     # patches were applied this turn (a no-classifier-info turn still
@@ -258,4 +264,31 @@ def _dispatch_once(
             snapshot=build_snapshot(profile),
         )
 
-    return Noop(reason="no_dispatch_branch_matched")
+    # STEP 8 (catch-all): freeform question, state-pending deny without
+    # correction, or any non-structural turn → FireLLMFallback. Snapshot
+    # included when any field is captured so LLM prompt has E7 anchor.
+    any_captured = any(
+        getattr(profile, f, None) is not None
+        for f in (
+            "client_type", "subject", "cost", "currency",
+            "condition_new", "age_years", "prepaid_pct",
+            "prepaid_amount", "term_months", "type_schedule",
+        )
+    )
+    return FireLLMFallback(
+        user_utterance=utterance,
+        rag_context=None,   # orchestrator populates pre-dispatch
+        snapshot=build_snapshot(profile) if any_captured else None,
+    )
+
+
+def _default_oor_message() -> str:
+    """Generic out-of-range message. Callers that need a more specific
+    text (cost bounds, unsupported currency) should look up the OOR
+    reason on the classifier output and dispatch to a more targeted
+    string in execute_action. Kept generic here so apply_turn stays
+    classifier-schema-agnostic."""
+    return (
+        "Извините, введённые параметры выходят за допустимый диапазон. "
+        "Уточните, пожалуйста, стоимость и валюту."
+    )
