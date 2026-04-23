@@ -11,7 +11,7 @@ refactor.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from .classifier_schema import ClassifierOutput, value_grounded
 from .profile_state import (
@@ -292,3 +292,64 @@ def _default_oor_message() -> str:
         "Извините, введённые параметры выходят за допустимый диапазон. "
         "Уточните, пожалуйста, стоимость и валюту."
     )
+
+
+# ====================================================================
+# execute_action — the IO-side of the dispatcher.
+# ====================================================================
+#
+# Phase 3.D: async generator that consumes a TurnAction and drives TTS,
+# the calculator, RAG retrieval, and the LLM stream as required by the
+# action's variant. The critical structural invariants from spec §7.2:
+#
+#   #1 RAG overlap: rag_future is awaited ONLY on FireLLMFallback.
+#   #2 Sentence queue: FireLLMFallback uses the existing streaming
+#      path (ported verbatim in Task 18).
+#   #3 Tool-call history: FireCalc appends to session.voice_session
+#      (Task 20).
+#   #4 Circuit breaker: 3 consecutive calc failures → FireOORMessage
+#      routing (Task 20).
+#   #5 Barge-in: every emit path checks session.interrupted at phrase
+#      boundary (Task 19).
+#   #6 Turn-id stale guard: orchestrator filters stale classifier
+#      results BEFORE calling apply_turn; execute_action assumes
+#      fresh input (Task 21).
+#   #7 Deterministic FireCalc narration: render_calc_result output
+#      goes straight to TTS, LLM is NEVER invoked.
+#
+# This Task 16 lands only the FireCalc handler (invariant #7).
+# Subsequent tasks add the other variants.
+
+
+async def execute_action(
+    action: TurnAction,
+    *,
+    ws,
+    session,
+    backend,
+    tts,
+    calc,
+    rag_future,
+) -> AsyncGenerator[str, None]:
+    """Dispatch a TurnAction to IO. Async generator of TTS chunks.
+
+    The `ws`, `session`, `backend`, `tts`, `calc`, `rag_future`
+    collaborators are injected so the handler stays testable in
+    isolation with fakes. In production, the orchestrator supplies
+    real WebSocket / voice_session / LLM backend / TTS sink / calc
+    client / speculative-RAG future instances.
+    """
+    if isinstance(action, FireCalc):
+        # Spec §7.2 invariant #7: run calc → render → TTS, LLM bypassed.
+        from .profile_prompts import render_calc_result  # lazy import
+
+        result = await calc.calculate(action.calc_params)
+        spoken = render_calc_result(result)
+        await tts.say(spoken)
+        yield spoken
+        return
+
+    # Other variants land in Tasks 17-20. Until then, a no-op emission
+    # preserves the async-generator protocol for the caller.
+    return
+    yield  # unreachable; keeps the function classified as async generator
