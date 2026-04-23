@@ -33,7 +33,7 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 ## Section 3 — Architecture refactor
 
-- [ ] CP-3.1 — `backend/profile_state.py` with pure functions + unit tests
+- [x] CP-3.1 — `backend/profile_state.py` with pure functions + unit tests (c0de06d..f7ed575, 2026-04-23). 23 tests, 100% line coverage. build_snapshot + partition_patches + derive_implied_flips + build_calc_params.
 - [ ] CP-3.2 — `TurnAction` ADT + `apply_turn` with 100% coverage
 - [ ] CP-3.3 — Orchestrator wired to `apply_turn`
 - [ ] CP-3.4 — Dead code removed; `app.py` down ~800 lines
