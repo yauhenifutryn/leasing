@@ -11,7 +11,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.profile_state import build_snapshot, partition_patches
+from backend.profile_state import (
+    build_snapshot,
+    partition_patches,
+    derive_implied_flips,
+)
 from backend.session import ClientProfile
 
 
@@ -111,3 +115,91 @@ def test_partition_patches_none_new_value_on_captured_field_is_delta() -> None:
     first_time, delta = partition_patches(profile, proposed)
     assert first_time == {}
     assert delta == {"age_years": {"old": 5, "new": None}}
+
+
+# --- derive_implied_flips ---
+
+def test_implied_flip_truck_forces_yur_litso() -> None:
+    profile = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+    )
+    flips = derive_implied_flips(profile, {"subject": "Грузовой автомобиль"})
+    assert flips == {"client_type": "Юридическое лицо"}
+
+
+def test_implied_flip_spectech_forces_yur_litso() -> None:
+    profile = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+    )
+    flips = derive_implied_flips(profile, {"subject": "Спецтехника"})
+    assert flips == {"client_type": "Юридическое лицо"}
+
+
+def test_implied_flip_commercial_transport_forces_yur_litso() -> None:
+    profile = ClientProfile(client_type="Физическое лицо")
+    flips = derive_implied_flips(profile, {"subject": "Коммерческий транспорт"})
+    assert flips == {"client_type": "Юридическое лицо"}
+
+
+def test_no_flip_when_client_type_already_yur() -> None:
+    profile = ClientProfile(
+        client_type="Юридическое лицо",
+        subject="Легковой автомобиль",
+    )
+    flips = derive_implied_flips(profile, {"subject": "Грузовой автомобиль"})
+    assert flips == {}
+
+
+def test_no_flip_when_classifier_already_proposes_yur() -> None:
+    # Classifier already flipped client_type to Юр; no additional implied flip.
+    profile = ClientProfile(client_type="Физическое лицо")
+    flips = derive_implied_flips(
+        profile,
+        {"subject": "Грузовой автомобиль", "client_type": "Юридическое лицо"},
+    )
+    assert flips == {}
+
+
+def test_no_flip_for_passenger_vehicle() -> None:
+    profile = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+    )
+    flips = derive_implied_flips(profile, {"subject": "Легковой автомобиль"})
+    assert flips == {}
+
+
+def test_condition_new_clears_age_years() -> None:
+    profile = ClientProfile(condition_new=0, age_years=5)
+    flips = derive_implied_flips(profile, {"condition_new": 1})
+    assert flips == {"age_years": None}
+
+
+def test_condition_new_stays_0_does_not_clear_age_years() -> None:
+    profile = ClientProfile(condition_new=0, age_years=5)
+    flips = derive_implied_flips(profile, {"condition_new": 0})
+    assert flips == {}
+
+
+def test_condition_new_1_without_age_years_is_noop() -> None:
+    profile = ClientProfile(condition_new=0, age_years=None)
+    flips = derive_implied_flips(profile, {"condition_new": 1})
+    assert flips == {}
+
+
+def test_implied_flips_combined_subject_and_condition() -> None:
+    # Edge case: user says "Грузовой новый" — subject flip + condition flip
+    # in one turn. Both implied flips must appear.
+    profile = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        condition_new=0,
+        age_years=5,
+    )
+    flips = derive_implied_flips(
+        profile,
+        {"subject": "Грузовой автомобиль", "condition_new": 1},
+    )
+    assert flips == {"client_type": "Юридическое лицо", "age_years": None}

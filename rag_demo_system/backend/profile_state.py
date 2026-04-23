@@ -71,3 +71,46 @@ def partition_patches(
             delta[field_name] = {"old": current, "new": new_value}
         # else: no-op, drop
     return first_time, delta
+
+
+# Subjects that force client_type → Юридическое лицо per business rules
+# (leasing of commercial-use vehicles is not available to физлица).
+_COMMERCIAL_SUBJECTS = frozenset({
+    "Грузовой автомобиль",
+    "Спецтехника",
+    "Коммерческий транспорт",
+})
+
+
+def derive_implied_flips(profile: ClientProfile, proposed: dict) -> dict:
+    """Compute cross-field flips forced by proposed patches.
+
+    Rule table (spec §5.1):
+      - subject ∈ commercial_subjects AND profile.client_type ==
+        Физическое лицо AND classifier did NOT already flip client_type
+        → implied: client_type = Юридическое лицо.
+      - condition_new becomes 1 (new vehicle) AND profile.age_years is
+        not None
+        → implied: age_years = None (new vehicle has no age).
+
+    Returns a dict {field: new_value} of flips to merge into the
+    classifier's proposed patches BEFORE partition_patches runs. The
+    delta entries these produce on captured fields naturally flow
+    through EmitChangeConfirm (step 4) per the user's capture-first
+    confirmation principle.
+    """
+    flips: dict = {}
+
+    new_subject = proposed.get("subject", profile.subject)
+    if (
+        new_subject in _COMMERCIAL_SUBJECTS
+        and profile.client_type == "Физическое лицо"
+        and proposed.get("client_type") != "Юридическое лицо"
+    ):
+        flips["client_type"] = "Юридическое лицо"
+
+    new_condition = proposed.get("condition_new", profile.condition_new)
+    if new_condition == 1 and profile.age_years is not None:
+        flips["age_years"] = None
+
+    return flips
