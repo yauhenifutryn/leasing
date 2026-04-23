@@ -178,6 +178,15 @@ def _dispatch_once(
         profile.state = ProfileState.CONFIRMED
         return Noop(reason="redispatch_change")
 
+    # STEP 2: READBACK_PENDING + is_confirmation → CONFIRMED. No
+    # return — we fall through to step 6 in the same iteration so
+    # calc fires immediately after confirmation.
+    if (
+        profile.state == ProfileState.READBACK_PENDING
+        and classifier_output.is_confirmation
+    ):
+        profile.state = ProfileState.CONFIRMED
+
     # -------- pre-compute: grounded patches + implied flips + partition
     proposed = _grounded_proposed_patches(classifier_output, utterance)
     proposed.update(derive_implied_flips(profile, proposed))

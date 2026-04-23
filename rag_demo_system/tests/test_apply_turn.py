@@ -406,3 +406,29 @@ def test_change_pending_deny_does_not_apply_and_stays_in_change_pending() -> Non
     assert profile.term_months == 36
     assert profile.state == ProfileState.CHANGE_PENDING
     assert profile.pending_change is not None
+
+
+# ---------------------------------------------------------------- Step 2
+# Step 2 — READBACK_PENDING + is_confirmation → CONFIRMED, and calc
+# fires immediately on the same call (step 6 picks it up after the
+# state transition).
+
+
+def test_readback_pending_confirm_transitions_to_confirmed_and_fires_calc() -> None:
+    profile = make_complete_profile()
+    profile.state = ProfileState.READBACK_PENDING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Верно, да")
+    assert isinstance(action, FireCalc)
+    assert profile.state == ProfileState.CONFIRMED
+
+
+def test_readback_pending_deny_does_not_transition_nor_fire_calc() -> None:
+    profile = make_complete_profile()
+    profile.state = ProfileState.READBACK_PENDING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="нет, неправильно")
+    # Without a grounded correction (step 3, Task 13.3), a plain deny
+    # stays in READBACK_PENDING.
+    assert profile.state == ProfileState.READBACK_PENDING
+    assert not isinstance(action, FireCalc)
