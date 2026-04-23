@@ -250,3 +250,57 @@ def test_e7_snapshot_anchor_invariant_holds_for_any_snapshot_carrying_action() -
         assert action.snapshot.cost == 80000.0
         assert action.snapshot.currency == "USD"
         assert action.snapshot.term_months == 36
+
+
+# ---------------------------------------------------------------- E7b
+# E7b — Implicit cross-field flip (subject→truck forces client_type→Юр)
+# emits a PAIRED EmitChangeConfirm, not two separate confirmations.
+# Rule table lives in profile_state.derive_implied_flips; apply_turn
+# step 4 folds the flip into the delta set uniformly.
+
+
+def test_e7b_subject_flip_forcing_client_type_emits_paired_confirm() -> None:
+    profile = make_complete_profile(
+        subject="Легковой автомобиль",
+        client_type="Физическое лицо",
+    )
+    profile.state = ProfileState.CONFIRMED
+    utterance = "Да, я всё-таки хочу грузовой автомобиль"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        subject="Грузовой автомобиль",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert isinstance(action, EmitChangeConfirm)
+    assert "subject" in action.changes
+    assert "client_type" in action.changes
+    assert action.changes["subject"]["new"] == "Грузовой автомобиль"
+    assert action.changes["client_type"]["old"] == "Физическое лицо"
+    assert action.changes["client_type"]["new"] == "Юридическое лицо"
+    assert profile.state == ProfileState.CHANGE_PENDING
+    # Profile fields NOT mutated yet — confirmation gates the change.
+    assert profile.subject == "Легковой автомобиль"
+    assert profile.client_type == "Физическое лицо"
+
+
+def test_e7b_no_implied_flip_when_client_type_already_yur() -> None:
+    # Same subject flip but client_type already Юр → only subject is in
+    # delta (no client_type entry). Verifies the implied-flip guard.
+    profile = make_complete_profile(
+        subject="Легковой автомобиль",
+        client_type="Юридическое лицо",
+    )
+    profile.state = ProfileState.CONFIRMED
+    utterance = "переключи на грузовой"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        subject="Грузовой автомобиль",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert isinstance(action, EmitChangeConfirm)
+    assert "subject" in action.changes
+    assert "client_type" not in action.changes
