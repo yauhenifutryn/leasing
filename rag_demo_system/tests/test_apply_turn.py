@@ -304,3 +304,49 @@ def test_e7b_no_implied_flip_when_client_type_already_yur() -> None:
     assert isinstance(action, EmitChangeConfirm)
     assert "subject" in action.changes
     assert "client_type" not in action.changes
+
+
+# ---------------------------------------------------------------- E8a
+# E8a — apply_turn emits FireCalc with USD-aware snapshot and correctly
+# shaped calc_params. The post-calc narration itself is rendered by
+# execute_action (E8b integration test lands in Phase 3.D) using
+# profile_prompts.render_calc_result(result), bypassing the LLM.
+
+
+def test_e8a_fire_calc_params_preserve_original_usd_fields() -> None:
+    profile = make_complete_profile(
+        cost=240000.0, currency="BYN",
+        original_cost=80000.0, original_currency="USD",
+    )
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да, рассчитывай")
+    assert isinstance(action, FireCalc)
+    # Snapshot carries both the applied BYN cost AND the original USD
+    # fields so render_calc_result can emit the dual-disclosure prefix.
+    assert action.snapshot.cost == 240000.0
+    assert action.snapshot.currency == "BYN"
+    assert action.snapshot.original_cost == 80000.0
+    assert action.snapshot.original_currency == "USD"
+    # calc_params is what the calculator API consumes (build_calc_params).
+    assert action.calc_params["cost"] == 240000.0
+    assert action.calc_params["currency"] == "BYN"
+    assert action.calc_params["client_type"] == "Физическое лицо"
+    assert action.calc_params["term"] == 36
+
+
+def test_e8a_fire_calc_does_not_emit_without_confirmation() -> None:
+    # CONFIRMED state alone is not enough — is_confirmation gates FireCalc.
+    profile = make_complete_profile()
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="расскажи про страховку")
+    assert not isinstance(action, FireCalc)
+
+
+def test_e8a_fire_calc_does_not_emit_when_profile_incomplete() -> None:
+    profile = make_partial_profile(cost=80000.0, currency="USD")
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="рассчитывай")
+    assert not isinstance(action, FireCalc)

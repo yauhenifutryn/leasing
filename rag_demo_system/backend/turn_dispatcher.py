@@ -160,4 +160,18 @@ def apply_turn(
         profile.state = ProfileState.READBACK_PENDING
         return EmitReadback(snapshot=build_snapshot(profile))
 
+    # STEP 6 (E8a): CONFIRMED + is_confirmation + calc-ready → FireCalc.
+    # Profile is already validated; build calc params from profile state.
+    # Post-calc narration is rendered by execute_action's FireCalc
+    # handler via render_calc_result(result) — LLM is never involved.
+    if (
+        profile.state == ProfileState.CONFIRMED
+        and classifier_output.is_confirmation
+        and profile.is_complete_for_calc()
+    ):
+        return FireCalc(
+            snapshot=build_snapshot(profile),
+            calc_params=build_calc_params(profile),
+        )
+
     return Noop(reason="no_dispatch_branch_matched")
