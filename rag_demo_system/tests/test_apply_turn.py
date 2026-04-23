@@ -196,3 +196,57 @@ def test_e6_top_level_subject_delta_also_routes_to_change_confirm() -> None:
     assert "subject" in action.changes
     assert action.changes["subject"]["old"] == "Легковой автомобиль"
     assert action.changes["subject"]["new"] == "Грузовой автомобиль"
+
+
+# ---------------------------------------------------------------- E7
+# E7 — EmitReadback / EmitClarify / FireLLMFallback carry the current
+# profile as a ProfileSnapshot so downstream renderers can use it as
+# an anti-hallucination anchor. Kills the live-call cc7fc318 bug
+# where the LLM clarify prompt re-asked for already-captured fields
+# after an implicit subject pivot.
+
+
+def test_e7_emit_readback_snapshot_carries_every_captured_field() -> None:
+    profile = make_complete_profile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="USD",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        type_schedule="0",
+    )
+    profile.state = ProfileState.COLLECTING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="ну")
+    assert isinstance(action, EmitReadback)
+    # Every captured field must surface on the snapshot so the
+    # deterministic readback renderer has full context.
+    assert action.snapshot.client_type == "Физическое лицо"
+    assert action.snapshot.subject == "Легковой автомобиль"
+    assert action.snapshot.cost == 80000.0
+    assert action.snapshot.currency == "USD"
+    assert action.snapshot.condition_new == 1
+    assert action.snapshot.prepaid_pct == 20.0
+    assert action.snapshot.term_months == 36
+    assert action.snapshot.type_schedule == "0"
+
+
+def test_e7_snapshot_anchor_invariant_holds_for_any_snapshot_carrying_action() -> None:
+    # Partial profile: whatever action fires, if it carries a snapshot
+    # the snapshot must surface what was captured. Noop is acceptable.
+    profile = make_partial_profile(
+        subject="Грузовой автомобиль",
+        cost=80000.0,
+        currency="USD",
+        term_months=36,
+        client_type="Юридическое лицо",  # avoids implied flip
+    )
+    classifier = make_classifier(intent="CONVERSATION")
+    action = apply_turn(profile, classifier, utterance="ну")
+    assert hasattr(action, "snapshot") or isinstance(action, Noop)
+    if hasattr(action, "snapshot") and action.snapshot is not None:
+        assert action.snapshot.cost == 80000.0
+        assert action.snapshot.currency == "USD"
+        assert action.snapshot.term_months == 36
