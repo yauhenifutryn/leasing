@@ -349,7 +349,48 @@ async def execute_action(
         yield spoken
         return
 
-    # Other variants land in Tasks 17-20. Until then, a no-op emission
-    # preserves the async-generator protocol for the caller.
+    if isinstance(action, EmitReadback):
+        # Deterministic readback from captured snapshot. LLM bypassed.
+        from .profile_prompts import build_readback_text
+        spoken = build_readback_text(action.snapshot)
+        await tts.say(spoken)
+        yield spoken
+        return
+
+    if isinstance(action, EmitClarify):
+        # Ask for the missing fields. build_clarification_prompt is the
+        # existing Fix 1.5 / 1.11 / 1.13-aware renderer; it expects a
+        # set[str] of field names plus a profile-shaped object. Snapshot
+        # duck-types as profile (same field attributes).
+        from .profile_prompts import build_clarification_prompt
+        spoken = build_clarification_prompt(set(action.missing), action.snapshot)
+        await tts.say(spoken)
+        yield spoken
+        return
+
+    if isinstance(action, EmitChangeConfirm):
+        # Confirm the staged changes. build_change_confirm_text consumes
+        # a pending_change dict; we pass the multi-field shape that
+        # apply_turn step 4 produced.
+        from .profile_prompts import build_change_confirm_text
+        spoken = build_change_confirm_text({"changes": action.changes})
+        await tts.say(spoken)
+        yield spoken
+        return
+
+    if isinstance(action, FireOORMessage):
+        # Deterministic OOR text — no renderer needed, payload IS the text.
+        await tts.say(action.message)
+        yield action.message
+        return
+
+    if isinstance(action, Noop):
+        # Intentional silence: stale-turn discard, state-transition with
+        # no follow-up, etc. No TTS, no LLM.
+        return
+
+    # FireLLMFallback lands in Task 18 (RAG overlap + sentence queue).
+    # For now, fall through with no emission so tests for that variant
+    # can distinguish "not yet wired" from "wired but empty".
     return
     yield  # unreachable; keeps the function classified as async generator

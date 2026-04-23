@@ -15,7 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from backend.turn_action import (
+    EmitReadback,
+    EmitClarify,
+    EmitChangeConfirm,
     FireCalc,
+    FireOORMessage,
+    Noop,
     ProfileSnapshot,
 )
 
@@ -164,4 +169,122 @@ async def test_e8b_fire_calc_propagates_calc_exception() -> None:
             pass
 
     # LLM still not called even on calc failure.
+    assert llm.call_count == 0
+
+
+# ---------------------------------------------------------------- EmitReadback
+
+@pytest.mark.asyncio
+async def test_emit_readback_speaks_deterministic_readback_without_llm() -> None:
+    from backend.turn_dispatcher import execute_action
+
+    snap = _complete_snapshot_usd_to_byn()
+    tts = FakeTts()
+    llm = FakeLLMBackend()
+
+    async for _ in execute_action(
+        EmitReadback(snapshot=snap),
+        ws=None, session=None, backend=llm,
+        tts=tts, calc=None, rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    # Readback mentions the captured subject verbatim (anti-hallucination
+    # anchor per E7).
+    assert "Легковой автомобиль" in spoken
+    # LLM not involved.
+    assert llm.call_count == 0
+
+
+# ---------------------------------------------------------------- EmitClarify
+
+@pytest.mark.asyncio
+async def test_emit_clarify_asks_for_missing_fields_without_llm() -> None:
+    from backend.turn_dispatcher import execute_action
+
+    snap = ProfileSnapshot(
+        client_type=None, subject=None,
+        cost=80000.0, currency="USD",
+        original_cost=None, original_currency=None,
+        condition_new=None, age_years=None,
+        prepaid_pct=None, prepaid_amount=None,
+        term_months=None, type_schedule=None,
+    )
+    tts = FakeTts()
+    llm = FakeLLMBackend()
+
+    async for _ in execute_action(
+        EmitClarify(missing=["client_type", "subject"], snapshot=snap),
+        ws=None, session=None, backend=llm,
+        tts=tts, calc=None, rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    # build_clarification_prompt handles {client_type, subject} explicitly.
+    assert spoken  # non-empty
+    assert llm.call_count == 0
+
+
+# ---------------------------------------------------------------- EmitChangeConfirm
+
+@pytest.mark.asyncio
+async def test_emit_change_confirm_asks_to_confirm_change_without_llm() -> None:
+    from backend.turn_dispatcher import execute_action
+
+    snap = _complete_snapshot_usd_to_byn()
+    tts = FakeTts()
+    llm = FakeLLMBackend()
+
+    async for _ in execute_action(
+        EmitChangeConfirm(
+            changes={"term_months": {"old": 36, "new": 60}},
+            snapshot=snap,
+        ),
+        ws=None, session=None, backend=llm,
+        tts=tts, calc=None, rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert spoken  # non-empty (build_change_confirm_text produces a phrase)
+    assert llm.call_count == 0
+
+
+# ---------------------------------------------------------------- Noop / OOR
+
+@pytest.mark.asyncio
+async def test_noop_emits_nothing() -> None:
+    from backend.turn_dispatcher import execute_action
+
+    tts = FakeTts()
+    llm = FakeLLMBackend()
+
+    async for _ in execute_action(
+        Noop(reason="test"),
+        ws=None, session=None, backend=llm,
+        tts=tts, calc=None, rag_future=None,
+    ):
+        pass
+
+    assert tts.chunks == []
+    assert llm.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fire_oor_message_speaks_deterministic_text_without_llm() -> None:
+    from backend.turn_dispatcher import execute_action
+
+    tts = FakeTts()
+    llm = FakeLLMBackend()
+
+    async for _ in execute_action(
+        FireOORMessage(message="Стоимость вне допустимого диапазона."),
+        ws=None, session=None, backend=llm,
+        tts=tts, calc=None, rag_future=None,
+    ):
+        pass
+
+    assert "вне допустимого диапазона" in tts.collected_text()
     assert llm.call_count == 0
