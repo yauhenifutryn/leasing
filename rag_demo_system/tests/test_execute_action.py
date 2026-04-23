@@ -19,6 +19,7 @@ from backend.turn_action import (
     EmitClarify,
     EmitChangeConfirm,
     FireCalc,
+    FireLLMFallback,
     FireOORMessage,
     Noop,
     ProfileSnapshot,
@@ -288,3 +289,226 @@ async def test_fire_oor_message_speaks_deterministic_text_without_llm() -> None:
 
     assert "вне допустимого диапазона" in tts.collected_text()
     assert llm.call_count == 0
+
+
+# ---------------------------------------------------------------- FireLLMFallback
+# Task 18 — FireLLMFallback handler. Mirrors app.py:2513-2778 streaming
+# semantics: tokens flow through SentenceDetector, phrase-boundary
+# sentences ship to TTS one at a time, LLM is the ONLY path that awaits
+# rag_future (spec §7.2 invariants #1, #2, #5).
+
+
+class StreamingLLMBackend:
+    """Fake streaming backend: async gen of content tokens.
+
+    Matches the FireLLMFallback handler's contract — `backend.stream(...)`
+    yields raw text tokens (no OpenAI event envelope). Production adapter
+    wraps `iter_openai_compatible_stream_events` to extract deltas.
+    """
+    def __init__(self, tokens, per_token_sleep: float = 0.0) -> None:
+        self.tokens = list(tokens)
+        self.per_token_sleep = per_token_sleep
+        self.call_count = 0
+        self.last_kwargs: dict | None = None
+
+    async def stream(self, *args, **kwargs):
+        import asyncio as _asyncio
+        self.call_count += 1
+        self.last_kwargs = kwargs
+        for token in self.tokens:
+            if self.per_token_sleep:
+                await _asyncio.sleep(self.per_token_sleep)
+            yield token
+
+
+class ReadyRAG:
+    """Pre-resolved RAG future — `.result()` is awaitable and returns
+    the context string synchronously. Mirrors the adapter the
+    orchestrator wraps around `asyncio.create_task(engine.retrieve, ...)`.
+    """
+    def __init__(self, context: str = "") -> None:
+        self.context = context
+        self.result_calls = 0
+
+    async def result(self) -> str:
+        self.result_calls += 1
+        return self.context
+
+
+class InterruptingSession:
+    """Session stand-in that flips `interrupted=True` after the Nth
+    sentence boundary. Simulates barge-in mid-readback (invariant #5).
+    """
+    def __init__(self, flip_after_n_sentences: int) -> None:
+        self.interrupted = False
+        self._seen = 0
+        self._limit = flip_after_n_sentences
+
+    def observe_sentence(self) -> None:
+        self._seen += 1
+        if self._seen >= self._limit:
+            self.interrupted = True
+
+
+@pytest.mark.asyncio
+async def test_fire_llm_fallback_first_token_latency_under_budget() -> None:
+    """Invariant #1 + #2: the handler adds negligible overhead to the
+    LLM's own token cadence. With a fake streaming at 20 ms/token, the
+    first sentence must reach TTS within a 100 ms synthetic budget.
+    """
+    import time
+    from backend.turn_dispatcher import execute_action
+
+    # First boundary hits after 2 tokens (period + trailing space).
+    tokens = ["Здрав", "ствуйте. ", "Как ", "дела?"]
+    backend = StreamingLLMBackend(tokens, per_token_sleep=0.02)
+    tts = FakeTts()
+
+    start = time.monotonic()
+    first_chunk_at: float | None = None
+    async for _chunk in execute_action(
+        FireLLMFallback(user_utterance="привет"),
+        ws=None, session=None, backend=backend, tts=tts, calc=None,
+        rag_future=ReadyRAG(context="кб-контекст"),
+    ):
+        if first_chunk_at is None:
+            first_chunk_at = time.monotonic() - start
+            assert first_chunk_at < 0.1, f"first chunk too late: {first_chunk_at:.3f}s"
+
+    assert first_chunk_at is not None
+    # Handler invoked the backend exactly once.
+    assert backend.call_count == 1
+    # TTS saw at least two phrase-level sentences (no buffering regression).
+    assert len(tts.chunks) >= 2
+
+
+@pytest.mark.asyncio
+async def test_fire_llm_fallback_awaits_rag_future_result() -> None:
+    """Invariant #1: RAG overlap preservation. Handler MUST await
+    `rag_future.result()` before streaming so the LLM prompt carries
+    the KB context."""
+    from backend.turn_dispatcher import execute_action
+
+    backend = StreamingLLMBackend(["Ответ."], per_token_sleep=0.0)
+    tts = FakeTts()
+    rag = ReadyRAG(context="адрес: Минск, Немига 5")
+
+    async for _ in execute_action(
+        FireLLMFallback(user_utterance="где вы находитесь?"),
+        ws=None, session=None, backend=backend, tts=tts, calc=None,
+        rag_future=rag,
+    ):
+        pass
+
+    # RAG future was awaited exactly once (no re-entry).
+    assert rag.result_calls == 1
+    # RAG context reached the backend prompt. We inspect last_kwargs to
+    # assert the handler actually threaded rag_context into messages.
+    msgs = (backend.last_kwargs or {}).get("messages", [])
+    joined = " ".join(m.get("content", "") for m in msgs if isinstance(m, dict))
+    assert "Немига 5" in joined
+
+
+@pytest.mark.asyncio
+async def test_fire_llm_fallback_tolerates_rag_future_none() -> None:
+    """Handler must not crash when orchestrator passes `rag_future=None`
+    (e.g. speculative RAG failed to launch)."""
+    from backend.turn_dispatcher import execute_action
+
+    backend = StreamingLLMBackend(["Здравствуйте. "], per_token_sleep=0.0)
+    tts = FakeTts()
+
+    async for _ in execute_action(
+        FireLLMFallback(user_utterance="привет"),
+        ws=None, session=None, backend=backend, tts=tts, calc=None,
+        rag_future=None,
+    ):
+        pass
+
+    assert backend.call_count == 1
+    assert tts.chunks  # non-empty
+
+
+@pytest.mark.asyncio
+async def test_fire_llm_fallback_swallows_rag_future_exception() -> None:
+    """Invariant #1 fail-open: if `rag_future.result()` raises, the
+    handler proceeds with empty RAG context instead of bubbling the
+    exception. Speculative RAG is best-effort."""
+    from backend.turn_dispatcher import execute_action
+
+    class ExplodingRAG:
+        async def result(self) -> str:
+            raise RuntimeError("RAG upstream 500")
+
+    backend = StreamingLLMBackend(["Здравствуйте. "], per_token_sleep=0.0)
+    tts = FakeTts()
+
+    async for _ in execute_action(
+        FireLLMFallback(user_utterance="привет"),
+        ws=None, session=None, backend=backend, tts=tts, calc=None,
+        rag_future=ExplodingRAG(),
+    ):
+        pass
+
+    assert backend.call_count == 1  # LLM still fired on empty context
+
+
+@pytest.mark.asyncio
+async def test_fire_llm_fallback_injects_snapshot_as_anchor() -> None:
+    """E7 anti-hallucination anchor: when snapshot has captured fields,
+    the user content must carry them so the LLM does not re-ask."""
+    from backend.turn_dispatcher import execute_action
+
+    snap = _complete_snapshot_usd_to_byn()
+    backend = StreamingLLMBackend(["ok"], per_token_sleep=0.0)
+    tts = FakeTts()
+
+    async for _ in execute_action(
+        FireLLMFallback(user_utterance="а что по документам?", snapshot=snap),
+        ws=None, session=None, backend=backend, tts=tts, calc=None,
+        rag_future=None,
+    ):
+        pass
+
+    msgs = (backend.last_kwargs or {}).get("messages", [])
+    joined = " ".join(m.get("content", "") for m in msgs if isinstance(m, dict))
+    # Snapshot values (captured subject, cost, currency) appear in prompt.
+    assert "Легковой автомобиль" in joined
+    assert "240000" in joined or "240000.0" in joined
+
+
+@pytest.mark.asyncio
+async def test_fire_llm_fallback_respects_session_interrupted() -> None:
+    """Invariant #5: barge-in aborts mid-stream at the next phrase
+    boundary. After the session flips `interrupted=True`, no further
+    sentences should reach TTS."""
+    from backend.turn_dispatcher import execute_action
+
+    # 3 full sentences in the stream.
+    tokens = [
+        "Один. ",
+        "Два. ",
+        "Три. ",
+    ]
+    backend = StreamingLLMBackend(tokens, per_token_sleep=0.0)
+    tts = FakeTts()
+    session = InterruptingSession(flip_after_n_sentences=1)
+
+    # Wrap tts.say to signal the session after each sentence lands.
+    orig_say = tts.say
+
+    async def _observing_say(text: str) -> None:
+        await orig_say(text)
+        session.observe_sentence()
+
+    tts.say = _observing_say  # type: ignore[method-assign]
+
+    async for _ in execute_action(
+        FireLLMFallback(user_utterance="расскажи"),
+        ws=None, session=session, backend=backend, tts=tts, calc=None,
+        rag_future=None,
+    ):
+        pass
+
+    # First sentence emitted; subsequent sentences suppressed.
+    assert tts.chunks == ["Один."]

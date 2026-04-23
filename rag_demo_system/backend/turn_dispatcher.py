@@ -389,8 +389,141 @@ async def execute_action(
         # no follow-up, etc. No TTS, no LLM.
         return
 
-    # FireLLMFallback lands in Task 18 (RAG overlap + sentence queue).
-    # For now, fall through with no emission so tests for that variant
-    # can distinguish "not yet wired" from "wired but empty".
+    if isinstance(action, FireLLMFallback):
+        # Spec §7.2 invariants #1 + #2 + #5: RAG overlap preserved by
+        # awaiting the speculative future HERE and only HERE; sentence
+        # queue + phrase-level TTS dispatch mirror app.py:2513-2778;
+        # barge-in short-circuits at each sentence boundary.
+        rag_context: Optional[str] = None
+        if rag_future is not None:
+            try:
+                rag_context = await rag_future.result()
+            except Exception:
+                rag_context = None
+        async for chunk in _stream_llm_to_tts(
+            utterance=action.user_utterance,
+            rag_context=rag_context or action.rag_context,
+            snapshot=action.snapshot,
+            backend=backend,
+            tts=tts,
+            session=session,
+        ):
+            yield chunk
+        return
+
     return
     yield  # unreachable; keeps the function classified as async generator
+
+
+def _session_interrupted(session) -> bool:
+    """Barge-in check. Tolerates `session=None` (used by unit tests that
+    bypass the real voice_session)."""
+    return session is not None and bool(getattr(session, "interrupted", False))
+
+
+def _snapshot_anchor_lines(snap: ProfileSnapshot) -> list[str]:
+    """Render the captured fields of a snapshot as prompt anchor lines.
+    Fields with `None` are omitted so the LLM does not see placeholder
+    slots it might try to fill.
+    """
+    pairs: list[tuple[str, object]] = [
+        ("client_type", snap.client_type),
+        ("subject", snap.subject),
+        ("cost", snap.cost),
+        ("currency", snap.currency),
+        ("original_cost", snap.original_cost),
+        ("original_currency", snap.original_currency),
+        ("condition_new", snap.condition_new),
+        ("age_years", snap.age_years),
+        ("prepaid_pct", snap.prepaid_pct),
+        ("prepaid_amount", snap.prepaid_amount),
+        ("term_months", snap.term_months),
+        ("type_schedule", snap.type_schedule),
+    ]
+    return [f"- {k}: {v}" for k, v in pairs if v is not None]
+
+
+def _build_fallback_messages(
+    utterance: str,
+    rag_context: Optional[str],
+    snapshot: Optional[ProfileSnapshot],
+) -> list[dict]:
+    """Assemble the chat messages for the FireLLMFallback stream.
+
+    Injects:
+      - `snapshot` as anti-hallucination anchor (E7). LLM sees captured
+        fields and is instructed not to re-ask them.
+      - `rag_context` as KB grounding block.
+    The production orchestrator prepends its own system prompt via the
+    `backend.stream(system_prompt=...)` kwarg; this function deliberately
+    avoids hardcoding the system prompt path so tests run without it.
+    """
+    anchor_block = ""
+    if snapshot is not None:
+        lines = _snapshot_anchor_lines(snapshot)
+        if lines:
+            anchor_block = (
+                "Уже уточнено у клиента (НЕ переспрашивай эти поля):\n"
+                + "\n".join(lines) + "\n\n"
+            )
+    kb_block = ""
+    if rag_context:
+        kb_block = (
+            "Фрагменты из базы знаний (единственный источник фактов. "
+            "Адреса, числа, ставки бери ТОЛЬКО отсюда):\n\n"
+            + str(rag_context) + "\n\n"
+        )
+    user_content = f"{anchor_block}{kb_block}Сообщение клиента: {utterance}"
+    return [{"role": "user", "content": user_content}]
+
+
+async def _stream_llm_to_tts(
+    *,
+    utterance: str,
+    rag_context: Optional[str],
+    snapshot: Optional[ProfileSnapshot],
+    backend,
+    tts,
+    session,
+) -> AsyncGenerator[str, None]:
+    """LLM stream → SentenceDetector → phrase-level TTS.
+
+    Ported from `app.py:2513-2778`. Behavioural contract:
+      - tokens flow through `backend.stream(messages=...)`;
+      - `SentenceDetector.feed` yields full sentences at boundary;
+      - each sentence is cleaned, shipped to `tts.say`, then yielded
+        so the caller can accumulate full-turn text for chat history;
+      - `session.interrupted` is checked at each sentence boundary —
+        on flip, the loop exits without flushing the remainder
+        (matches legacy phrase-boundary barge-in semantics);
+      - on normal end, the trailing buffer is flushed as a final
+        sentence.
+    """
+    from .sentence_detector import SentenceDetector
+    from .text_utils import clean_answer
+
+    messages = _build_fallback_messages(utterance, rag_context, snapshot)
+    detector = SentenceDetector()
+
+    async for token in backend.stream(messages=messages):
+        if _session_interrupted(session):
+            return
+        if not token:
+            continue
+        for sentence in detector.feed(token):
+            if _session_interrupted(session):
+                return
+            cleaned = clean_answer(sentence)
+            if not cleaned:
+                continue
+            await tts.say(cleaned)
+            yield cleaned
+
+    if _session_interrupted(session):
+        return
+    remaining = detector.flush()
+    if remaining:
+        cleaned = clean_answer(remaining)
+        if cleaned:
+            await tts.say(cleaned)
+            yield cleaned
