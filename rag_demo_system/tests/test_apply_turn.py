@@ -595,3 +595,20 @@ def test_step_8_readback_pending_deny_no_correction_falls_to_llm_fallback() -> N
     assert isinstance(action, FireLLMFallback)
     # Profile state NOT changed by FireLLMFallback.
     assert profile.state == ProfileState.READBACK_PENDING
+
+
+# ---------------------------------------------------------------- Coverage
+# Legacy `pending_change` single-field payload shape {'field':..,'new_value':..}
+# — predates Fix 28's multi-field {'changes': {...}}. Still supported on
+# the apply-path so old payloads persisted in-flight survive the refactor.
+
+
+def test_change_pending_legacy_single_field_shape_applies_on_confirm() -> None:
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"field": "term_months", "new_value": 48}
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+    assert profile.term_months == 48
+    assert profile.state == ProfileState.CONFIRMED
+    assert isinstance(action, FireCalc)
