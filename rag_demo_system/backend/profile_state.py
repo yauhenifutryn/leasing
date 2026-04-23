@@ -114,3 +114,48 @@ def derive_implied_flips(profile: ClientProfile, proposed: dict) -> dict:
         flips["age_years"] = None
 
     return flips
+
+
+def build_calc_params(profile: ClientProfile) -> dict:
+    """Shape a ClientProfile into the dict the calculator API expects.
+
+    Mirrors the legacy construction at `rag_demo_system/backend/app.py:
+    2211-2234` EXACTLY to preserve behavior across the refactor:
+      - `term_months` → calc key `term`.
+      - `prepaid_pct` → both `prepaid` and `prepaid_pct` (legacy alias).
+      - `prepaid_amount` (only when `prepaid_pct` is None).
+      - `age_years` → both `age` and `age_years` aliases.
+      - Optional fields (currency, client_type, condition_new,
+        type_schedule, age, prepaid_*) are OMITTED when their source
+        is None. The calculator API treats omitted keys as defaults,
+        so omit-on-None is load-bearing.
+
+    The subject and cost fields are always included — even when None —
+    because the calculator rejects a missing-key payload differently
+    from a None-value payload, and the legacy code path always sets them.
+    """
+    params: dict = {
+        "subject": profile.subject,
+        "cost": profile.cost,
+    }
+
+    if profile.currency is not None:
+        params["currency"] = profile.currency
+    if profile.client_type is not None:
+        params["client_type"] = profile.client_type
+    if profile.condition_new is not None:
+        params["condition_new"] = profile.condition_new
+    if profile.age_years is not None:
+        params["age"] = profile.age_years
+        params["age_years"] = profile.age_years
+    if profile.prepaid_pct is not None:
+        params["prepaid"] = profile.prepaid_pct
+        params["prepaid_pct"] = profile.prepaid_pct
+    elif profile.prepaid_amount is not None:
+        params["prepaid_amount"] = profile.prepaid_amount
+    if profile.term_months is not None:
+        params["term"] = profile.term_months
+    if profile.type_schedule is not None:
+        params["type_schedule"] = profile.type_schedule
+
+    return params

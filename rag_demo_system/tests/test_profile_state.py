@@ -15,6 +15,7 @@ from backend.profile_state import (
     build_snapshot,
     partition_patches,
     derive_implied_flips,
+    build_calc_params,
 )
 from backend.session import ClientProfile
 
@@ -203,3 +204,87 @@ def test_implied_flips_combined_subject_and_condition() -> None:
         {"subject": "Грузовой автомобиль", "condition_new": 1},
     )
     assert flips == {"client_type": "Юридическое лицо", "age_years": None}
+
+
+# --- build_calc_params ---
+#
+# These tests mirror the legacy construction at app.py:2211-2234 exactly.
+# Any change here implies a change to the calculator API contract.
+
+def test_build_calc_params_full_byn_physical() -> None:
+    profile = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=120000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        type_schedule="0",
+    )
+    params = build_calc_params(profile)
+    assert params == {
+        "subject": "Легковой автомобиль",
+        "cost": 120000.0,
+        "currency": "BYN",
+        "client_type": "Физическое лицо",
+        "condition_new": 1,
+        "prepaid": 20.0,
+        "prepaid_pct": 20.0,   # legacy alias for compat
+        "term": 36,
+        "type_schedule": "0",
+    }
+
+
+def test_build_calc_params_with_age_years_sets_both_aliases() -> None:
+    profile = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=15000.0,
+        currency="USD",
+        condition_new=0,
+        age_years=3,
+        prepaid_pct=30.0,
+        term_months=24,
+        type_schedule="0",
+    )
+    params = build_calc_params(profile)
+    # Both `age` and `age_years` set for backward compat (app.py:2223-2225).
+    assert params["age"] == 3
+    assert params["age_years"] == 3
+
+
+def test_build_calc_params_prepaid_amount_branch() -> None:
+    profile = ClientProfile(
+        client_type="Юридическое лицо",
+        subject="Спецтехника",
+        cost=500000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_amount=100000.0,
+        term_months=48,
+        type_schedule="1",
+    )
+    params = build_calc_params(profile)
+    # prepaid_amount path (elif branch): no `prepaid` or `prepaid_pct` key.
+    assert params["prepaid_amount"] == 100000.0
+    assert "prepaid" not in params
+    assert "prepaid_pct" not in params
+
+
+def test_build_calc_params_omits_none_optional_fields() -> None:
+    # Currency, client_type, condition_new, type_schedule, age_years,
+    # prepaid_* all conditionally set. A profile with only cost+subject
+    # should produce a minimal params dict.
+    profile = ClientProfile(cost=50000.0, subject="Легковой автомобиль")
+    params = build_calc_params(profile)
+    assert params["cost"] == 50000.0
+    assert params["subject"] == "Легковой автомобиль"
+    assert "currency" not in params
+    assert "client_type" not in params
+    assert "condition_new" not in params
+    assert "term" not in params
+    assert "type_schedule" not in params
+    assert "age" not in params
+    assert "age_years" not in params
+    assert "prepaid" not in params
