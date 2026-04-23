@@ -56,12 +56,21 @@ def make_partial_profile(**overrides) -> ClientProfile:
     return ClientProfile(**overrides)
 
 
-def make_classifier(**overrides) -> ClassifierOutput:
-    """ClassifierOutput with safe defaults. `intent=None` is accepted by
-    the schema, but most tests pass a concrete one."""
+def make_classifier(*, utterance: str = "", **overrides) -> ClassifierOutput:
+    """ClassifierOutput with safe defaults, mirroring production
+    construction via ``model_validate(context={"utterance": ...})``.
+
+    Passing the same utterance here as to ``apply_turn`` is REQUIRED
+    whenever test overrides set enum fields (subject, client_type,
+    currency, condition_new, type_schedule, change_field) — otherwise
+    the Section 2 post-validator nullifies the field at construction
+    time and the test input becomes empty.
+    """
     base = dict(intent="CONVERSATION", is_confirmation=False)
     base.update(overrides)
-    return ClassifierOutput(**base)
+    return ClassifierOutput.model_validate(
+        base, context={"utterance": utterance}
+    )
 
 
 # ---------------------------------------------------------------- smoke
@@ -116,3 +125,74 @@ def test_e5_readback_does_not_emit_on_confirmation_turn() -> None:
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="да")
     assert not isinstance(action, EmitReadback)
+
+
+# ---------------------------------------------------------------- E6
+# E6 — change_field routes to EmitChangeConfirm, NEVER direct calc.
+# Kills the live-call cc7fc318 bug where "поменяем срок на 60" fired
+# calc within the same turn, with no confirmation beat.
+
+
+def test_e6_change_field_routes_to_change_confirm_not_direct_calc() -> None:
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CONFIRMED
+    utterance = "А давай всё-таки поменяем срок на 60 месяцев"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="TOOL",
+        action="change_param",
+        change_field="term_months",
+        change_value=60,
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert isinstance(action, EmitChangeConfirm)
+    assert action.changes == {"term_months": {"old": 36, "new": 60}}
+    assert profile.state == ProfileState.CHANGE_PENDING
+    assert profile.term_months == 36   # NOT mutated yet
+    # Snapshot carries projected post-change term.
+    assert action.snapshot.term_months == 60
+
+
+def test_e6_ungrounded_change_value_drops_silently() -> None:
+    # Qwen hallucinates "change_value=60" but utterance has no numeric cue
+    # for term. value_grounded returns False; delta is empty; no
+    # EmitChangeConfirm. Profile and state unchanged.
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CONFIRMED
+    utterance = "ну хорошо"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        change_field="term_months",
+        change_value=60,
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert not isinstance(action, EmitChangeConfirm)
+    assert profile.term_months == 36
+    assert profile.state == ProfileState.CONFIRMED
+
+
+def test_e6_top_level_subject_delta_also_routes_to_change_confirm() -> None:
+    # Classifier fires top-level `subject` (not change_field pair) with a
+    # grounded value that differs from profile.subject. This is the E7b
+    # uniformity requirement: ANY captured-field delta → change-confirm,
+    # whether it comes from change_field/change_value or from top-level.
+    profile = make_complete_profile(
+        subject="Легковой автомобиль",
+        client_type="Юридическое лицо",  # avoid implied flip complication
+    )
+    profile.state = ProfileState.CONFIRMED
+    utterance = "Хочу грузовой автомобиль"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        subject="Грузовой автомобиль",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert isinstance(action, EmitChangeConfirm)
+    assert "subject" in action.changes
+    assert action.changes["subject"]["old"] == "Легковой автомобиль"
+    assert action.changes["subject"]["new"] == "Грузовой автомобиль"

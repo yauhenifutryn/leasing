@@ -11,9 +11,9 @@ refactor.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
-from .classifier_schema import ClassifierOutput
+from .classifier_schema import ClassifierOutput, value_grounded
 from .profile_state import (
     build_snapshot,
     partition_patches,
@@ -22,6 +22,7 @@ from .profile_state import (
 )
 from .session import ClientProfile, ProfileState
 from .turn_action import (
+    ProfileSnapshot,
     TurnAction,
     EmitReadback,
     EmitClarify,
@@ -31,6 +32,76 @@ from .turn_action import (
     FireOORMessage,
     Noop,
 )
+
+
+# Fields apply_turn considers at pre-compute time when sweeping
+# classifier top-level values into proposed_patches.
+_GROUNDED_FIELDS: tuple[str, ...] = (
+    "client_type",
+    "subject",
+    "cost",
+    "currency",
+    "condition_new",
+    "age_years",
+    "prepaid_pct",
+    "prepaid_amount",
+    "term_months",
+    "type_schedule",
+)
+
+
+def _grounded_proposed_patches(
+    classifier_output: ClassifierOutput,
+    utterance: str,
+) -> dict[str, Any]:
+    """Collect classifier-proposed patches that pass `value_grounded`.
+
+    Includes both top-level field values AND the change_field /
+    change_value pair. A hallucinated value (Qwen drift) without a
+    matching utterance cue fails grounding and is dropped silently.
+    """
+    proposed: dict[str, Any] = {}
+
+    for field_name in _GROUNDED_FIELDS:
+        value = getattr(classifier_output, field_name, None)
+        if value is None:
+            continue
+        if value_grounded(field_name, value, utterance):
+            proposed[field_name] = value
+
+    # Explicit change_field / change_value pair. Treated identically to
+    # a top-level field for routing purposes — partition_patches decides
+    # whether it's a first-time capture or a delta.
+    cf = classifier_output.change_field
+    cv = classifier_output.change_value
+    if cf and cv is not None and value_grounded(cf, cv, utterance):
+        proposed[cf] = cv
+
+    return proposed
+
+
+def _project_snapshot(
+    profile: ClientProfile,
+    patches: dict[str, Any],
+) -> ProfileSnapshot:
+    """Build a snapshot as-if `patches` were applied — without mutating
+    the profile. Used as EmitChangeConfirm.snapshot so the UI / LLM
+    renderer sees the proposed end-state, not the current state.
+    """
+    return ProfileSnapshot(
+        client_type=patches.get("client_type", profile.client_type),
+        subject=patches.get("subject", profile.subject),
+        cost=patches.get("cost", profile.cost),
+        currency=patches.get("currency", profile.currency),
+        original_cost=profile.original_cost,
+        original_currency=profile.original_currency,
+        condition_new=patches.get("condition_new", profile.condition_new),
+        age_years=patches.get("age_years", profile.age_years),
+        prepaid_pct=patches.get("prepaid_pct", profile.prepaid_pct),
+        prepaid_amount=patches.get("prepaid_amount", profile.prepaid_amount),
+        term_months=patches.get("term_months", profile.term_months),
+        type_schedule=patches.get("type_schedule", profile.type_schedule),
+    )
 
 
 def apply_turn(
@@ -48,6 +119,33 @@ def apply_turn(
     Never mutates on change proposals (step 4); mutation happens only
     when the user confirms on the next turn, re-entering step 1.
     """
+    # -------- pre-compute: grounded patches + implied flips + partition
+    proposed = _grounded_proposed_patches(classifier_output, utterance)
+    proposed.update(derive_implied_flips(profile, proposed))
+    first_time, delta = partition_patches(profile, proposed)
+
+    # STEP 4 (E6 fix): any delta on a captured field → EmitChangeConfirm.
+    # Covers explicit change_field pairs AND top-level field flips on
+    # captured fields (E7b uniformity) AND implied cross-field flips
+    # (derive_implied_flips rule table). Profile fields stay untouched;
+    # mutation happens only on next-turn confirm (step 1).
+    if delta:
+        projected_patches = dict(first_time)
+        for field_name, change in delta.items():
+            projected_patches[field_name] = change["new"]
+        profile.state = ProfileState.CHANGE_PENDING
+        profile.pending_change = {"changes": delta}
+        return EmitChangeConfirm(
+            changes=delta,
+            snapshot=_project_snapshot(profile, projected_patches),
+        )
+
+    # STEP 5: apply first-time patches in place (additive captures;
+    # no user confirmation required under the capture-first principle).
+    if first_time:
+        for field_name, value in first_time.items():
+            setattr(profile, field_name, value)
+
     # STEP 5a (E5 fix): profile just complete + COLLECTING + not
     # is_confirmation → deterministic readback. Classifier `intent`
     # label is IRRELEVANT at this branch — that's the whole point of
