@@ -242,4 +242,20 @@ def _dispatch_once(
             calc_params=build_calc_params(profile),
         )
 
+    # STEP 5b: profile incomplete AND state is COLLECTING → EmitClarify
+    # with missing-fields list + snapshot anchor. Fires whether or not
+    # patches were applied this turn (a no-classifier-info turn still
+    # needs a clarifying question). Skipped in READBACK_PENDING /
+    # CHANGE_PENDING / CONFIRMED since those have their own follow-up
+    # paths (the user's response is interpreted as confirm/deny, not
+    # as additional field-fill).
+    if (
+        not profile.is_complete_for_calc()
+        and profile.state == ProfileState.COLLECTING
+    ):
+        return EmitClarify(
+            missing=sorted(profile.missing_fields()),
+            snapshot=build_snapshot(profile),
+        )
+
     return Noop(reason="no_dispatch_branch_matched")

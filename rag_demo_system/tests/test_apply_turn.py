@@ -76,12 +76,20 @@ def make_classifier(*, utterance: str = "", **overrides) -> ClassifierOutput:
 # ---------------------------------------------------------------- smoke
 
 
-def test_scaffold_returns_noop_for_empty_utterance() -> None:
-    """Smoke: scaffold exists and returns a TurnAction."""
+def test_smoke_empty_profile_empty_utterance_emits_clarify() -> None:
+    """Smoke: an empty profile in COLLECTING naturally emits EmitClarify
+    asking for every required field (step 5b). Updated after step 5b
+    landed in Task 13.4 — previously this test asserted Noop because the
+    scaffold had no clarify branch."""
     profile = make_partial_profile()
     classifier = make_classifier()
     action = apply_turn(profile, classifier, utterance="")
-    assert isinstance(action, Noop)
+    assert isinstance(action, EmitClarify)
+    # Every calc-required field is missing.
+    missing = set(action.missing)
+    for field in ("client_type", "subject", "cost", "currency",
+                  "condition_new", "term_months", "type_schedule"):
+        assert field in missing
 
 
 # ---------------------------------------------------------------- E5
@@ -478,3 +486,45 @@ def test_readback_deny_with_ungrounded_correction_stays_in_readback_pending() ->
     assert not isinstance(action, EmitChangeConfirm)
     assert profile.state == ProfileState.READBACK_PENDING
     assert profile.cost == 80000.0
+
+
+# ---------------------------------------------------------------- Step 5b
+# Step 5b — patches applied but profile still incomplete → EmitClarify.
+# Carries the current snapshot as E7 anti-hallucination anchor AND the
+# sorted list of missing fields so the renderer can ask for exactly the
+# right slots in the right order.
+
+
+def test_step_5b_emits_clarify_with_missing_and_snapshot() -> None:
+    profile = make_partial_profile(cost=80000.0, currency="USD")
+    utterance = "36 месяцев"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        term_months=36,
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert isinstance(action, EmitClarify)
+    # term_months WAS applied (first-time capture); snapshot reflects it.
+    assert action.snapshot.term_months == 36
+    assert action.snapshot.cost == 80000.0
+    # Still-missing fields show up in .missing (client_type, subject,
+    # condition_new, type_schedule, prepaid — order: sorted).
+    missing = set(action.missing)
+    assert "client_type" in missing
+    assert "subject" in missing
+    assert "condition_new" in missing
+    assert "type_schedule" in missing
+    assert "prepaid" in missing
+
+
+def test_step_5b_no_patches_applied_still_emits_clarify_when_incomplete() -> None:
+    # When classifier emits nothing grounded AND profile is incomplete,
+    # step 5b still fires so the caller knows what to ask for.
+    profile = make_partial_profile(cost=80000.0)
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="ну")
+    assert isinstance(action, EmitClarify)
+    assert action.snapshot.cost == 80000.0
+    assert "subject" in action.missing
