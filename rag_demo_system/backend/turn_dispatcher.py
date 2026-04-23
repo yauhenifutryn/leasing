@@ -48,5 +48,18 @@ def apply_turn(
     Never mutates on change proposals (step 4); mutation happens only
     when the user confirms on the next turn, re-entering step 1.
     """
-    # Phase 3.C scaffolding — subsequent tasks implement each step.
-    return Noop(reason="not_yet_implemented")
+    # STEP 5a (E5 fix): profile just complete + COLLECTING + not
+    # is_confirmation → deterministic readback. Classifier `intent`
+    # label is IRRELEVANT at this branch — that's the whole point of
+    # the E5 fix. On live call cc7fc318 Qwen labeled the "Аннуитетный
+    # график" turn as CONVERSATION and the old gate skipped; now we
+    # always emit.
+    if (
+        profile.is_complete_for_calc()
+        and profile.state == ProfileState.COLLECTING
+        and not classifier_output.is_confirmation
+    ):
+        profile.state = ProfileState.READBACK_PENDING
+        return EmitReadback(snapshot=build_snapshot(profile))
+
+    return Noop(reason="no_dispatch_branch_matched")

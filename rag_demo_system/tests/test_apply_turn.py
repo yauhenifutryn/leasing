@@ -73,3 +73,46 @@ def test_scaffold_returns_noop_for_empty_utterance() -> None:
     classifier = make_classifier()
     action = apply_turn(profile, classifier, utterance="")
     assert isinstance(action, Noop)
+
+
+# ---------------------------------------------------------------- E5
+# E5 — Readback emits when profile first completes, regardless of
+# classifier intent label. This is the structural fix for the bug
+# surfaced on live call cc7fc318 where `intent=CONVERSATION` caused
+# the readback gate to skip and the bot freewheeled an LLM clarify.
+
+
+def test_e5_readback_emits_on_profile_complete_even_when_intent_conversation() -> None:
+    profile = make_complete_profile()
+    profile.state = ProfileState.COLLECTING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="Аннуитетный график")
+    assert isinstance(action, EmitReadback)
+    assert profile.state == ProfileState.READBACK_PENDING
+    assert action.snapshot.cost == 80000.0
+
+
+def test_e5_readback_emits_on_profile_complete_even_when_intent_none() -> None:
+    # Belt-and-suspenders: even if classifier omits intent entirely.
+    profile = make_complete_profile()
+    profile.state = ProfileState.COLLECTING
+    classifier = make_classifier(intent=None, is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="ну")
+    assert isinstance(action, EmitReadback)
+
+
+def test_e5_readback_does_not_emit_if_profile_incomplete() -> None:
+    profile = make_partial_profile(cost=80000.0, currency="USD")
+    profile.state = ProfileState.COLLECTING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    action = apply_turn(profile, classifier, utterance="ну")
+    assert not isinstance(action, EmitReadback)
+
+
+def test_e5_readback_does_not_emit_on_confirmation_turn() -> None:
+    # is_confirmation suppresses readback re-emission.
+    profile = make_complete_profile()
+    profile.state = ProfileState.COLLECTING
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+    assert not isinstance(action, EmitReadback)
