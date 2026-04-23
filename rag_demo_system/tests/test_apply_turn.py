@@ -432,3 +432,49 @@ def test_readback_pending_deny_does_not_transition_nor_fire_calc() -> None:
     # stays in READBACK_PENDING.
     assert profile.state == ProfileState.READBACK_PENDING
     assert not isinstance(action, FireCalc)
+
+
+# ---------------------------------------------------------------- Step 3
+# Step 3 — READBACK_PENDING + is_confirmation=False + grounded correction
+# → stage correction via EmitChangeConfirm (re-dispatched step 4).
+# Ports behavior from test_readback_deny_grounding.py.
+
+
+def test_readback_deny_with_grounded_correction_stages_change_confirm() -> None:
+    profile = make_complete_profile(cost=80000.0, currency="USD")
+    profile.state = ProfileState.READBACK_PENDING
+    utterance = "нет, 150 тысяч долларов"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        cost=150000.0,
+        currency="USD",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    # Correction is staged as EmitChangeConfirm; profile.cost not yet
+    # mutated. State moved to CHANGE_PENDING for the next turn's
+    # confirmation pass.
+    assert isinstance(action, EmitChangeConfirm)
+    assert "cost" in action.changes
+    assert action.changes["cost"]["new"] == 150000.0
+    assert profile.cost == 80000.0   # NOT mutated yet
+    assert profile.state == ProfileState.CHANGE_PENDING
+
+
+def test_readback_deny_with_ungrounded_correction_stays_in_readback_pending() -> None:
+    # Codex E-Codex-2 guard: plain "нет" + classifier-hallucinated
+    # cost=150000 must NOT stage a change. value_grounded drops the
+    # ungrounded delta; state stays in READBACK_PENDING.
+    profile = make_complete_profile(cost=80000.0, currency="USD")
+    profile.state = ProfileState.READBACK_PENDING
+    classifier = make_classifier(
+        utterance="нет",
+        intent="CONVERSATION",
+        cost=150000.0,     # hallucinated; utterance has no numeric cue
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance="нет")
+    assert not isinstance(action, EmitChangeConfirm)
+    assert profile.state == ProfileState.READBACK_PENDING
+    assert profile.cost == 80000.0
