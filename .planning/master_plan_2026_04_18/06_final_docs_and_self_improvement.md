@@ -125,6 +125,16 @@ Update `kb_gap_report` scripts (check current location) to surface:
 
 From memory `project_contradiction_check_future.md` — pre-ingestion contradiction detection for KB updates. If time permits, spike this in ~2 hours. Otherwise defer.
 
+### 3.4 RAG eval harness (path A from 2026-04-23 brainstorm)
+
+Measurement tooling for future RAG tuning. Purely additive, zero production risk.
+
+- **Fixture set**: `rag_demo_system/tests/fixtures/eval_queries_ru.jsonl` — 30-50 hand-crafted Russian Q→expected-chunk pairs covering the realistic query distribution (terms, rates, condition, contact, OOR edge cases).
+- **Script**: `rag_demo_system/scripts/eval_rag.py` — runs fixture queries against current Qdrant+BM25+rerank pipeline (respecting voice preset), prints recall@K and MRR, writes results to `results/eval_rag_<date>.json` for diffing between runs.
+- **Use**: run once before any RAG parameter change; re-run after; diff the two reports. Becomes the reference for Path B tuning work in the post-v1 milestone.
+- **Does NOT** touch production config, Qdrant state, or retrieval code. Read-only measurement.
+- **Defer trigger for tuning work itself**: ~200 client feedback events in `kb_viz_feedback.jsonl` (see `project_kb_viz_dedup_plan.md`). This section builds the harness; the sweep is post-v1.
+
 ## Phase 4 — Archive obsolete memories
 
 Memories that become obsolete after the refactor:
@@ -157,6 +167,7 @@ Open a PR from `feature/voice-pipeline` to `main` via `gsd-ship` skill. Include:
 - [ ] CP-6.4 — Deploy runbook updated (if changes needed).
 - [ ] CP-6.5 — session_analyzer.py extended with new fix signals.
 - [ ] CP-6.6 — kb_gap_report extended.
+- [ ] CP-6.6a — RAG eval harness shipped: `scripts/eval_rag.py` + `tests/fixtures/eval_queries_ru.jsonl`, baseline report archived.
 - [ ] CP-6.7 — Obsolete memories archived; new `project_v1_complete_*.md` memory written.
 - [ ] CP-6.8 — Final tag pushed; PR opened to main.
 

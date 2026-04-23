@@ -29,12 +29,15 @@ Where N is one of: 1, 2, 3, 4, 5, 6. Claude should:
 | 3 | [03_architecture_refactor.md](03_architecture_refactor.md) | **NEXT** — E5/E6/E7/E8 evidence attached as CP-3.5 criteria | 2 done | ~2-3 days | HIGH — fixes orchestrator chaos surfaced by Section 2 SIP test |
 | 4 | [04_natural_turn_taking.md](04_natural_turn_taking.md) | pending | ideally after 3 | ~2 days | HIGH — UX polish |
 | 5 | [05_speaker_mode_adaptive_vad.md](05_speaker_mode_adaptive_vad.md) | pending | after 4 | ~1 day | MEDIUM — experimental |
+| 5b | [05b_qwen36_eval.md](05b_qwen36_eval.md) | pending | optional sideline; safest after 3 | ~2-4 hours | LOW — swap only if Russian/tool eval shows no regression |
+| 5c | [05c_classifier_model_upgrade_eval.md](05c_classifier_model_upgrade_eval.md) | pending | optional sideline; after 3 | ~3-5 hours | LOW — only if residual-failure corpus ≥ 2% after Section 3 ships |
 | 6 | [06_final_docs_and_self_improvement.md](06_final_docs_and_self_improvement.md) | pending | all above + client UAT | ~1 day | FINAL — close out plan |
 
-**Recommended execution order**: 1 → 2 → 3 → 4 → 5 → 6.
+**Recommended execution order**: 1 → 2 → 3 → 4 → 5 → (5b / 5c optional, independent) → 6.
 
 - Section 1 ships visible client wins fast while 2-3 cook the deeper fix.
 - Section 5 (speaker mode) is experimental — isolated session recommended, easy-revert via env var.
+- Section 5b (Qwen3.6 brain eval) and 5c (classifier 4B → 8B/7B eval) are optional model-swap sidelines. Both run on scratch branches with env-var rollback. Run independently, never simultaneously on the same H100.
 - Section 6 is the verification + docs + self-improvement close-out. It has a **verification gate** as its first phase that must pass before any docs work.
 
 ## Rollback
