@@ -36,3 +36,38 @@ def build_snapshot(profile: ClientProfile) -> ProfileSnapshot:
         term_months=profile.term_months,
         type_schedule=profile.type_schedule,
     )
+
+
+def partition_patches(
+    profile: ClientProfile,
+    proposed: dict,
+) -> tuple[dict, dict]:
+    """Partition proposed field patches against the current profile.
+
+    Returns (first_time_patches, delta_patches):
+      - first_time_patches: {field: value} for fields where
+        `profile.<field>` is currently None. These are additive
+        captures; applying them does not require user confirmation
+        (capture-first principle only confirms changes to already-
+        captured data).
+      - delta_patches: {field: {"old": X, "new": Y}} for fields where
+        `profile.<field>` is not None AND differs from the proposed
+        value. These are changes and must flow through
+        EmitChangeConfirm — apply_turn routes them to step 4.
+      - No-op proposals (field already at the proposed value) are
+        dropped silently; they contribute to neither dict.
+
+    Note: a proposed value of None on a currently-captured field IS a
+    delta (used for implied flips like clearing age_years when
+    condition_new flips to 1).
+    """
+    first_time: dict = {}
+    delta: dict = {}
+    for field_name, new_value in proposed.items():
+        current = getattr(profile, field_name, None)
+        if current is None and new_value is not None:
+            first_time[field_name] = new_value
+        elif current != new_value:
+            delta[field_name] = {"old": current, "new": new_value}
+        # else: no-op, drop
+    return first_time, delta
