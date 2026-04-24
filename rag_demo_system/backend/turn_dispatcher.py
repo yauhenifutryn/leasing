@@ -242,27 +242,20 @@ def _dispatch_once(
     should re-enter; otherwise returns a terminal TurnAction.
     """
     # STEP 1 (post-change apply): CHANGE_PENDING + is_confirmation →
-    # apply the staged change, transition to CONFIRMED, re-dispatch
-    # so the mutated state can unlock step 6 FireCalc.
+    # apply the staged change via ClientProfile.apply_pending_change (which
+    # preserves the prepaid_pct/prepaid_amount slot invariant + locked_fields
+    # guard — Codex adversarial 2026-04-24 high #1 fix).
     if (
         profile.state == ProfileState.CHANGE_PENDING
         and classifier_output.is_confirmation
         and profile.pending_change
     ):
         changes = profile.pending_change.get("changes", {}) or {}
-        # Legacy single-field payload support (ClientProfile.pending_change
-        # allows either {"field":..,"new_value":..} or {"changes": {...}}).
+        # Snapshot the change keys BEFORE apply_pending_change clears
+        # pending_change, so the USD→BYN stash logic below can inspect them.
         if not changes and "field" in profile.pending_change:
-            field_name = profile.pending_change["field"]
-            new_value = profile.pending_change.get(
-                "new_value",
-                profile.pending_change.get("new"),
-            )
-            changes = {field_name: {"old": getattr(profile, field_name, None),
-                                    "new": new_value}}
-        for field_name, change in changes.items():
-            if hasattr(profile, field_name):
-                setattr(profile, field_name, change["new"])
+            changes = {profile.pending_change["field"]: {}}
+        profile.apply_pending_change()
         # Clear USD→BYN disclosure stash when the user actively switched
         # currency (or cost) away from a prior USD capture. Without this
         # the next calc re-emits "Стоимость 80000 долларов..." even
@@ -271,7 +264,6 @@ def _dispatch_once(
             if profile.currency != "USD":
                 profile.original_cost = None
                 profile.original_currency = None
-        profile.pending_change = None
         profile.state = ProfileState.CONFIRMED
         return Noop(reason="redispatch_change")
 

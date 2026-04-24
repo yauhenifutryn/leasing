@@ -888,3 +888,71 @@ def test_snapshot_anchor_lines_include_name_field() -> None:
     )
     lines = _snapshot_anchor_lines(snap)
     assert any("name: Евгений" in line for line in lines)
+
+
+# ---------------------------------------------------------------- Codex adversarial high #1
+# Two invariants that the old raw-setattr step 1 loop violated:
+#   1. prepaid_pct/prepaid_amount slot invariant: confirming a change to
+#      prepaid_amount must null the stale prepaid_pct (and vice versa).
+#   2. locked_fields guard: a confirmed change to a locked field must be
+#      silently rejected (field stays at its current value).
+# Both are now delegated to ClientProfile.apply_pending_change().
+
+
+def test_step1_apply_pending_change_clears_prepaid_sibling():
+    # Regression for Codex high #1: a change-confirm that flips prepaid_pct
+    # to prepaid_amount must null the stale prepaid_pct after apply.
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=30000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=24,
+        prepaid_pct=20.0,
+        type_schedule="0",
+        state=ProfileState.CHANGE_PENDING,
+        pending_change={"changes": {"prepaid_amount": {"old": None, "new": 5000.0}}},
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "CONVERSATION", "is_confirmation": True},
+        context={"utterance": "да"},
+    )
+
+    apply_turn(p, co, "да", turn_id=1)
+
+    assert p.prepaid_amount == 5000.0
+    assert p.prepaid_pct is None, "Codex high #1: sibling not cleared"
+    assert p.state == ProfileState.CONFIRMED
+
+
+def test_step1_apply_pending_change_respects_locked_fields():
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=10000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=24,
+        prepaid_pct=20.0,
+        type_schedule="0",
+        state=ProfileState.CHANGE_PENDING,
+        pending_change={"changes": {"cost": {"old": 10000.0, "new": 99999.0}}},
+        locked_fields={"cost"},
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "CONVERSATION", "is_confirmation": True},
+        context={"utterance": "да"},
+    )
+
+    apply_turn(p, co, "да", turn_id=1)
+
+    assert p.cost == 10000.0, "locked field was mutated"

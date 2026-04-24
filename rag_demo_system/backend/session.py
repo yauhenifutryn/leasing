@@ -171,6 +171,12 @@ class ClientProfile:
         stale value from shadowing in direct-call params build (pct is
         preferred over amount). Mirrors the sticky-patch counterpart-clear
         logic (Fix 40c).
+
+        2026-04-24 (Codex adversarial high #1): locked_fields are now honoured,
+        consistent with apply_patches() and apply_additive_patches(). A change
+        staged for a locked field is silently skipped — the field retains its
+        current value. This matches the contract of the other two apply helpers
+        and prevents a confirmed pending_change from bypassing the lock.
         """
         if not self.pending_change:
             return False
@@ -181,6 +187,16 @@ class ClientProfile:
         if isinstance(_changes, dict) and _changes:
             _applied_any = False
             for field_name, vals in _changes.items():
+                if field_name in self.locked_fields:
+                    # Locked fields are silently skipped — same semantics as
+                    # apply_patches() and apply_additive_patches(). The change
+                    # is not applied; _applied_any stays False for this field.
+                    print(
+                        f"[ClientProfile] apply_pending_change: skipping locked "
+                        f"field={field_name!r}",
+                        flush=True,
+                    )
+                    continue
                 if not hasattr(self, field_name):
                     # Codex adversarial pass 4 (2026-04-20): log loudly but
                     # skip unknown fields. If NO known fields got applied, we
@@ -202,8 +218,8 @@ class ClientProfile:
                     _applied_prepaid_amount = True
             if not _applied_any:
                 print(
-                    f"[ClientProfile] apply_pending_change: no known fields in "
-                    f"{list(_changes.keys())} — leaving pending_change for retry",
+                    f"[ClientProfile] apply_pending_change: no known/unlocked fields "
+                    f"in {list(_changes.keys())} — leaving pending_change for retry",
                     flush=True,
                 )
                 return False
@@ -216,7 +232,7 @@ class ClientProfile:
         # Legacy single-field shape.
         field_name = self.pending_change.get("field")
         new_value = self.pending_change.get("new_value")
-        if field_name and hasattr(self, field_name):
+        if field_name and field_name not in self.locked_fields and hasattr(self, field_name):
             setattr(self, field_name, new_value)
             if field_name == "prepaid_pct" and self.prepaid_amount is not None:
                 self.prepaid_amount = None
@@ -224,6 +240,13 @@ class ClientProfile:
                 self.prepaid_pct = None
             self.pending_change = None
             return True
+        if field_name and field_name in self.locked_fields:
+            print(
+                f"[ClientProfile] apply_pending_change: legacy single-field "
+                f"pending_change skipping locked field={field_name!r}",
+                flush=True,
+            )
+            return False
         # Legacy single-field with unknown attribute — same fail-closed behaviour.
         print(
             f"[ClientProfile] apply_pending_change: legacy single-field "
