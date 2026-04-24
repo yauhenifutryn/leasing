@@ -337,3 +337,167 @@ async def test_rag_future_handles_empty_retrieval() -> None:
     task = asyncio.create_task(_empty())
     fut = mod.RagFuture(task)
     assert await fut.result() == ""
+
+
+# ============================================================ TtsSink barge-in
+# 2026-04-24 live regression: user reports barge-in "used to be instant,
+# now bot keeps talking". Root cause: TtsSink sent full sentence as one
+# audio blob with no per-chunk interrupt check and no killAudio on
+# barge-in. Legacy _speak_tts (app.py:82-228) does both.
+
+
+class _BargeInSession:
+    """Session stand-in that flips `interrupted=True` after N audio
+    chunks reach the websocket, simulating VAD detecting user speech
+    mid-reply."""
+
+    def __init__(self, flip_after_n_chunks: int) -> None:
+        self.interrupted = False
+        self._seen = 0
+        self._limit = flip_after_n_chunks
+
+    def observe_chunk(self) -> None:
+        self._seen += 1
+        if self._seen >= self._limit:
+            self.interrupted = True
+
+
+class _ChunkedWebSocket:
+    """Captures every send_json and send_text; lets a session observer
+    fire between chunks."""
+
+    def __init__(self, observer=None) -> None:
+        self.sent_json: list[dict] = []
+        self.sent_text: list[str] = []
+        self._observer = observer
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent_json.append(payload)
+        if (
+            self._observer is not None
+            and payload.get("type") == "response.output_audio.delta"
+        ):
+            self._observer.observe_chunk()
+
+    async def send_text(self, data: str) -> None:
+        self.sent_text.append(data)
+
+
+def _synth_long_pcm_mock(*, bytes_per_phrase: int = 3840):
+    """Return a synthesize_audio mock that produces `bytes_per_phrase`
+    bytes of PCM (multiple 1920-byte chunks so the per-chunk loop has
+    somewhere to check barge-in between frames)."""
+    import base64 as _b64
+    pcm = b"\x00" * bytes_per_phrase
+    audio_b64 = _b64.b64encode(pcm).decode()
+
+    def _mock(text, session_id):
+        return {"audio_b64": audio_b64, "sample_rate_hz": 24000}
+
+    return _mock
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_chunks_audio_into_40ms_frames(monkeypatch) -> None:
+    """PCM of 3840 bytes → 2 × 1920-byte frames on the wire. Each frame
+    is its own response.output_audio.delta event so barge-in can fire
+    between frames."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=3840))
+    # Force a single-phrase split so 3840 bytes all come from one synth
+    # call (multi-phrase would still produce multiple chunks but our
+    # assertion is tighter when the split is deterministic).
+    monkeypatch.setattr(
+        "backend.text_utils.split_for_tts_streaming",
+        lambda t: [t],
+    )
+
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=_BareSession())
+    await sink.say("Привет.")
+
+    audio_events = [p for p in ws.sent_json if p.get("type") == "response.output_audio.delta"]
+    assert len(audio_events) == 2
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_stops_mid_phrase_on_interrupt(monkeypatch) -> None:
+    """Session flips `interrupted=True` after 1 chunk — the chunk loop
+    must bail on frame 2 instead of pushing the remaining audio."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=9600))
+    monkeypatch.setattr(
+        "backend.text_utils.split_for_tts_streaming",
+        lambda t: [t],
+    )
+
+    session = _BargeInSession(flip_after_n_chunks=1)
+    ws = _ChunkedWebSocket(observer=session)
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=session)
+    await sink.say("Очень длинная фраза на несколько секунд.")
+
+    audio_events = [p for p in ws.sent_json if p.get("type") == "response.output_audio.delta"]
+    # Only the first frame should have made it through; 9600/1920=5 frames total.
+    assert len(audio_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_sends_kill_audio_on_interrupt(monkeypatch) -> None:
+    """When barge-in fires mid-send, the sink must emit a killAudio
+    control frame so mod_audio_fork flushes its buffered PCM and the
+    caller doesn't hear the tail of the interrupted utterance."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=9600))
+    monkeypatch.setattr(
+        "backend.text_utils.split_for_tts_streaming",
+        lambda t: [t],
+    )
+
+    session = _BargeInSession(flip_after_n_chunks=1)
+    ws = _ChunkedWebSocket(observer=session)
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=session)
+    await sink.say("Фраза с прерыванием.")
+
+    kill_frames = [t for t in ws.sent_text if "killAudio" in t]
+    assert len(kill_frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_does_not_send_kill_audio_on_clean_finish(monkeypatch) -> None:
+    """Clean completion (no barge-in) should NOT flush downstream —
+    otherwise we'd kill tail audio the caller still needs to hear."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=1920))
+    monkeypatch.setattr(
+        "backend.text_utils.split_for_tts_streaming",
+        lambda t: [t],
+    )
+
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=_BareSession())
+    await sink.say("Короткая фраза.")
+
+    kill_frames = [t for t in ws.sent_text if "killAudio" in t]
+    assert len(kill_frames) == 0
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_skips_send_when_interrupted_before_start(monkeypatch) -> None:
+    """If session.interrupted is already True on entry (barge-in happened
+    before this sentence started), don't even send the text-delta."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock())
+
+    session = _BareSession()
+    session.interrupted = True
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=session)
+    await sink.say("Никогда не услышите.")
+
+    assert ws.sent_json == []
+    assert ws.sent_text == []

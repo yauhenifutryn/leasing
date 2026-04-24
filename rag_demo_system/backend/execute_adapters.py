@@ -16,6 +16,7 @@ Mapping:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, AsyncGenerator, Optional
 
 from .llm import iter_openai_compatible_stream_events
@@ -78,19 +79,32 @@ class LLMStreamBackend:
 
 
 class TtsSink:
-    """Phrase-level TTS sink. Mirrors the legacy tts_consumer body at
-    app.py:2700-2739: text-delta on the websocket, synth in a thread,
-    then audio-delta (WebSocket) or RTC track push.
+    """Phrase-level, chunk-aware TTS sink with barge-in parity.
 
-    Deliberately skips the playback-wait that `_speak_tts` adds — we
-    want the FireLLMFallback stream to push the next sentence's audio
-    as soon as synth completes, preserving the legacy overlap between
-    LLM generation and TTS playback (spec §7.2 #2).
+    Mirrors the barge-in mechanics of the legacy `_speak_tts` helper at
+    `app.py:82-228` so SIP callers can interrupt mid-sentence with the
+    same latency they saw before Section 3:
 
-    Barge-in: relies on the outer `_stream_llm_to_tts` checking
-    `session.interrupted` at each sentence boundary. On send failures
-    we flip the flag so the next boundary check aborts the stream.
+      1. Phrase-level synth via `split_for_tts_streaming` — each phrase
+         is ~200–500ms of audio, so new text never waits for a long
+         mono-synth to finish before the next barge-in check.
+      2. Per-chunk push (1920-byte / 40ms frames at 24kHz 16-bit mono)
+         with `session.interrupted` polled before EVERY frame. On
+         interrupt the chunk loop exits immediately so no further PCM
+         reaches Jambonz mod_audio_fork's play queue.
+      3. `killAudio` control frame sent on interrupt to flush the
+         downstream buffer — without this the caller hears 300–500ms
+         of tail audio before the bot goes quiet.
+
+    Deliberately omits the 50ms playback-wait loop that `_speak_tts`
+    adds at app.py:200-212 — for the FireLLMFallback streaming path we
+    want the next sentence's synth to overlap with the prior sentence's
+    playback (spec §7.2 #2). The effect on barge-in latency is zero
+    because the chunk-level interrupt still fires immediately.
     """
+
+    # 1920 bytes = 40ms at 24kHz 16-bit mono — matches Jambonz frame.
+    _CHUNK_SIZE = 1920
 
     def __init__(
         self,
@@ -108,6 +122,10 @@ class TtsSink:
     async def say(self, text: str) -> None:
         if not text:
             return
+        if self._interrupted():
+            return
+
+        # Text-delta goes out ONCE per sentence (monitor + browser UI).
         try:
             await self._ws.send_json({
                 "type": "response.output_text.delta",
@@ -116,33 +134,76 @@ class TtsSink:
             })
         except Exception:  # noqa: BLE001
             self._flag_interrupted()
+            await self._send_kill_audio()
             return
 
+        from .text_utils import split_for_tts_streaming  # lazy — cycle safe
+
+        phrases = split_for_tts_streaming(text) or [text]
+        aborted = False
+        for phrase in phrases:
+            if self._interrupted():
+                aborted = True
+                break
+            try:
+                audio_resp = await asyncio.to_thread(
+                    synthesize_audio, phrase, self._session_id,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            audio_b64 = audio_resp.get("audio_b64") or ""
+            if not audio_b64:
+                continue
+            if self._interrupted():
+                aborted = True
+                break
+            if await self._push_chunks(audio_b64, audio_resp):
+                aborted = True
+                break
+
+        if aborted:
+            await self._send_kill_audio()
+
+    async def _push_chunks(self, audio_b64: str, audio_resp: dict) -> bool:
+        """Push PCM in 40ms frames, checking barge-in before each send.
+        Returns True if interrupted mid-stream."""
+        import base64 as _b64
+        pcm = _b64.b64decode(audio_b64)
+        sample_rate = audio_resp.get("sample_rate_hz") or 24000
+
+        for i in range(0, len(pcm), self._CHUNK_SIZE):
+            if self._interrupted():
+                return True
+            chunk = pcm[i:i + self._CHUNK_SIZE]
+            try:
+                if self._rtc is not None:
+                    self._rtc.tts_track.push_audio(chunk)
+                else:
+                    await self._ws.send_json({
+                        "type": "response.output_audio.delta",
+                        "session_id": self._session_id,
+                        "delta": _b64.b64encode(chunk).decode(),
+                        "sample_rate_hz": sample_rate,
+                    })
+            except Exception:  # noqa: BLE001
+                self._flag_interrupted()
+                return True
+        return False
+
+    async def _send_kill_audio(self) -> None:
+        """Control frame to flush mod_audio_fork's play queue on the
+        Jambonz side. Legacy parity — app.py:214-218."""
+        if self._rtc is not None:
+            return  # RTC track has no equivalent buffer
         try:
-            audio_resp = await asyncio.to_thread(
-                synthesize_audio, text, self._session_id,
-            )
+            await self._ws.send_text(json.dumps({"type": "killAudio"}))
         except Exception:  # noqa: BLE001
-            return
+            pass
 
-        audio_b64 = audio_resp.get("audio_b64") or ""
-        if not audio_b64:
-            return
-
-        try:
-            if self._rtc is not None:
-                import base64 as _b64
-                pcm = _b64.b64decode(audio_b64)
-                self._rtc.tts_track.push_audio(pcm)
-            else:
-                await self._ws.send_json({
-                    "type": "response.output_audio.delta",
-                    "session_id": self._session_id,
-                    "delta": audio_b64,
-                    "sample_rate_hz": audio_resp.get("sample_rate_hz"),
-                })
-        except Exception:  # noqa: BLE001
-            self._flag_interrupted()
+    def _interrupted(self) -> bool:
+        if self._session is None:
+            return False
+        return bool(getattr(self._session, "interrupted", False))
 
     def _flag_interrupted(self) -> None:
         if self._session is not None:
