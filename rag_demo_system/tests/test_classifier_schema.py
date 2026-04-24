@@ -624,3 +624,42 @@ def test_currency_garbage_string_still_dropped():
     raw = json.dumps({"intent": "TOOL", "currency": "XYZ"})
     out = parse_classifier_output(raw, utterance="в долларах")
     assert out.currency is None
+
+
+def test_value_grounded_cost_accepts_ru_number_words():
+    # Regression for live call f7e5aa1d (2026-04-24): "оставим двадцать
+    # тысяч долларов" emitted cost=20000 but grounding rejected because
+    # "20000" is not literally in the utterance. Russian number-words
+    # must ground.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 20000, "оставим двадцать тысяч долларов") is True
+    assert value_grounded("cost", 100000, "хочу сто тысяч рублей") is True
+    assert value_grounded("cost", 20000, "ровно двадцать тысяч") is True
+
+
+def test_value_grounded_cost_rejects_unrelated_ru_number():
+    # "двадцать процентов" is a percent, not a cost — must NOT ground
+    # cost=20.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 20, "двадцать процентов аванс") is False
+
+
+def test_value_grounded_cost_rejects_mismatched_magnitude():
+    # "двадцать тысяч" = 20000, must NOT ground cost=99999.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 99999, "двадцать тысяч долларов") is False
+
+
+def test_value_grounded_cost_digit_form_still_works():
+    # Sanity: digit-based grounding still passes (we didn't break it).
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 20000, "20000 долларов") is True
+
+
+def test_value_grounded_cost_mixed_percent_and_cost():
+    # Adversarial case from Task 6 review: an utterance that mixes a
+    # percent value AND a cost value should ground the cost.
+    # NOTE: parse_ru_number's percent-reset is GLOBAL, so this one
+    # asserts on the order. With percent first, the cost survives.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 100000, "двадцать процентов и сто тысяч долларов") is True

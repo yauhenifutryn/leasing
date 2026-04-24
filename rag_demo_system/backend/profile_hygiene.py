@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .numeric_words_ru import parse_ru_number
+
 MVP_PREPAID_RANGE = (0.0, 40.0)
 MVP_TERM_RANGE = (12, 84)
 
@@ -277,6 +279,17 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
                     re.IGNORECASE,
                 ):
                     return True
+        # Task 7: word-form fallback for cost / prepaid_amount.
+        # Handles fully spelled-out amounts like "двадцать тысяч долларов"
+        # → 20000. parse_ru_number returns None when the utterance contains
+        # only a percent context ("двадцать процентов") and resets on the
+        # percent keyword, so percent-only utterances safely return None.
+        # This branch is reached only when digit-form and Fix-34 multiplier
+        # checks both failed, so it is strictly additive.
+        if field in ("cost", "prepaid_amount"):
+            parsed = parse_ru_number(utterance)
+            if parsed is not None and parsed == _int:
+                return True
         # Fix 40b: years-to-months conversion for term_months.
         # User says "на 7 лет" → classifier emits term_months=84.
         # The digits "84" never appear in the utterance, so require the
