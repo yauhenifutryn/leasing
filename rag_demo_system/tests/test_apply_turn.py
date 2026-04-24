@@ -696,3 +696,195 @@ def test_recalculate_action_on_partial_profile_fires_clarify() -> None:
     classifier = make_classifier(intent="TOOL", action="recalculate")
     action = apply_turn(profile, classifier, utterance="пересчитай")
     assert isinstance(action, EmitClarify)
+
+
+# ---------------------------------------------------------------- Bug 1: step 6 preflight
+# 2026-04-24 live regression session ac0e35d6: FireCalc fired with raw
+# USD cost, calc API rejected it, `render_calc_result` printed "?"
+# placeholders. apply_turn step 6 now applies the legacy DirectTool
+# preprocessing: currency policy (EUR/RUB reject), subject restriction
+# (non-individual subject reject), USD→BYN conversion before FireCalc.
+
+
+def test_step6_usd_profile_converts_to_byn_and_stashes_original() -> None:
+    """Fresh capture: user said 80k USD, all other fields captured,
+    state=CONFIRMED + confirmation. Step 6 converts USD→BYN in-place
+    and stashes the USD figures on the profile for the disclosure
+    prefix. FireCalc carries the converted cost in both snapshot and
+    calc_params."""
+    profile = make_complete_profile(cost=80000.0, currency="USD")
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireCalc)
+    # 80k USD × 3.0 = 240k BYN at the default MVP rate.
+    assert action.snapshot.cost == 240000.0
+    assert action.snapshot.currency == "BYN"
+    assert action.snapshot.original_cost == 80000.0
+    assert action.snapshot.original_currency == "USD"
+    # calc_params ship BYN to the calculator API.
+    assert action.calc_params["cost"] == 240000.0
+    assert action.calc_params["currency"] == "BYN"
+
+
+def test_step6_eur_for_physical_person_rejected_as_oor() -> None:
+    """Физ лицо + EUR → FireOORMessage. Calculator API currently
+    supports BYN/USD only for individuals."""
+    profile = make_complete_profile(cost=80000.0, currency="EUR")
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireOORMessage)
+    assert "EUR" in action.message or "евро" in action.message.lower() or "валюта" in action.message.lower()
+
+
+def test_step6_rub_for_physical_person_rejected_as_oor() -> None:
+    """Физ лицо + RUB rejected (Belarusian бытие plus MVP scope)."""
+    profile = make_complete_profile(cost=5000000.0, currency="RUB")
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireOORMessage)
+
+
+def test_step6_commercial_subject_restriction_is_safety_net() -> None:
+    """Физ лицо + spec-tech: the normal flow never reaches step 6 with
+    this combination because E7b (derive_implied_flips) flips client_type
+    to Юр in step 4. But _preflight_calc_policy still carries the legacy
+    safety-net check (app.py:2386-2395) in case a migrated / manually
+    staged profile bypasses E7b. Exercise the helper directly."""
+    from backend.turn_dispatcher import _preflight_calc_policy
+    profile = make_complete_profile(
+        subject="Спецтехника", cost=200000.0, currency="BYN",
+    )
+    action = _preflight_calc_policy(profile)
+    assert isinstance(action, FireOORMessage)
+    assert "физических" in action.message.lower()
+
+
+def test_step6_legal_person_usd_does_not_convert() -> None:
+    """Юр лицо + USD: conversion does NOT fire — ЮЛ calculator supports
+    USD natively. No original_* stash."""
+    profile = make_complete_profile(
+        client_type="Юридическое лицо", cost=80000.0, currency="USD",
+    )
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireCalc)
+    assert action.snapshot.cost == 80000.0
+    assert action.snapshot.currency == "USD"
+    assert action.snapshot.original_cost is None
+    assert action.snapshot.original_currency is None
+
+
+def test_step6_byn_native_profile_no_conversion_no_stash() -> None:
+    """Physical person who quotes in BYN from the start: no conversion,
+    no disclosure."""
+    profile = make_complete_profile(cost=240000.0, currency="BYN")
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireCalc)
+    assert action.snapshot.original_cost is None
+    assert action.snapshot.original_currency is None
+
+
+def test_step6_re_calc_preserves_usd_disclosure_on_same_params() -> None:
+    """After a USD→BYN conversion on turn N, turn N+1 re-confirms with
+    the same params (user said 'да'). Preflight preserves the stashed
+    original_* so the disclosure prefix still narrates. Live ac0e35d6
+    turn 12 depends on this — user 'да' after change-confirm still
+    gets the 'Стоимость 80000 долларов...' prefix."""
+    profile = make_complete_profile(
+        cost=240000.0, currency="BYN",
+        original_cost=80000.0, original_currency="USD",
+    )
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireCalc)
+    assert action.snapshot.original_cost == 80000.0
+    assert action.snapshot.original_currency == "USD"
+
+
+def test_step1_currency_change_from_usd_to_byn_clears_original_stash() -> None:
+    """User switched USD→BYN mid-session via a change-confirm. Step 1
+    apply-patches must clear the stale USD disclosure or the next
+    calc narrates "Стоимость N долларов..." even though the user
+    explicitly moved off USD."""
+    profile = make_complete_profile(
+        cost=240000.0, currency="BYN",
+        original_cost=80000.0, original_currency="USD",
+    )
+    # Stage a user-initiated currency change from the prior USD capture.
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {
+        "currency": {"old": "USD", "new": "BYN"},
+    }}
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    # After applying, profile.original_* should be cleared.
+    assert profile.original_cost is None
+    assert profile.original_currency is None
+    assert isinstance(action, FireCalc)
+    assert action.snapshot.original_cost is None
+
+
+# ---------------------------------------------------------------- Bug 3: name capture + snapshot
+# 2026-04-24 live regression ac0e35d6 turn 14: STT garbled user's
+# follow-up as "Боянс патиба", classifier emitted name="Боянс",
+# profile correctly rejected stale name (first-time-only), but the
+# FireLLMFallback handler's anchor didn't include the captured name
+# so the LLM greeted "Здравствуйте, Боянс!" on top of the profile
+# already holding name="Евгений".
+
+
+def test_apply_turn_captures_name_first_time() -> None:
+    """Fresh session: user said 'Меня зовут Евгений'. apply_turn mirrors
+    legacy app.py:1414-1416 — accept only when profile.name is empty."""
+    profile = make_partial_profile()
+    classifier = make_classifier(intent="CONVERSATION", name="Евгений")
+    apply_turn(profile, classifier, utterance="Меня зовут Евгений")
+    assert profile.name == "Евгений"
+
+
+def test_apply_turn_ignores_stale_name_on_later_turn() -> None:
+    """Profile already has name="Евгений"; classifier re-emits
+    name="Боянс" on a garbled STT turn. apply_turn must NOT overwrite —
+    first-time-only semantics."""
+    profile = make_partial_profile()
+    profile.name = "Евгений"
+    classifier = make_classifier(intent="CONVERSATION", name="Боянс")
+    apply_turn(profile, classifier, utterance="Боянс патиба")
+    assert profile.name == "Евгений"
+
+
+def test_fire_llm_fallback_snapshot_carries_name() -> None:
+    """FireLLMFallback.snapshot must include profile.name so the LLM's
+    anti-hallucination anchor tells it 'the client is Евгений' and it
+    doesn't improvise a different greeting."""
+    profile = make_partial_profile()
+    profile.name = "Евгений"
+    classifier = make_classifier(intent="CONVERSATION")
+    action = apply_turn(profile, classifier, utterance="Привет ещё раз")
+    assert isinstance(action, FireLLMFallback)
+    assert action.snapshot is not None
+    assert action.snapshot.name == "Евгений"
+
+
+def test_snapshot_anchor_lines_include_name_field() -> None:
+    """Anchor-line renderer must include `name` as the first prompt
+    line so the LLM treats it as captured identity."""
+    from backend.turn_dispatcher import _snapshot_anchor_lines
+    from backend.turn_action import ProfileSnapshot
+    snap = ProfileSnapshot(
+        client_type=None, subject=None, cost=None, currency=None,
+        original_cost=None, original_currency=None,
+        condition_new=None, age_years=None,
+        prepaid_pct=None, prepaid_amount=None,
+        term_months=None, type_schedule=None,
+        name="Евгений",
+    )
+    lines = _snapshot_anchor_lines(snap)
+    assert any("name: Евгений" in line for line in lines)

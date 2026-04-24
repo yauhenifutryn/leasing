@@ -37,6 +37,13 @@ class ProfileSnapshot:
     prepaid_amount: Optional[float]
     term_months: Optional[int]
     type_schedule: Optional[str]
+    # Captured client name — anchor for FireLLMFallback so the LLM does
+    # not re-greet with a garbled STT name when the classifier spuriously
+    # re-emits `name` on later turns (live ac0e35d6 turn 14 emitted
+    # "Здравствуйте, Боянс!" on top of a profile already holding
+    # "Евгений"). Defaults to None for the common no-name case and for
+    # backward compat with ProfileSnapshot callers that don't thread it.
+    name: Optional[str] = None
 
 
 @dataclass(frozen=True)

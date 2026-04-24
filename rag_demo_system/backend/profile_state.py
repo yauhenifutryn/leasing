@@ -35,6 +35,7 @@ def build_snapshot(profile: ClientProfile) -> ProfileSnapshot:
         prepaid_amount=profile.prepaid_amount,
         term_months=profile.term_months,
         type_schedule=profile.type_schedule,
+        name=profile.name,
     )
 
 

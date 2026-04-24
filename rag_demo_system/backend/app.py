@@ -21,7 +21,7 @@ from .grounding_validator import replace_ungrounded
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text, split_for_tts_streaming
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
-from .classifier_schema import parse_classifier_output
+from .classifier_schema import ClassifierOutput, parse_classifier_output
 from .rag_skip import should_skip_rag
 from .profile_prompts import (
     build_change_confirm_text,
@@ -1086,13 +1086,27 @@ async def _stream_voice_response(
     if _fast_confirm:
         needs_tool = False  # intent=CONVERSATION, is_confirmation handles the rest
         _sa_is_confirm = True
+        # Synthesise a minimal ClassifierOutput for the APPLY_TURN_ENABLED
+        # path (apply_turn's confirmation logic matches on intent + the
+        # `is_confirmation` flag — no other fields are needed). Without
+        # this, the fast-path skips the classifier call block where
+        # `_sa_output` is normally populated, so the flag gate at
+        # app.py:1659 sees `_sa_output is None` and falls through to the
+        # legacy 5-gate block. Live regression ac0e35d6 turn 12: the
+        # "Да" confirmation bypassed apply_turn silently and legacy
+        # DirectTool ran the recalc — which hid the regression behind
+        # legacy's safety net.
+        _sa_output = ClassifierOutput.model_validate(
+            {"intent": "CONVERSATION", "is_confirmation": True},
+            context={"utterance": message or ""},
+        )
         print(
             f"[Classifier] FAST-PATH: confirm in state={_current_state.value if _current_state else '?'} msg='{_msg_stripped}' session={session_id[:8]}",
             flush=True,
         )
-        # Skip the classifier call block entirely — downstream orchestrator
-        # Gate 3 (READBACK_PENDING) or Gate 4 (CHANGE_PENDING) will handle
-        # the state transition via _sa_is_confirm.
+        # Downstream: the APPLY_TURN_ENABLED gate handles the state
+        # transition via apply_turn step 1/2; legacy path fallback
+        # remains via Gate 3 (READBACK_PENDING) / Gate 4 (CHANGE_PENDING).
 
     _SKIP_CLASSIFIER = {
         "спасибо", "спасибо большое", "понял", "понятно", "ясно", "ок",

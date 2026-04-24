@@ -702,3 +702,99 @@ async def test_fire_calc_tolerates_session_none() -> None:
             tts=FakeTts(), calc=calc, rag_future=None,
         ):
             pass
+
+
+# ---------------------------------------------------------------- Bug 1: ok=False + USD
+# 2026-04-24 live regression ac0e35d6: FireCalc handler rendered "? USD"
+# placeholders on calc API failure. Also the USD disclosure prefix wasn't
+# attached on success when the snapshot carried original_* stash.
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_on_ok_false_speaks_error_not_question_marks() -> None:
+    """Calc returned ok=False (API rejected params). Handler MUST speak
+    the API's error text instead of running `render_calc_result` — the
+    renderer prints '?' for every missing numeric field when the result
+    dict is empty."""
+    from backend.turn_dispatcher import execute_action
+
+    calc = FakeCalc(result={
+        "ok": False,
+        "error": "Стоимость должна быть от 10 000 до 10 000 000 рублей.",
+        "params": dict(_CALC_PARAMS),
+    })
+    tts = FakeTts()
+    async for _ in execute_action(
+        FireCalc(
+            snapshot=_complete_snapshot_usd_to_byn(),
+            calc_params=dict(_CALC_PARAMS),
+        ),
+        ws=None, session=FakeVoiceSession(), backend=FakeLLMBackend(),
+        tts=tts, calc=calc, rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    # NOT the placeholder pattern "? USD" / "? BYN" from render_calc_result.
+    assert "? USD" not in spoken
+    assert "? BYN" not in spoken
+    # The API error text reached the user verbatim.
+    assert "от 10 000 до 10 000 000" in spoken
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_on_ok_false_empty_dict_speaks_generic_fallback() -> None:
+    """Calc returned ok=False with no 'error' key — handler falls back
+    to a generic Russian retry phrase, not '?' placeholders."""
+    from backend.turn_dispatcher import execute_action
+
+    calc = FakeCalc(result={"ok": False})
+    tts = FakeTts()
+    async for _ in execute_action(
+        FireCalc(
+            snapshot=_complete_snapshot_usd_to_byn(),
+            calc_params=dict(_CALC_PARAMS),
+        ),
+        ws=None, session=FakeVoiceSession(), backend=FakeLLMBackend(),
+        tts=tts, calc=calc, rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert "? USD" not in spoken
+    assert "? BYN" not in spoken
+    assert "рассч" in spoken.lower() or "уточн" in spoken.lower()
+
+
+@pytest.mark.asyncio
+async def test_fire_calc_attaches_currency_conversion_from_snapshot() -> None:
+    """When snapshot.original_currency == 'USD', the handler must
+    populate result['currency_conversion'] so render_calc_result
+    prefixes the spoken narration with 'Стоимость N долларов (это M
+    белорусских рублей по курсу X к 1)'. Live ac0e35d6 lost this
+    prefix because the handler never attached the disclosure."""
+    from backend.turn_dispatcher import execute_action
+
+    calc_result = {
+        "ok": True,
+        "params": {"cost": 240000, "currency": "BYN", "prepaid": 30},
+        "advance_sum": 72000, "payment_min": 8109,
+        "buyout_sum": 10000, "total": 342317,
+        "num_payments": 36, "increase_percent": 12.5,
+    }
+    calc = FakeCalc(result=dict(calc_result))
+    tts = FakeTts()
+    async for _ in execute_action(
+        FireCalc(
+            snapshot=_complete_snapshot_usd_to_byn(),
+            calc_params={"cost": 240000, "currency": "BYN"},
+        ),
+        ws=None, session=FakeVoiceSession(), backend=FakeLLMBackend(),
+        tts=tts, calc=calc, rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert "Стоимость 80000 долларов" in spoken
+    assert "240000 белорусских рублей" in spoken
+    assert "по курсу 3 к 1" in spoken

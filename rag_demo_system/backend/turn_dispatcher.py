@@ -101,6 +101,7 @@ def _project_snapshot(
         prepaid_amount=patches.get("prepaid_amount", profile.prepaid_amount),
         term_months=patches.get("term_months", profile.term_months),
         type_schedule=patches.get("type_schedule", profile.type_schedule),
+        name=patches.get("name", profile.name),
     )
 
 
@@ -125,6 +126,69 @@ _CALC_INTENT_ACTIONS = frozenset({
     "change_param",
     "clarify_client_type",
 })
+
+
+# MVP currency + subject policy for Физ лицо. Lifted verbatim from the
+# legacy DirectTool preprocessing (app.py:2336-2395) so the apply_turn
+# path produces the same OOR messages and the same USD→BYN behaviour.
+_PHYS_REJECT_CURRENCIES = frozenset({"EUR", "RUB", "RUR", "CNY"})
+_PHYS_ALLOWED_SUBJECTS = frozenset({"легковой автомобиль", "прочий транспорт"})
+
+
+def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
+    """Apply the MVP currency + subject policy just before FireCalc fires.
+    Returns a non-FireCalc TurnAction (FireOORMessage) when the profile
+    is not calc-eligible; returns None when the profile is fine and the
+    caller should proceed with FireCalc.
+
+    Also performs the USD→BYN conversion as a profile mutation so
+    `build_calc_params(profile)` ships BYN cost to the calculator and
+    `render_calc_result` picks up the USD disclosure prefix.
+    """
+    from .profile_prompts import _get_usd_byn_rate  # lazy — reuses cache
+
+    # NOTE: unlike legacy app.py:2345-2346 we do NOT clear `original_*`
+    # here. Legacy recomputed per turn from `_direct_params` and left
+    # `profile.currency` as-is, so a re-dispatch naturally re-converted.
+    # apply_turn mutates profile.currency to BYN in the conversion
+    # branch below, so on the second confirmation turn (re-calc with
+    # same params) the profile already holds the BYN cost AND the
+    # original USD stash — clearing here would drop the USD disclosure
+    # prefix from the re-calc readback. Instead, the USD→BYN switch
+    # triggered by a user-initiated change (step 1 apply-patches) is
+    # responsible for clearing `original_*` — see ClientProfile.
+    is_phys = profile.client_type == "Физическое лицо"
+
+    # (1) Reject unsupported currencies for Физ лицо.
+    if is_phys and profile.currency in _PHYS_REJECT_CURRENCIES:
+        return FireOORMessage(message=(
+            f"Для физических лиц сейчас поддерживаются расчёты в белорусских "
+            f"рублях и в долларах. Валюта {profile.currency} временно не "
+            f"поддерживается. Уточните, пожалуйста, стоимость в BYN или USD."
+        ))
+
+    # (2) Reject non-individual subjects for Физ лицо. Spec §6 E8 — only
+    #     "Легковой автомобиль" / "Прочий транспорт" are lease-eligible
+    #     for individuals; everything else is a ЮЛ-only line of business.
+    subject_lower = (profile.subject or "").lower().strip()
+    if is_phys and subject_lower and subject_lower not in _PHYS_ALLOWED_SUBJECTS:
+        return FireOORMessage(message=(
+            f"Для физических лиц доступен лизинг только легковых автомобилей "
+            f"и прочего транспорта. {profile.subject} доступен для "
+            f"юридических лиц и ИП."
+        ))
+
+    # (3) USD → BYN conversion for Физ лицо.
+    if is_phys and profile.currency == "USD" and profile.cost is not None:
+        rate = _get_usd_byn_rate()
+        old_cost = float(profile.cost)
+        new_cost = round(old_cost * rate, 2)
+        profile.cost = new_cost
+        profile.currency = "BYN"
+        profile.original_cost = old_cost
+        profile.original_currency = "USD"
+
+    return None
 
 
 def _is_calc_intent(classifier_output: ClassifierOutput) -> bool:
@@ -199,6 +263,14 @@ def _dispatch_once(
         for field_name, change in changes.items():
             if hasattr(profile, field_name):
                 setattr(profile, field_name, change["new"])
+        # Clear USD→BYN disclosure stash when the user actively switched
+        # currency (or cost) away from a prior USD capture. Without this
+        # the next calc re-emits "Стоимость 80000 долларов..." even
+        # though the user has explicitly moved to a different currency.
+        if "currency" in changes or "cost" in changes:
+            if profile.currency != "USD":
+                profile.original_cost = None
+                profile.original_currency = None
         profile.pending_change = None
         profile.state = ProfileState.CONFIRMED
         return Noop(reason="redispatch_change")
@@ -216,6 +288,18 @@ def _dispatch_once(
     proposed = _grounded_proposed_patches(classifier_output, utterance)
     proposed.update(derive_implied_flips(profile, proposed))
     first_time, delta = partition_patches(profile, proposed)
+
+    # Name capture (first-time only). Not a calc-grounded field so it
+    # lives outside `_GROUNDED_FIELDS`; the classifier extracts name
+    # from surface patterns ("меня зовут X") and we mirror the legacy
+    # app.py:1414-1416 semantics: accept only when currently empty,
+    # ignore stale re-emissions on later turns (prevents the garbled
+    # STT on live ac0e35d6 turn 14 from overwriting "Евгений" with
+    # "Боянс"). Snapshot then carries the captured name into the
+    # FireLLMFallback prompt anchor.
+    sa_name = (getattr(classifier_output, "name", None) or "").strip()
+    if sa_name and not (profile.name or "").strip():
+        profile.name = sa_name
 
     # STEP 4 (E6 fix): any delta on a captured field → EmitChangeConfirm.
     # Covers explicit change_field pairs AND top-level field flips on
@@ -257,11 +341,24 @@ def _dispatch_once(
     # Profile is already validated; build calc params from profile state.
     # Post-calc narration is rendered by execute_action's FireCalc
     # handler via render_calc_result(result) — LLM is never involved.
+    #
+    # Legacy DirectTool preprocessing (app.py:2336-2395) runs inline here:
+    # 1. Unsupported-currency reject (EUR/RUB for Физ лицо) → FireOORMessage.
+    # 2. Subject-restriction reject (non-individual subject for Физ лицо).
+    # 3. USD→BYN conversion for Физ лицо (profile.cost becomes BYN,
+    #    profile.original_cost / original_currency stash the USD figures
+    #    so render_calc_result emits the disclosure prefix).
+    # Without this preprocessing, calc is invoked with raw USD cost and
+    # returns ok=False (no matching rates), producing "?" placeholder
+    # output. Live regression observed on session ac0e35d6 (2026-04-24).
     if (
         profile.state == ProfileState.CONFIRMED
         and classifier_output.is_confirmation
         and profile.is_complete_for_calc()
     ):
+        policy_action = _preflight_calc_policy(profile)
+        if policy_action is not None:
+            return policy_action
         return FireCalc(
             snapshot=build_snapshot(profile),
             calc_params=build_calc_params(profile),
@@ -299,12 +396,18 @@ def _dispatch_once(
     # STEP 8 (catch-all): freeform question, state-pending deny without
     # correction, or any non-structural turn → FireLLMFallback. Snapshot
     # included when any field is captured so LLM prompt has E7 anchor.
-    any_captured = any(
-        getattr(profile, f, None) is not None
-        for f in (
-            "client_type", "subject", "cost", "currency",
-            "condition_new", "age_years", "prepaid_pct",
-            "prepaid_amount", "term_months", "type_schedule",
+    # `name` counts as a captured field so the LLM knows who it's
+    # talking to on later turns (prevents the "Здравствуйте, Боянс!"
+    # regression from live ac0e35d6 turn 14).
+    any_captured = (
+        bool((profile.name or "").strip())
+        or any(
+            getattr(profile, f, None) is not None
+            for f in (
+                "client_type", "subject", "cost", "currency",
+                "condition_new", "age_years", "prepaid_pct",
+                "prepaid_amount", "term_months", "type_schedule",
+            )
         )
     )
     return FireLLMFallback(
@@ -395,6 +498,24 @@ async def execute_action(
                 return
             raise
 
+        # Attach the USD disclosure block to the result BEFORE rendering
+        # so `render_calc_result`'s `conv_prefix` fires. Snapshot carries
+        # the original USD figures when apply_turn step 6 performed the
+        # USD→BYN conversion. Legacy parity with app.py:2423-2424.
+        if (
+            isinstance(result, dict)
+            and action.snapshot.original_currency == "USD"
+            and action.snapshot.original_cost is not None
+        ):
+            result.setdefault("currency_conversion", {
+                "from": "USD",
+                "to": "BYN",
+                "amount_from": action.snapshot.original_cost,
+                "amount_to": action.snapshot.cost,
+                "rate": _infer_usd_byn_rate(action.snapshot),
+                "rate_source": "apply_turn step 6",
+            })
+
         if _result_ok(result):
             _reset_calc_failure(session, calc_sig)
             _append_tool_call(session, action.calc_params, result)
@@ -406,7 +527,13 @@ async def execute_action(
                 await tts.say(oor)
                 yield oor
                 return
-            spoken = render_calc_result(result)
+            # Don't render the "? USD" placeholder line on an API error.
+            # Surface the calculator's error text (or a generic fallback)
+            # so the user hears something actionable. Live regression
+            # ac0e35d6 (2026-04-24): handler previously called
+            # render_calc_result on ok=False results, producing "Аванс
+            # 30%: ? USD..." placeholders when USD wasn't converted.
+            spoken = _format_calc_error(result)
 
         await tts.say(spoken)
         yield spoken
@@ -544,6 +671,37 @@ def _result_ok(result) -> bool:
     return isinstance(result, dict) and bool(result.get("ok", True))
 
 
+def _infer_usd_byn_rate(snapshot: ProfileSnapshot) -> float:
+    """Reconstruct the USD→BYN rate from the snapshot's original/final
+    cost pair so `render_calc_result`'s disclosure prefix narrates a
+    rate consistent with what apply_turn step 6 actually used.
+    Falls back to the configured rate when the snapshot can't produce
+    a positive ratio."""
+    from .profile_prompts import _get_usd_byn_rate  # lazy — reuses cache
+    if (
+        snapshot.cost is not None
+        and snapshot.original_cost
+        and snapshot.original_cost > 0
+    ):
+        return snapshot.cost / snapshot.original_cost
+    return _get_usd_byn_rate()
+
+
+def _format_calc_error(result) -> str:
+    """Build a user-facing error phrase from a calc result with ok=False.
+    Calculator's `error` field already holds a Russian OOR message
+    when the API rejects the params; passthrough. Otherwise use a
+    generic fallback so the user doesn't hear "?" placeholders."""
+    if isinstance(result, dict):
+        err = result.get("error")
+        if err:
+            return str(err)
+    return (
+        "К сожалению, не удалось рассчитать по этим параметрам. "
+        "Попробуем уточнить — стоимость, срок или аванс?"
+    )
+
+
 def _append_tool_call(session, params, result) -> None:
     """Append a calculator invocation to the voice_session's per-turn
     tool-call log. Orchestrator rolls this into `chat_history` at turn
@@ -573,6 +731,7 @@ def _snapshot_anchor_lines(snap: ProfileSnapshot) -> list[str]:
     slots it might try to fill.
     """
     pairs: list[tuple[str, object]] = [
+        ("name", snap.name),
         ("client_type", snap.client_type),
         ("subject", snap.subject),
         ("cost", snap.cost),
