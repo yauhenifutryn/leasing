@@ -101,13 +101,17 @@ def test_smoke_empty_profile_tool_intent_emits_clarify() -> None:
 
 
 def test_e5_readback_emits_on_profile_complete_even_when_intent_conversation() -> None:
-    profile = make_complete_profile()
+    profile = make_complete_profile()  # currency="USD", cost=80000.0
     profile.state = ProfileState.COLLECTING
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
     action = apply_turn(profile, classifier, utterance="Аннуитетный график")
     assert isinstance(action, EmitReadback)
     assert profile.state == ProfileState.READBACK_PENDING
-    assert action.snapshot.cost == 80000.0
+    # Preflight (step 5a) converts USD→BYN before the readback emits;
+    # snapshot carries the BYN cost. USD figures stash in original_*.
+    assert action.snapshot.currency == "BYN"
+    assert action.snapshot.original_cost == 80000.0
+    assert action.snapshot.original_currency == "USD"
 
 
 def test_e5_readback_emits_on_profile_complete_even_when_intent_none() -> None:
@@ -234,8 +238,11 @@ def test_e7_emit_readback_snapshot_carries_every_captured_field() -> None:
     # deterministic readback renderer has full context.
     assert action.snapshot.client_type == "Физическое лицо"
     assert action.snapshot.subject == "Легковой автомобиль"
-    assert action.snapshot.cost == 80000.0
-    assert action.snapshot.currency == "USD"
+    # Preflight (step 5a) converts USD→BYN before the readback emits;
+    # snapshot carries BYN cost, original USD values stash in original_*.
+    assert action.snapshot.currency == "BYN"
+    assert action.snapshot.original_cost == 80000.0
+    assert action.snapshot.original_currency == "USD"
     assert action.snapshot.condition_new == 1
     assert action.snapshot.prepaid_pct == 20.0
     assert action.snapshot.term_months == 36
@@ -1006,3 +1013,65 @@ def test_step5_first_time_respects_locked_fields():
     apply_turn(p, co, "стоимость 99999 рублей", turn_id=1)
 
     assert p.cost is None, "locked field was set in step 5"
+
+
+def test_step5a_rub_for_phys_emits_oor_not_readback():
+    # Regression for live call f7e5aa1d (2026-04-24): classifier emitted
+    # currency=RUB while profile was COLLECTING; apply_turn step 5a
+    # transitioned to READBACK_PENDING and EmitReadback spoke
+    # "стоимость 10000 RUB" as confirmed parameters. Preflight must fire
+    # BEFORE the readback so RUB → FireOORMessage immediately.
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.turn_action import FireOORMessage
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=10000.0,
+        currency="RUB",
+        condition_new=1,
+        term_months=24,
+        prepaid_pct=20.0,
+        type_schedule="0",
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "action": "calculate"},
+        context={"utterance": "аннуитетный"},
+    )
+
+    action = apply_turn(p, co, "аннуитетный", turn_id=1)
+
+    assert isinstance(action, FireOORMessage)
+    assert p.state != ProfileState.READBACK_PENDING, "RUB reached readback"
+
+
+def test_preflight_commercial_subject_for_phys_emits_oor():
+    # Unit test for _preflight_calc_policy subject restriction: Физ лицо +
+    # Грузовой автомобиль must return FireOORMessage.
+    # Note: in the apply_turn dispatch flow, derive_implied_flips intercepts
+    # this combination BEFORE step 5a (it proposes client_type →
+    # Юридическое лицо as a delta, firing EmitChangeConfirm at step 4).
+    # This test exercises the backstop policy directly so the guard is
+    # verified independently of the dispatch routing.
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import _preflight_calc_policy
+    from backend.turn_action import FireOORMessage
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Грузовой автомобиль",
+        cost=10000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=24,
+        prepaid_pct=20.0,
+        type_schedule="0",
+        state=ProfileState.COLLECTING,
+    )
+
+    action = _preflight_calc_policy(p)
+
+    assert isinstance(action, FireOORMessage)

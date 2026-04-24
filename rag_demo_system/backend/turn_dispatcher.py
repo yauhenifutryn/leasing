@@ -320,11 +320,20 @@ def _dispatch_once(
     # the E5 fix. On live call cc7fc318 Qwen labeled the "Аннуитетный
     # график" turn as CONVERSATION and the old gate skipped; now we
     # always emit.
+    # Preflight runs BEFORE the readback so RUB/EUR + Физ лицо or
+    # commercial-subject + Физ лицо produces FireOORMessage instead of
+    # speaking unsupported params as "confirmed" (live regression
+    # f7e5aa1d 2026-04-24: "стоимость 10000 RUB" in readback).
+    # Side effect: USD→BYN conversion mutates profile.cost/currency so
+    # the readback (happy path) speaks BYN with USD disclosure prefix.
     if (
         profile.is_complete_for_calc()
         and profile.state == ProfileState.COLLECTING
         and not classifier_output.is_confirmation
     ):
+        policy_action = _preflight_calc_policy(profile)
+        if policy_action is not None:
+            return policy_action
         profile.state = ProfileState.READBACK_PENDING
         return EmitReadback(snapshot=build_snapshot(profile))
 
