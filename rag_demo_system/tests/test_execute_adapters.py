@@ -219,6 +219,71 @@ async def test_calc_adapter_raises_when_tool_registry_misses(monkeypatch) -> Non
         await mod.CalcAdapter(session_id="s1").calculate({})
 
 
+@pytest.mark.asyncio
+async def test_calc_adapter_broadcasts_sip_tool_events_on_success(monkeypatch) -> None:
+    """Monitor UI expects sip.tool.start before calc + sip.tool.result
+    after so the operator sees 'Tool: calculator' / 'Tool done' lines.
+    Legacy DirectTool emits these at app.py:2415 / 2474. Adapter must
+    mirror or UI is silent even when calc fires."""
+    from backend import execute_adapters as mod
+
+    class _FakeTool:
+        def fill_defaults(self, params):
+            return dict(params), {}
+
+        def execute(self, params, ctx):
+            return {"ok": True, "params": params, "advance_sum": 72000}
+
+    monkeypatch.setattr(mod, "get_all_tools", lambda: {"calculator": _FakeTool()})
+
+    broadcasts: list[dict] = []
+
+    async def _capture(event: dict) -> None:
+        broadcasts.append(event)
+
+    monkeypatch.setattr(mod.CalcAdapter, "_broadcast", staticmethod(_capture))
+
+    adapter = mod.CalcAdapter(session_id="sid-live", client_phone=None)
+    result = await adapter.calculate({"cost": 240000})
+
+    assert result["ok"] is True
+    types_sent = [b["type"] for b in broadcasts]
+    assert types_sent == ["sip.tool.start", "sip.tool.result"]
+    assert broadcasts[0]["call_id"] == "sid-live"
+    assert broadcasts[0]["tool"] == "calculator"
+    assert broadcasts[0]["params"] == {"cost": 240000}
+    assert broadcasts[1]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_calc_adapter_broadcasts_tool_failure_on_exception(monkeypatch) -> None:
+    """Upstream calc exception → sip.tool.result with ok=False, then
+    the exception propagates so the outer FireCalc handler can bump the
+    circuit breaker."""
+    from backend import execute_adapters as mod
+
+    class _FakeTool:
+        def fill_defaults(self, params):
+            return dict(params), {}
+
+        def execute(self, params, ctx):
+            raise RuntimeError("calc upstream 500")
+
+    monkeypatch.setattr(mod, "get_all_tools", lambda: {"calculator": _FakeTool()})
+
+    broadcasts: list[dict] = []
+    async def _capture(event: dict) -> None:
+        broadcasts.append(event)
+    monkeypatch.setattr(mod.CalcAdapter, "_broadcast", staticmethod(_capture))
+
+    with pytest.raises(RuntimeError, match="calc upstream 500"):
+        await mod.CalcAdapter(session_id="s").calculate({"cost": 100})
+
+    types_sent = [b["type"] for b in broadcasts]
+    assert types_sent == ["sip.tool.start", "sip.tool.result"]
+    assert broadcasts[1]["ok"] is False
+
+
 # ============================================================ RagFuture
 
 

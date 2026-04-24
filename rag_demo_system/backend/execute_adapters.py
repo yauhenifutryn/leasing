@@ -170,17 +170,55 @@ class CalcAdapter:
         if calc_tool is None:
             raise RuntimeError("calculator tool unavailable")
         filled_params, defaulted = calc_tool.fill_defaults(params)
-        result = await asyncio.to_thread(
-            calc_tool.execute,
-            filled_params,
-            {
-                "session_id": self._session_id,
-                "client_phone": self._client_phone,
-            },
-        )
+        # Broadcast a `sip.tool.start` event to the SIP monitor page so
+        # the operator sees the tool call land in the UI. Legacy
+        # DirectTool path emits the same event at app.py:2415-2420; this
+        # adapter must mirror it or the monitor shows no calculator line
+        # even when apply_turn successfully dispatches FireCalc.
+        await self._broadcast({
+            "type": "sip.tool.start",
+            "call_id": self._session_id,
+            "tool": "calculator",
+            "params": filled_params,
+        })
+        try:
+            result = await asyncio.to_thread(
+                calc_tool.execute,
+                filled_params,
+                {
+                    "session_id": self._session_id,
+                    "client_phone": self._client_phone,
+                },
+            )
+        except Exception:
+            await self._broadcast({
+                "type": "sip.tool.result",
+                "call_id": self._session_id,
+                "tool": "calculator",
+                "ok": False,
+            })
+            raise
         if isinstance(result, dict) and defaulted:
             result.setdefault("defaulted", defaulted)
+        await self._broadcast({
+            "type": "sip.tool.result",
+            "call_id": self._session_id,
+            "tool": "calculator",
+            "ok": bool(result.get("ok", False)) if isinstance(result, dict) else False,
+        })
         return result
+
+    @staticmethod
+    async def _broadcast(event: dict) -> None:
+        """Lazy import of broadcast_sip_event to avoid a circular import
+        at module load (app.py imports this module via execute_adapters
+        → and broadcasts live on app.py). Silently swallows failures
+        so a dead monitor page never breaks a live call."""
+        try:
+            from .app import broadcast_sip_event
+            await broadcast_sip_event(event)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class RagFuture:

@@ -1121,6 +1121,18 @@ async def _stream_voice_response(
             and not (session.tool_calls_history or session.tool_calls_this_turn)
         )
     )
+    # Phase 3.D fix: _skip bypasses the classifier call where `_sa_output`
+    # is normally populated. The APPLY_TURN_ENABLED gate below requires
+    # `_sa_output is not None`, so any skipped turn falls silently to
+    # legacy. Synthesise a minimal ClassifierOutput here so apply_turn
+    # handles the skipped turn through FireLLMFallback (intent=CONVERSATION,
+    # no confirmation, no captured fields). Preserves the fast-path
+    # confirmation signal set above when that branch already synthesised.
+    if _skip and _sa_output is None:
+        _sa_output = ClassifierOutput.model_validate(
+            {"intent": "CONVERSATION", "is_confirmation": bool(_sa_is_confirm)},
+            context={"utterance": message or ""},
+        )
     print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
     if tool_schemas and not _skip:
         # Build conversation context: last 3 turn pairs. Empirically, classifier
