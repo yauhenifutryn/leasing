@@ -86,6 +86,31 @@ def test_subject_grounded_passes():
     assert out.subject == "Легковой автомобиль"
 
 
+def test_subject_generic_mashina_grounds_legkovoi():
+    # Regression (2026-04-24 live call 5375e1bd): bare "машина" / "машину" /
+    # "автомобиль" without a category modifier must ground as
+    # Легковой автомобиль. Otherwise EmitClarify loops forever when the
+    # user mirrors the bot's own word back.
+    for utt in ("Машину брать хочу в лизинг", "машина", "хочу автомобиль"):
+        raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+        out = parse_classifier_output(raw, utterance=utt)
+        assert out.subject == "Легковой автомобиль", f"bare car utterance dropped: {utt!r}"
+
+
+def test_subject_generic_mashina_rejected_when_truck_modifier_present():
+    # Negative: "грузовую машину" must NOT ground Легковой автомобиль.
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="нужна грузовая машина")
+    assert out.subject is None
+
+
+def test_subject_generic_mashina_rejected_when_spec_modifier_present():
+    # Negative: "машина-погрузчик" or similar with spec competition must drop.
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="машина и погрузчик")
+    assert out.subject is None
+
+
 def test_type_schedule_ungrounded_nulled():
     # E2: type_schedule="1" emitted on utterance without graph word.
     raw = json.dumps({"intent": "TOOL", "type_schedule": "1"})
@@ -335,12 +360,16 @@ def test_subject_truck_passes_on_gruzovoy():
     assert out.subject == "Грузовой автомобиль"
 
 
-def test_subject_car_nulled_on_bare_mashina():
-    # Bare "машина" / "автомобиль" without category adjective is ambiguous —
-    # bot should clarify rather than ground Легковой by default.
+def test_subject_car_grounds_on_bare_mashina():
+    # 2026-04-24 reversal (live call 5375e1bd): bare "машина" / "автомобиль"
+    # with no competing category modifier grounds as Легковой автомобиль.
+    # The earlier "null and clarify" behavior caused an infinite
+    # EmitClarify loop once apply_turn landed, because the bot's own
+    # clarify text used "машину" and the user simply mirrored it back —
+    # grounding kept rejecting. Bare car-word now means car.
     raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
     out = parse_classifier_output(raw, utterance="хочу машину")
-    assert out.subject is None
+    assert out.subject == "Легковой автомобиль"
 
 
 def test_age_years_nulled_when_condition_new_ungrounded():

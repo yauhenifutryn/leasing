@@ -76,6 +76,44 @@ _SUBJECT_VALUE_CUES: dict[str, re.Pattern[str]] = {
     ),
 }
 
+# Generic "car" fallback for bare "машина" / "автомобиль" with no modifier.
+# When the user says just "машину" we treat it as Легковой автомобиль unless
+# a competing subject category (truck / spec / equipment / real estate / other
+# transport) also appears in the utterance. Fixes the EmitClarify loop where
+# the user mirrors the bot's own word and grounding rejects it.
+_SUBJECT_GENERIC_CAR_RE = re.compile(
+    r"\b(машин\w*|автомобил\w*|авто)\b",
+    re.IGNORECASE,
+)
+_SUBJECT_COMPETING_RE = re.compile(
+    r"\b("
+    r"грузов\w*|грузовик\w*|фур\w+|тягач\w*|самосвал\w*|микроавтобус\w*|камаз|уаз|"
+    r"спецтехник\w*|погрузчик\w*|экскаватор\w*|бульдозер\w*|кран\w*|каток\w*|"
+    r"трактор\w*|комбайн\w*|"
+    r"оборудовани\w*|станк\w+|установк\w+|"
+    r"недвижимост\w*|квартир\w+|здани\w+|помещени\w+|склад\w*|офис\w*|"
+    r"автобус\w*|прицеп\w*|мотоцикл\w*|скутер\w*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _subject_value_grounded(value: str, utterance: str) -> bool:
+    """Return True when `utterance` grounds `value` under the value-aware
+    subject-cue rules, including the bare-"машина" fallback for
+    Легковой автомобиль.
+    """
+    if not utterance:
+        return False
+    cue_re = _SUBJECT_VALUE_CUES.get(value)
+    if cue_re and cue_re.search(utterance):
+        return True
+    if value == "Легковой автомобиль":
+        if _SUBJECT_GENERIC_CAR_RE.search(utterance) and not _SUBJECT_COMPETING_RE.search(utterance):
+            return True
+    return False
+
+
 _CLIENT_TYPE_VALUE_CUES: dict[str, re.Pattern[str]] = {
     "Физическое лицо": re.compile(
         r"\b(физлиц\w*|физик\w*|физическ\w+)",
@@ -233,8 +271,7 @@ def value_grounded(field: str, value, utterance: str) -> bool:
     if value is None or value == "" or not utterance:
         return False
     if field == "subject" and isinstance(value, str):
-        cue_re = _SUBJECT_VALUE_CUES.get(value)
-        return bool(cue_re and cue_re.search(utterance))
+        return _subject_value_grounded(value, utterance)
     if field == "client_type" and isinstance(value, str):
         normalized = _normalize_client_type(value) or value
         cue_re = _CLIENT_TYPE_VALUE_CUES.get(normalized)
@@ -426,8 +463,7 @@ class ClassifierOutput(BaseModel):
 
         # --- Step 1: value-aware cue grounding ---
         if self.subject is not None:
-            cue_re = _SUBJECT_VALUE_CUES.get(self.subject)
-            if cue_re is None or not (utterance and cue_re.search(utterance)):
+            if not _subject_value_grounded(self.subject, utterance or ""):
                 drops.append(f"subject={self.subject!r}")
                 self.subject = None
         if self.client_type is not None:
