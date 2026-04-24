@@ -126,6 +126,13 @@ class ClientProfile:
         Like apply_patches, returns a dict of fields actually changed (for
         logging / telemetry). Sibling clears do NOT appear in the returned
         dict — only the caller-provided patches that were applied.
+
+        The returned ``changed`` dict reports only the caller-provided patches
+        that were actually applied. Prepaid sibling clears (when setting
+        prepaid_pct nulls a prior prepaid_amount, or vice versa) are a side
+        effect and are NOT included in the return value — matches the
+        ``apply_pending_change`` reporting convention, so a future callsite
+        doesn't surprise itself with an unexpected extra key.
         """
         changed: dict[str, Any] = {}
         if not patches:

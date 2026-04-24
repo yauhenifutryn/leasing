@@ -47,3 +47,24 @@ def test_apply_additive_patches_skips_unknown_attrs():
     p = ClientProfile()
     changed = p.apply_additive_patches({"not_a_field": 42})
     assert "not_a_field" not in changed
+
+
+def test_apply_additive_patches_prepaid_pct_wins_when_both_provided():
+    # When both prepaid_pct and prepaid_amount arrive in the same patch
+    # dict, prepaid_pct wins — both are applied in dict order, then the
+    # post-loop sibling-clear's `if _applied_prepaid_pct` branch runs
+    # before the `elif`, so prepaid_amount ends up None regardless of
+    # dict insertion order. This is deterministic and matches
+    # apply_pending_change semantics.
+    p = ClientProfile()
+    changed = p.apply_additive_patches({
+        "prepaid_amount": 5000.0,
+        "prepaid_pct": 20.0,
+    })
+    assert p.prepaid_pct == 20.0
+    assert p.prepaid_amount is None
+    assert "prepaid_pct" in changed
+    # Note: prepaid_amount was briefly applied then cleared; the caller
+    # sees it in `changed` because it WAS applied from patches, but the
+    # final profile state has it as None.
+    assert changed.get("prepaid_amount") == 5000.0
