@@ -956,3 +956,53 @@ def test_step1_apply_pending_change_respects_locked_fields():
     apply_turn(p, co, "да", turn_id=1)
 
     assert p.cost == 10000.0, "locked field was mutated"
+
+
+def test_step5_first_time_prepaid_amount_clears_pct_sibling():
+    # Regression for Codex high #1: first-time capture of prepaid_amount
+    # when prepaid_pct was already set must null the pct, matching
+    # Fix 42d slot-invariant semantics.
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=10000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=20.0,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "prepaid_amount": 5000.0, "action": "calculate"},
+        context={"utterance": "аванс 5000 рублей"},
+    )
+
+    apply_turn(p, co, "аванс 5000 рублей", turn_id=1)
+
+    assert p.prepaid_amount == 5000.0
+    assert p.prepaid_pct is None, "Codex high #1: sibling pct survived first-time amount capture"
+
+
+def test_step5_first_time_respects_locked_fields():
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        # cost is None (first-time path)
+        state=ProfileState.COLLECTING,
+        locked_fields={"cost"},
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "cost": 99999.0, "action": "calculate"},
+        context={"utterance": "стоимость 99999 рублей"},
+    )
+
+    apply_turn(p, co, "стоимость 99999 рублей", turn_id=1)
+
+    assert p.cost is None, "locked field was set in step 5"

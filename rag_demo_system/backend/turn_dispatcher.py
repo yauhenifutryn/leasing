@@ -309,11 +309,10 @@ def _dispatch_once(
             snapshot=_project_snapshot(profile, projected_patches),
         )
 
-    # STEP 5: apply first-time patches in place (additive captures;
-    # no user confirmation required under the capture-first principle).
+    # STEP 5: apply first-time patches in place via the slot-aware helper
+    # (preserves locked_fields + prepaid sibling-clear — Codex high #1).
     if first_time:
-        for field_name, value in first_time.items():
-            setattr(profile, field_name, value)
+        profile.apply_additive_patches(first_time)
 
     # STEP 5a (E5 fix): profile just complete + COLLECTING + not
     # is_confirmation → deterministic readback. Classifier `intent`
