@@ -41,6 +41,18 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 - [ ] CP-3.6 — Code review resolved
 - [ ] CP-3.7 — Section closed, `refactor-v1` tag pushed, docs updated
 
+## Section 3.5 — Calculator funnel API integration
+
+**Spec**: `docs/superpowers/specs/2026-04-24-calculator-funnel-design.md`
+**Prereq**: Section 3 fully closed (CP-3.4..CP-3.7 all `[x]`), `refactor-v1` tag pushed, merged to `feature/voice-pipeline`.
+
+- [ ] CP-3.5.1 — `backend/calc_limits.py` with `subjects` / `currencies` / `ranges` fetchers + 24h process cache + 20+ unit tests green
+- [ ] CP-3.5.2 — `terms` fetcher + `disagreement` logic + conflict-suggestion generation + unit tests green
+- [ ] CP-3.5.3 — `EmitConstraintConflict` TurnAction variant + `CalcLimitsAdapter` + execute_action EmitReadback handler upgraded + `CALCULATOR_FUNNEL_ENABLED` flag gated (default `0`) + all existing tests green on both flag values
+- [ ] CP-3.5.4 — LLM-side rule deletion per spec §7 (COMMERCIAL_SUBJECTS, range constants, _SUBJECT_MAP, _VALID_SUBJECTS/CURRENCIES); `_CLIENT_TYPE_MAP` ИП→Юр and 3:1 USD hack preserved (deferred to post-section)
+- [ ] CP-3.5.5 — Live SIP regression green on `CALCULATOR_FUNNEL_ENABLED=1`: happy path + combo-conflict scenario both pass on `38.80.122.98`
+- [ ] CP-3.5.6 — Flag + legacy branches removed; `calc-funnel-v1` tag pushed; section closed
+
 ## Section 4 — Natural turn-taking
 
 - [ ] CP-4.0 — Research findings documented
