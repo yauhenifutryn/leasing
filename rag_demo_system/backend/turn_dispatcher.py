@@ -794,32 +794,64 @@ async def _stream_llm_to_tts(
         (matches legacy phrase-boundary barge-in semantics);
       - on normal end, the trailing buffer is flushed as a final
         sentence.
+
+    Failure isolation (Codex adversarial 2026-04-24 high #2): any
+    exception from backend.stream(...) or the inner per-sentence emit is
+    caught, logged, and replaced with a deterministic fallback sentence
+    so the turn closes cleanly instead of tearing down the session.
     """
     from .sentence_detector import SentenceDetector
     from .text_utils import clean_answer
 
     messages = _build_fallback_messages(utterance, rag_context, snapshot)
     detector = SentenceDetector()
+    _fallback = (
+        "Извините, сейчас технические неполадки. Попробуйте, пожалуйста, "
+        "повторить вопрос."
+    )
 
-    async for token in backend.stream(messages=messages):
-        if _session_interrupted(session):
-            return
-        if not token:
-            continue
-        for sentence in detector.feed(token):
+    async def _emit(text: str) -> Optional[str]:
+        cleaned = clean_answer(text)
+        if not cleaned:
+            return None
+        await tts.say(cleaned)
+        return cleaned
+
+    try:
+        async for token in backend.stream(messages=messages):
             if _session_interrupted(session):
                 return
-            cleaned = clean_answer(sentence)
-            if not cleaned:
+            if not token:
                 continue
-            await tts.say(cleaned)
-            yield cleaned
+            for sentence in detector.feed(token):
+                if _session_interrupted(session):
+                    return
+                out = await _emit(sentence)
+                if out:
+                    yield out
+    except Exception as exc:  # noqa: BLE001 — graceful degradation per spec
+        print(
+            f"[_stream_llm_to_tts] backend.stream failed: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        if _session_interrupted(session):
+            return
+        try:
+            out = await _emit(_fallback)
+            if out:
+                yield out
+        except Exception as exc2:
+            print(
+                f"[_stream_llm_to_tts] fallback emit also failed: {type(exc2).__name__}: {exc2}",
+                flush=True,
+            )
+        return
 
+    # Success path: flush trailing partial sentence.
     if _session_interrupted(session):
         return
     remaining = detector.flush()
     if remaining:
-        cleaned = clean_answer(remaining)
-        if cleaned:
-            await tts.say(cleaned)
-            yield cleaned
+        out = await _emit(remaining)
+        if out:
+            yield out

@@ -798,3 +798,110 @@ async def test_fire_calc_attaches_currency_conversion_from_snapshot() -> None:
     assert "Стоимость 80000 долларов" in spoken
     assert "240000 белорусских рублей" in spoken
     assert "по курсу 3 к 1" in spoken
+
+
+# ---------------------------------------------------------------------------
+# Codex adversarial 2026-04-24 high #2: _stream_llm_to_tts failure isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_to_tts_catches_backend_failure_cleanly():
+    """A transport / SSE exception raised by `backend.stream(...)` must not
+    escape the async generator. The turn completes cleanly and the caller
+    sees a deterministic fallback text spoken via TTS."""
+    from unittest.mock import AsyncMock, MagicMock
+    from backend.turn_dispatcher import _stream_llm_to_tts
+
+    class _ExplodingBackend:
+        async def stream(self, messages):
+            if False:
+                yield  # make it an async generator
+            raise RuntimeError("simulated SSE transport failure")
+
+    tts = MagicMock()
+    tts.say = AsyncMock()
+    session = MagicMock()
+    session.interrupted = False
+
+    yielded: list[str] = []
+    async for chunk in _stream_llm_to_tts(
+        utterance="расскажи про операционный лизинг",
+        rag_context=None,
+        snapshot=None,
+        backend=_ExplodingBackend(),
+        tts=tts,
+        session=session,
+    ):
+        yielded.append(chunk)
+
+    # Deterministic fallback message spoken + yielded; no exception escaped.
+    assert yielded, "fallback text must be yielded on backend failure"
+    tts.say.assert_called()  # the fallback sentence was sent to TTS
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_to_tts_catches_mid_stream_failure():
+    """Failure mid-stream (after some sentences already spoken) still exits
+    cleanly; already-spoken sentences stay in the yielded list."""
+    from unittest.mock import AsyncMock, MagicMock
+    from backend.turn_dispatcher import _stream_llm_to_tts
+
+    class _PartialBackend:
+        async def stream(self, messages):
+            yield "Первое предложение. "
+            yield "Второе "
+            raise RuntimeError("mid-stream drop")
+
+    tts = MagicMock()
+    tts.say = AsyncMock()
+    session = MagicMock()
+    session.interrupted = False
+
+    yielded: list[str] = []
+    async for chunk in _stream_llm_to_tts(
+        utterance="вопрос",
+        rag_context=None,
+        snapshot=None,
+        backend=_PartialBackend(),
+        tts=tts,
+        session=session,
+    ):
+        yielded.append(chunk)
+
+    assert any("Первое предложение" in c for c in yielded)
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_to_tts_no_failure_passes_through():
+    """Sanity check: if backend.stream completes normally, the function
+    behaves as before — no fallback sentence is spoken, all yielded
+    sentences are real model output."""
+    from unittest.mock import AsyncMock, MagicMock
+    from backend.turn_dispatcher import _stream_llm_to_tts
+
+    class _NormalBackend:
+        async def stream(self, messages):
+            yield "Здравствуйте. "
+            yield "Чем могу помочь?"
+
+    tts = MagicMock()
+    tts.say = AsyncMock()
+    session = MagicMock()
+    session.interrupted = False
+
+    yielded: list[str] = []
+    async for chunk in _stream_llm_to_tts(
+        utterance="привет",
+        rag_context=None,
+        snapshot=None,
+        backend=_NormalBackend(),
+        tts=tts,
+        session=session,
+    ):
+        yielded.append(chunk)
+
+    # No fallback sentence in the output — only real model output.
+    joined = " ".join(yielded)
+    assert "Здравствуйте" in joined
+    assert "технические неполадки" not in joined
