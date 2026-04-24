@@ -114,6 +114,31 @@ _REDISPATCH_REASONS = frozenset({
     "redispatch_deny",
 })
 
+# Classifier outputs that signal the user is actively asking for a
+# calculation (or changing calc params). Step 5b's clarify-missing-fields
+# branch gates on this so conversational turns ("меня зовут X", "алло",
+# "подожди") don't get routed into a robotic "give me all 8 fields"
+# reply when the user hasn't shown calc intent yet.
+_CALC_INTENT_ACTIONS = frozenset({
+    "calculate",
+    "recalculate",
+    "change_param",
+    "clarify_client_type",
+})
+
+
+def _is_calc_intent(classifier_output: ClassifierOutput) -> bool:
+    """True when the classifier signals the turn is about a calculation
+    (intent=TOOL) or carries an explicit calc-path action. Everything
+    else (RAG/CONVERSATION without a calc action) falls through to
+    FireLLMFallback so the LLM can respond naturally.
+    """
+    if classifier_output.intent == "TOOL":
+        return True
+    if classifier_output.action in _CALC_INTENT_ACTIONS:
+        return True
+    return False
+
 
 def apply_turn(
     profile: ClientProfile,
@@ -248,16 +273,23 @@ def _dispatch_once(
     if classifier_output.action == "invalid_param":
         return FireOORMessage(message=_default_oor_message())
 
-    # STEP 5b: profile incomplete AND state is COLLECTING → EmitClarify
-    # with missing-fields list + snapshot anchor. Fires whether or not
-    # patches were applied this turn (a no-classifier-info turn still
-    # needs a clarifying question). Skipped in READBACK_PENDING /
-    # CHANGE_PENDING / CONFIRMED since those have their own follow-up
-    # paths (the user's response is interpreted as confirm/deny, not
-    # as additional field-fill).
+    # STEP 5b: profile incomplete AND state is COLLECTING AND the user
+    # has shown calculation intent → EmitClarify with missing-fields
+    # list + snapshot anchor.
+    #
+    # The calc-intent gate is the fix for the 2026-04-24 live regression:
+    # without it, apply_turn returns EmitClarify on every non-calc turn
+    # (name capture, small talk, push-back like "подожди") because the
+    # profile is always incomplete on a fresh session. Legacy path had
+    # this gate implicitly — its clarify branch lived inside an
+    # `if needs_tool:` block at app.py:~2020. Skipped in READBACK_PENDING
+    # / CHANGE_PENDING / CONFIRMED since those have their own follow-up
+    # paths (the user's response is interpreted as confirm/deny, not as
+    # additional field-fill).
     if (
         not profile.is_complete_for_calc()
         and profile.state == ProfileState.COLLECTING
+        and _is_calc_intent(classifier_output)
     ):
         return EmitClarify(
             missing=sorted(profile.missing_fields()),

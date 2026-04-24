@@ -76,14 +76,15 @@ def make_classifier(*, utterance: str = "", **overrides) -> ClassifierOutput:
 # ---------------------------------------------------------------- smoke
 
 
-def test_smoke_empty_profile_empty_utterance_emits_clarify() -> None:
-    """Smoke: an empty profile in COLLECTING naturally emits EmitClarify
-    asking for every required field (step 5b). Updated after step 5b
-    landed in Task 13.4 — previously this test asserted Noop because the
-    scaffold had no clarify branch."""
+def test_smoke_empty_profile_tool_intent_emits_clarify() -> None:
+    """Smoke: empty profile + TOOL intent → EmitClarify for every
+    required field (step 5b). The calc-intent gate landed 2026-04-24
+    after the live regression where EmitClarify was over-firing on
+    conversational turns. Keep the test intent=TOOL to pin step 5b's
+    happy path."""
     profile = make_partial_profile()
-    classifier = make_classifier()
-    action = apply_turn(profile, classifier, utterance="")
+    classifier = make_classifier(intent="TOOL")
+    action = apply_turn(profile, classifier, utterance="хочу посчитать")
     assert isinstance(action, EmitClarify)
     # Every calc-required field is missing.
     missing = set(action.missing)
@@ -500,7 +501,7 @@ def test_step_5b_emits_clarify_with_missing_and_snapshot() -> None:
     utterance = "36 месяцев"
     classifier = make_classifier(
         utterance=utterance,
-        intent="CONVERSATION",
+        intent="TOOL",  # calc-intent gate (2026-04-24): step 5b requires it
         term_months=36,
         is_confirmation=False,
     )
@@ -521,9 +522,10 @@ def test_step_5b_emits_clarify_with_missing_and_snapshot() -> None:
 
 def test_step_5b_no_patches_applied_still_emits_clarify_when_incomplete() -> None:
     # When classifier emits nothing grounded AND profile is incomplete,
-    # step 5b still fires so the caller knows what to ask for.
+    # step 5b still fires on TOOL intent so the caller knows what to
+    # ask for. Calc-intent gate (2026-04-24) requires intent=TOOL.
     profile = make_partial_profile(cost=80000.0)
-    classifier = make_classifier(intent="CONVERSATION", is_confirmation=False)
+    classifier = make_classifier(intent="TOOL", is_confirmation=False)
     action = apply_turn(profile, classifier, utterance="ну")
     assert isinstance(action, EmitClarify)
     assert action.snapshot.cost == 80000.0
@@ -612,3 +614,85 @@ def test_change_pending_legacy_single_field_shape_applies_on_confirm() -> None:
     assert profile.term_months == 48
     assert profile.state == ProfileState.CONFIRMED
     assert isinstance(action, FireCalc)
+
+
+# ---------------------------------------------------------------- calc-intent gate (step 5b)
+# 2026-04-24 live regression: session 5e2a8f73 on 38.80.122.90 showed
+# apply_turn returning EmitClarify on EVERY conversational turn (name
+# capture, push-back, small talk) because step 5b fired whenever the
+# profile was incomplete + COLLECTING, regardless of intent. Legacy
+# had an implicit `if needs_tool:` wrapper around the whole gate block.
+# These tests pin the fix: step 5b requires TOOL intent (or a calc-path
+# action); anything else falls through to FireLLMFallback.
+
+
+def test_name_capture_on_empty_profile_routes_to_llm_fallback() -> None:
+    """User says 'Меня зовут Евгений' on a fresh session. Classifier
+    emits intent=CONVERSATION with name='Евгений'. apply_turn MUST NOT
+    emit the missing-fields clarify — the user hasn't asked to calculate
+    anything. Fall through to FireLLMFallback so the LLM improvises a
+    natural greeting."""
+    profile = make_partial_profile()
+    classifier = make_classifier(intent="CONVERSATION", name="Евгений")
+    action = apply_turn(profile, classifier, utterance="Меня зовут Евгений")
+    assert isinstance(action, FireLLMFallback)
+
+
+def test_conversation_pushback_on_empty_profile_routes_to_llm_fallback() -> None:
+    """User pushes back on being rushed ('Подожди, я не просил ещё
+    этого'). apply_turn must NOT loop on the same clarify question —
+    route to LLM so the bot can respond naturally."""
+    profile = make_partial_profile()
+    classifier = make_classifier(intent="CONVERSATION")
+    action = apply_turn(profile, classifier, utterance="Подожди, я не просил ещё этого")
+    assert isinstance(action, FireLLMFallback)
+
+
+def test_small_talk_on_empty_profile_routes_to_llm_fallback() -> None:
+    """Anything non-calc on an empty profile in COLLECTING ends up in
+    FireLLMFallback. Covers 'алло', 'да о чём вообще', etc."""
+    profile = make_partial_profile()
+    classifier = make_classifier(intent="CONVERSATION")
+    for utterance in ("Алло.", "Да о чём вообще?", "Ну и?"):
+        action = apply_turn(profile, classifier, utterance=utterance)
+        assert isinstance(action, FireLLMFallback), f"utterance={utterance!r}"
+
+
+def test_rag_intent_on_empty_profile_routes_to_llm_fallback() -> None:
+    """Info question ('где вы находитесь?') — classifier says RAG. Still
+    not calc intent, so step 5b must NOT fire."""
+    profile = make_partial_profile()
+    classifier = make_classifier(intent="RAG")
+    action = apply_turn(profile, classifier, utterance="Где вы находитесь?")
+    assert isinstance(action, FireLLMFallback)
+
+
+def test_calc_action_without_tool_intent_still_fires_clarify() -> None:
+    """Defensive: some classifier paths emit intent=CONVERSATION but
+    action='calculate' (observed in legacy). Calc-intent gate accepts
+    either signal so the calc flow isn't stuck behind a label mismatch."""
+    profile = make_partial_profile()
+    classifier = make_classifier(intent="CONVERSATION", action="calculate")
+    action = apply_turn(profile, classifier, utterance="хочу посчитать")
+    assert isinstance(action, EmitClarify)
+
+
+def test_clarify_client_type_action_routes_to_emit_clarify() -> None:
+    """Classifier's 'clarify_client_type' action (foreign subject /
+    unsupported currency) is part of the calc flow — step 5b should
+    still fire so the user gets asked for the missing identity field."""
+    profile = make_partial_profile()
+    classifier = make_classifier(
+        intent="CONVERSATION", action="clarify_client_type",
+    )
+    action = apply_turn(profile, classifier, utterance="")
+    assert isinstance(action, EmitClarify)
+
+
+def test_recalculate_action_on_partial_profile_fires_clarify() -> None:
+    """User says 'пересчитай' with missing fields — classifier emits
+    action=recalculate. Calc-intent gate treats this as calc intent."""
+    profile = make_partial_profile(cost=80000.0, currency="BYN")
+    classifier = make_classifier(intent="TOOL", action="recalculate")
+    action = apply_turn(profile, classifier, utterance="пересчитай")
+    assert isinstance(action, EmitClarify)
