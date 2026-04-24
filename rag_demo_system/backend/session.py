@@ -116,6 +116,43 @@ class ClientProfile:
                 changed[k] = v
         return changed
 
+    def apply_additive_patches(self, patches: dict[str, Any]) -> dict[str, Any]:
+        """Additive-capture variant of apply_patches with prepaid-sibling-clear.
+
+        Use this when applying first-time captures on COLLECTING state (apply_turn
+        step 5) instead of raw setattr, so the prepaid_pct / prepaid_amount
+        slot-invariant from apply_pending_change is preserved.
+
+        Like apply_patches, returns a dict of fields actually changed (for
+        logging / telemetry). Sibling clears do NOT appear in the returned
+        dict — only the caller-provided patches that were applied.
+        """
+        changed: dict[str, Any] = {}
+        if not patches:
+            return changed
+        _applied_prepaid_pct = False
+        _applied_prepaid_amount = False
+        for k, v in patches.items():
+            if v is None:
+                continue
+            if k in self.locked_fields:
+                continue
+            if not hasattr(self, k):
+                continue
+            old = getattr(self, k)
+            if old != v:
+                setattr(self, k, v)
+                changed[k] = v
+                if k == "prepaid_pct":
+                    _applied_prepaid_pct = True
+                elif k == "prepaid_amount":
+                    _applied_prepaid_amount = True
+        if _applied_prepaid_pct and self.prepaid_amount is not None:
+            self.prepaid_amount = None
+        elif _applied_prepaid_amount and self.prepaid_pct is not None:
+            self.prepaid_pct = None
+        return changed
+
     def apply_pending_change(self) -> bool:
         """Apply pending_change to the profile, clear it. Return True if applied.
 
