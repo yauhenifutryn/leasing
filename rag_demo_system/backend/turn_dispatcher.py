@@ -293,6 +293,35 @@ def _dispatch_once(
     if sa_name and not (profile.name or "").strip():
         profile.name = sa_name
 
+    # Mixed-category clarify: when the classifier explicitly signals
+    # `action == "clarify"` AND a client_type delta is present AND the
+    # classifier's `subject` value was dropped by grounding (so the
+    # utterance gestured at a subject category we couldn't identify),
+    # ask instead of silently staging only half the change. Live call
+    # f7e5aa1d turn 11 regression: user said "для юрлица коммерческие
+    # автомобили" — classifier emitted client_type=Юр + subject=Грузовой,
+    # subject grounding dropped "коммерческие" (no regex overlap with the
+    # commercial-subject cue list), and step 4 staged only the client_type
+    # half — calc then ran with Легковой + Юр (wrong subject).
+    _utt_lower = (utterance or "").lower()
+    _commercial_gesture_words = (
+        "коммерч",
+        "грузов",
+        "спецтехник",
+        "оборудовани",
+    )
+    _mentions_commercial = any(tok in _utt_lower for tok in _commercial_gesture_words)
+    if (
+        classifier_output.action == "clarify"
+        and "client_type" in delta
+        and classifier_output.subject is None
+        and _mentions_commercial
+    ):
+        return EmitClarify(
+            missing=["subject"],
+            snapshot=build_snapshot(profile),
+        )
+
     # STEP 4 (E6 fix): any delta on a captured field → EmitChangeConfirm.
     # Covers explicit change_field pairs AND top-level field flips on
     # captured fields (E7b uniformity) AND implied cross-field flips

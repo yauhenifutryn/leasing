@@ -1075,3 +1075,42 @@ def test_preflight_commercial_subject_for_phys_emits_oor():
     action = _preflight_calc_policy(p)
 
     assert isinstance(action, FireOORMessage)
+
+
+def test_multi_field_change_surfaces_when_companion_grounding_drops():
+    # Regression for live call f7e5aa1d turn 11: user said "для юрлица
+    # коммерческие автомобили" — classifier emitted client_type=Юр +
+    # subject=Грузовой, but subject grounding dropped "коммерческие".
+    # Only client_type delta staged silently, calc then ran with
+    # Легковой + Юр — wrong outcome. System must instead emit a clarify
+    # that asks which subject category the user wants.
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.turn_action import EmitClarify
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=30000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=24,
+        prepaid_pct=20.0,
+        type_schedule="0",
+        state=ProfileState.CONFIRMED,
+    )
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "CONVERSATION",
+            "client_type": "Юридическое лицо",
+            "action": "clarify",
+        },
+        context={"utterance": "для юрлица коммерческие автомобили"},
+    )
+
+    action = apply_turn(p, co, "для юрлица коммерческие автомобили", turn_id=1)
+
+    # Must be clarify, NOT a change-confirm that silently drops subject.
+    assert isinstance(action, EmitClarify)
+    assert "subject" in action.missing
