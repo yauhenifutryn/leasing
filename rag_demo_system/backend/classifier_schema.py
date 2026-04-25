@@ -488,13 +488,45 @@ class ClassifierOutput(BaseModel):
             self.condition_new = None
 
         # --- Step 2: cross-field rules (run AFTER grounding) ---
-        # age_years is only meaningful for used equipment. Apply this after
-        # condition_new grounding so the rule sees the final grounded value —
-        # otherwise we'd leave age_years in an impossible state when
-        # condition_new got nulled by its own cue check.
-        if self.age_years is not None and self.condition_new != 0:
-            drops.append(f"age_years={self.age_years} (condition_new={self.condition_new})")
-            self.age_years = None
+        # age_years is only meaningful for used equipment.
+        #
+        # Bug 17 (live call 9ec121bc 2026-04-25): the previous rule dropped
+        # age_years whenever `condition_new != 0` — including the common
+        # case where the small classifier omits condition_new on the age-
+        # answer turn (it was captured a turn earlier). The validator
+        # cannot see profile state, so it nulled valid age values, the
+        # downstream gate stayed silent because no patch landed, and the
+        # LLM hallucinated re-asking already-captured fields.
+        #
+        # Fixed rule: drop age_years only when this turn carries
+        # contradictory or invalid signal:
+        #   (a) classifier emitted condition_new=1 on the same turn
+        #       ("новая машина пять лет" with condition_new=1), OR
+        #   (b) Step 1 grounding nulled condition_new because the
+        #       utterance contradicted the value (e.g. classifier said
+        #       condition_new=0 but utterance is "новая машина" — the
+        #       drops list will carry condition_new=...).
+        # When condition_new is simply omitted (None, no drop), trust
+        # the downstream apply path:
+        #   - utterance-fallback gate (app.py:1499) requires
+        #     profile.condition_new == 0 before adopting,
+        #   - sticky-block first-capture path applies it directly only
+        #     in COLLECTING state.
+        # A hallucinated age_years on a NEW-car profile therefore still
+        # can't poison state, while a real age-answer turn now flows
+        # through correctly.
+        if self.age_years is not None:
+            explicit_new = (self.condition_new == 1)
+            grounding_dropped_condition = any(
+                d.startswith("condition_new=") for d in drops
+            )
+            if explicit_new or grounding_dropped_condition:
+                drops.append(
+                    f"age_years={self.age_years} "
+                    f"(condition_new={self.condition_new}, "
+                    f"grounding_dropped={grounding_dropped_condition})"
+                )
+                self.age_years = None
 
         # --- Step 3: canonicalize change_value by change_field ---
         # Codex thorough review 2026-04-20: classifier often mirrors raw JSON

@@ -165,6 +165,47 @@ def test_no_year_unit_returns_none() -> None:
     assert extract_age_years_from_utterance("60") is None
 
 
+# ---------- Russian word-numerals (Bug 17, live call 9ec121bc 2026-04-25) ---
+# Bot asks "Сколько лет вашему транспорту?", user answers "Два года" (with the
+# word, not the digit). STT transcribes the word verbatim. Without word-numeral
+# support, the regex can't extract → patch never lands → profile stays
+# age_years=None → LLM hallucinates re-asking already-captured fields.
+
+
+def test_word_numeral_dva_goda() -> None:
+    """The exact live regression: bot asked age, user said "Два года"."""
+    assert extract_age_years_from_utterance("Два года.") == 2
+
+
+def test_word_numeral_tri_goda() -> None:
+    assert extract_age_years_from_utterance("Три года") == 3
+
+
+def test_word_numeral_pyat_let() -> None:
+    assert extract_age_years_from_utterance("Пять лет") == 5
+
+
+def test_word_numeral_odin_god() -> None:
+    assert extract_age_years_from_utterance("Один год") == 1
+
+
+def test_word_numeral_desyat_let() -> None:
+    assert extract_age_years_from_utterance("Десять лет") == 10
+
+
+def test_word_numeral_lowercase() -> None:
+    assert extract_age_years_from_utterance("два года") == 2
+
+
+def test_word_numeral_in_sentence() -> None:
+    assert extract_age_years_from_utterance("Ну, наверное, три года будет.") == 3
+
+
+def test_word_numeral_without_year_unit_returns_none() -> None:
+    """A bare numeral word with no year-unit could be anything — don't ground."""
+    assert extract_age_years_from_utterance("два") is None
+
+
 def test_term_in_months_does_not_misground_as_age() -> None:
     """User answering term question in months should not poison age."""
     assert extract_age_years_from_utterance("60 месяцев") is None

@@ -131,10 +131,22 @@ def test_age_years_nulled_when_condition_new():
     assert out.term_months == 36
 
 
-def test_age_years_nulled_when_condition_new_unknown():
+def test_age_years_kept_when_condition_new_unknown():
+    """Bug 17 fix (live call 9ec121bc, 2026-04-25): the classifier emits
+    age_years on the "Сколько лет?" answer turn but does NOT re-emit
+    condition_new (it was captured a turn earlier — small classifier
+    only emits per-turn deltas). Previously the cross-field rule dropped
+    age_years because `None != 0`, leaving the profile age=None even
+    though the user clearly answered. Now the rule only drops on
+    explicit contradiction (condition_new=1 emitted on this same turn).
+    Downstream apply path (app.py utterance-fallback gate + sticky-
+    block) still requires profile.condition_new==0 before adopting the
+    age — so a hallucinated age_years on a NEW-car profile still can't
+    poison state."""
     raw = json.dumps({"intent": "TOOL", "age_years": 3})
     out = parse_classifier_output(raw, utterance="три года")
-    assert out.age_years is None
+    assert out.age_years == 3
+    assert out.condition_new is None
 
 
 def test_age_years_kept_on_used_car():

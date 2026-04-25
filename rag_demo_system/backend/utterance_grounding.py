@@ -102,9 +102,55 @@ _AGE_YEARS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bug 17 (live call 9ec121bc, 2026-04-25): user said "Два года" — STT
+# transcribes the spoken word verbatim, no digit. Without word-numeral
+# support the regex misses, the patch never lands, the gate never
+# clarifies, and the LLM hallucinates re-asking already-captured fields.
+# Range 0-15 covers realistic vehicle ages (older numbers usually appear
+# as digits anyway) and avoids parsing things like "сто" → 100 which is
+# already filtered by the 0-50 range cap below.
+_RUSSIAN_NUMERAL_WORDS: dict[str, int] = {
+    "ноль": 0,
+    "один": 1, "одна": 1, "одного": 1,
+    "два": 2, "две": 2, "двух": 2,
+    "три": 3, "трех": 3, "трёх": 3,
+    "четыре": 4, "четырех": 4, "четырёх": 4,
+    "пять": 5, "пяти": 5,
+    "шесть": 6, "шести": 6,
+    "семь": 7, "семи": 7,
+    "восемь": 8, "восьми": 8,
+    "девять": 9, "девяти": 9,
+    "десять": 10, "десяти": 10,
+    "одиннадцать": 11, "одиннадцати": 11,
+    "двенадцать": 12, "двенадцати": 12,
+    "тринадцать": 13, "тринадцати": 13,
+    "четырнадцать": 14, "четырнадцати": 14,
+    "пятнадцать": 15, "пятнадцати": 15,
+}
+# Match a numeral word followed (within ≤2 tokens) by a year-unit so
+# bare "два" doesn't ground (could be ИП-status answer "два", part of
+# a phone number, etc.). The year-unit anchor mirrors the digit regex.
+_AGE_WORD_NUMERAL_RE = re.compile(
+    r"\b("
+    r"ноль|один(?:ого)?|одна|два|две|двух|три|тр[её]х|"
+    r"четыре|четыр[её]х|пят[ьи]|шест[ьи]|сем[ьи]|"
+    r"восем[ь]|восьми|девят[ьи]|десят[ьи]|"
+    r"одиннадцат[ьи]|двенадцат[ьи]|тринадцат[ьи]|"
+    r"четырнадцат[ьи]|пятнадцат[ьи]"
+    r")\b"
+    r"(?:\s+\S+){0,2}?"
+    r"\s*(?:лет|года|год|годов|г\.?)\b",
+    re.IGNORECASE,
+)
+
 
 def extract_age_years_from_utterance(utterance: str) -> Optional[int]:
     """Return the integer age-in-years from a 'N лет / N года' utterance, or None.
+
+    Accepts both digit forms ("3 года") and Russian numeral words
+    ("Два года", "Пять лет") — the latter added 2026-04-25 after live
+    call 9ec121bc showed STT transcribing word-for-word for slow voice
+    answers.
 
     Conservative: returns None when the utterance is empty, doesn't
     contain a year-shaped pattern, or the integer is out of the calc-
@@ -116,15 +162,25 @@ def extract_age_years_from_utterance(utterance: str) -> Optional[int]:
     if not utterance:
         return None
     m = _AGE_YEARS_RE.search(utterance)
-    if not m:
-        return None
-    try:
-        n = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    if n < 0 or n > 50:
-        return None
-    return n
+    if m:
+        try:
+            n = int(m.group(1))
+        except (TypeError, ValueError):
+            return None
+        if n < 0 or n > 50:
+            return None
+        return n
+    # Fall back to word numerals when no digit was found.
+    wm = _AGE_WORD_NUMERAL_RE.search(utterance)
+    if wm:
+        word = wm.group(1).lower()
+        # Normalize ё/е variants for the dictionary lookup.
+        word = word.replace("ё", "е")
+        # Look up the canonical form (also normalize dictionary keys).
+        for key, val in _RUSSIAN_NUMERAL_WORDS.items():
+            if key.replace("ё", "е") == word:
+                return val
+    return None
 
 
 def extract_subject_from_utterance(utterance: str) -> Optional[str]:
