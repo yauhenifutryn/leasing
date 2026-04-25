@@ -1478,6 +1478,138 @@ async def _stream_voice_response(
                         flush=True,
                     )
 
+            # Issue 1 (live call 3d3e17b9, 2026-04-25) — utterance-fallback
+            # age_years grounding. Mirror the subject fallback for terse
+            # "N лет" replies the small classifier drops. Only fires when
+            # the b/u path actually requires age (condition_new==0) AND
+            # age is currently empty AND classifier didn't already provide
+            # one — so a numeric leak ("60 месяцев") can't poison age.
+            if (
+                "age_years" not in _profile_patches
+                and getattr(_profile_current, "age_years", None) is None
+                and getattr(_profile_current, "condition_new", None) == 0
+            ):
+                from .utterance_grounding import extract_age_years_from_utterance
+                _fallback_age = extract_age_years_from_utterance(message or "")
+                if _fallback_age is not None:
+                    _profile_patches["age_years"] = _fallback_age
+                    print(
+                        f"[Profile] utterance-fallback age_years={_fallback_age} "
+                        f"(classifier omitted)",
+                        flush=True,
+                    )
+
+            # Universal slot fallbacks (2026-04-25). Same architectural
+            # pattern as subject + age above: when the small classifier
+            # omits a slot AND profile field is empty, run a deterministic
+            # regex pass over the utterance. Belt-and-suspenders alongside
+            # the planned classifier upgrade — the fallback never fights
+            # a classifier value, only fills silent gaps.
+            from .utterance_grounding import (
+                extract_client_type_from_utterance,
+                extract_condition_new_from_utterance,
+                extract_currency_from_utterance,
+                extract_prepaid_pct_from_utterance,
+                extract_term_months_from_utterance,
+                extract_type_schedule_from_utterance,
+            )
+
+            # client_type: terse single-word replies like "Физлицо." / "ИП."
+            if (
+                "client_type" not in _profile_patches
+                and getattr(_profile_current, "client_type", None) is None
+            ):
+                _fb_client = extract_client_type_from_utterance(message or "")
+                if _fb_client:
+                    _profile_patches["client_type"] = _fb_client
+                    print(
+                        f"[Profile] utterance-fallback client_type='{_fb_client}'",
+                        flush=True,
+                    )
+
+            # condition_new: "Новый." / "Поддержанный." single-word replies.
+            if (
+                "condition_new" not in _profile_patches
+                and getattr(_profile_current, "condition_new", None) is None
+            ):
+                _fb_cond = extract_condition_new_from_utterance(message or "")
+                if _fb_cond is not None:
+                    _profile_patches["condition_new"] = _fb_cond
+                    print(
+                        f"[Profile] utterance-fallback condition_new={_fb_cond}",
+                        flush=True,
+                    )
+
+            # currency: "В рублях" / "В долларах". Skipped when the
+            # utterance simultaneously names a cost so we don't second-
+            # guess classifier's combined cost+currency capture.
+            if (
+                "currency" not in _profile_patches
+                and "cost" not in _profile_patches
+                and getattr(_profile_current, "currency", None) is None
+            ):
+                _fb_cur = extract_currency_from_utterance(message or "")
+                if _fb_cur:
+                    _profile_patches["currency"] = _fb_cur
+                    print(
+                        f"[Profile] utterance-fallback currency='{_fb_cur}'",
+                        flush=True,
+                    )
+
+            # term_months: "60 месяцев" / "на 5 лет". The years branch
+            # requires age to NOT be the active question (condition_new==1
+            # OR age_years already captured) so "5 лет" doesn't fight age.
+            _need_term_yrs_gate = (
+                getattr(_profile_current, "condition_new", None) == 1
+                or getattr(_profile_current, "age_years", None) is not None
+            )
+            if (
+                "term_months" not in _profile_patches
+                and getattr(_profile_current, "term_months", None) is None
+            ):
+                _fb_term = extract_term_months_from_utterance(message or "")
+                if _fb_term is not None:
+                    # Year-form term answer is gated; month-form is always safe.
+                    _is_year_form = _fb_term % 12 == 0 and _fb_term <= 84 and (
+                        f"{_fb_term // 12}" in (message or "")
+                        and "месяц" not in (message or "").lower()
+                    )
+                    if not _is_year_form or _need_term_yrs_gate:
+                        _profile_patches["term_months"] = _fb_term
+                        print(
+                            f"[Profile] utterance-fallback term_months={_fb_term}",
+                            flush=True,
+                        )
+
+            # prepaid_pct: "20 процентов" / "Без аванса". Skipped when
+            # an absolute amount is already in patches (slot conflict).
+            if (
+                "prepaid_pct" not in _profile_patches
+                and "prepaid_amount" not in _profile_patches
+                and getattr(_profile_current, "prepaid_pct", None) is None
+                and getattr(_profile_current, "prepaid_amount", None) is None
+            ):
+                _fb_pct = extract_prepaid_pct_from_utterance(message or "")
+                if _fb_pct is not None:
+                    _profile_patches["prepaid_pct"] = _fb_pct
+                    print(
+                        f"[Profile] utterance-fallback prepaid_pct={_fb_pct}",
+                        flush=True,
+                    )
+
+            # type_schedule: "Аннуитет." / "Линейный."
+            if (
+                "type_schedule" not in _profile_patches
+                and getattr(_profile_current, "type_schedule", None) is None
+            ):
+                _fb_sched = extract_type_schedule_from_utterance(message or "")
+                if _fb_sched is not None:
+                    _profile_patches["type_schedule"] = _fb_sched
+                    print(
+                        f"[Profile] utterance-fallback type_schedule='{_fb_sched}'",
+                        flush=True,
+                    )
+
             # Hygiene filter before merge: drops noise, normalizes enums, validates MVP ranges.
             _had_patches = bool(_profile_patches)
             if _had_patches:

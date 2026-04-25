@@ -25,7 +25,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.utterance_grounding import extract_subject_from_utterance
+from backend.utterance_grounding import (
+    extract_age_years_from_utterance,
+    extract_client_type_from_utterance,
+    extract_condition_new_from_utterance,
+    extract_currency_from_utterance,
+    extract_prepaid_pct_from_utterance,
+    extract_subject_from_utterance,
+    extract_term_months_from_utterance,
+    extract_type_schedule_from_utterance,
+)
 
 
 # ---------- Bare-car path (live regression) ----------
@@ -110,3 +119,220 @@ def test_kommercheskiy_subject_does_not_misground() -> None:
     res = extract_subject_from_utterance("коммерческий транспорт")
     assert res != "Легковой автомобиль"  # must not misground as car
     # Either None or "Прочий транспорт" / "Грузовой автомобиль" is acceptable.
+
+
+# ---------- age_years fallback (Issue 1, live call 3d3e17b9 2026-04-25) ----------
+
+
+def test_terse_n_let_grounds_age() -> None:
+    """The exact live regression: bot asked age, user replied "4 года"."""
+    assert extract_age_years_from_utterance("4 года") == 4
+
+
+def test_terse_5_let_grounds_age() -> None:
+    assert extract_age_years_from_utterance("5 лет") == 5
+
+
+def test_n_godov_grounds_age() -> None:
+    assert extract_age_years_from_utterance("8 годов") == 8
+
+
+def test_age_in_full_sentence() -> None:
+    assert extract_age_years_from_utterance("ну, машине примерно 7 лет") == 7
+
+
+def test_age_with_punctuation() -> None:
+    assert extract_age_years_from_utterance("Ксения, 5 лет машине.") == 5
+
+
+def test_year_abbrev_grounds_age() -> None:
+    assert extract_age_years_from_utterance("3 г") == 3
+
+
+def test_zero_age_grounds() -> None:
+    """Edge: a brand-new vehicle saying "0 лет" — must still ground."""
+    assert extract_age_years_from_utterance("0 лет") == 0
+
+
+def test_age_above_50_rejected() -> None:
+    """Calc-eligible ceiling is 50 years — older numbers are STT garbage."""
+    assert extract_age_years_from_utterance("100 лет") is None
+
+
+def test_no_year_unit_returns_none() -> None:
+    """Bare digits without лет/года must NOT be grounded — could be cost."""
+    assert extract_age_years_from_utterance("100 тысяч") is None
+    assert extract_age_years_from_utterance("60") is None
+
+
+def test_term_in_months_does_not_misground_as_age() -> None:
+    """User answering term question in months should not poison age."""
+    assert extract_age_years_from_utterance("60 месяцев") is None
+
+
+def test_empty_utterance_returns_none() -> None:
+    assert extract_age_years_from_utterance("") is None
+    assert extract_age_years_from_utterance("  ") is None
+
+
+def test_term_in_years_DOES_match_caller_must_gate() -> None:
+    """Documents that the regex DOES match year-form term answers
+    ("на 7 лет"). Caller is responsible for gating on
+    `condition_new == 0 AND age_years is None` so this fallback never
+    runs while the bot is asking about term. The function itself stays
+    simple and value-honest."""
+    assert extract_age_years_from_utterance("на 7 лет") == 7
+
+
+# ---------- client_type fallback ----------
+
+
+def test_phys_grounds_client_type() -> None:
+    assert extract_client_type_from_utterance("физлицо") == "Физическое лицо"
+    assert extract_client_type_from_utterance("Физическое.") == "Физическое лицо"
+    assert extract_client_type_from_utterance("я физик") == "Физическое лицо"
+
+
+def test_legal_grounds_client_type() -> None:
+    assert extract_client_type_from_utterance("юрлицо") == "Юридическое лицо"
+    assert extract_client_type_from_utterance("Юридическое.") == "Юридическое лицо"
+    assert extract_client_type_from_utterance("ИП") == "Юридическое лицо"
+    assert extract_client_type_from_utterance("ООО") == "Юридическое лицо"
+    assert extract_client_type_from_utterance("у меня малый бизнес") == "Юридическое лицо"
+
+
+def test_ambiguous_client_type_returns_none() -> None:
+    assert extract_client_type_from_utterance("физическое или юридическое") is None
+
+
+def test_no_client_type_signal_returns_none() -> None:
+    assert extract_client_type_from_utterance("здравствуйте") is None
+    assert extract_client_type_from_utterance("") is None
+
+
+# ---------- condition_new fallback ----------
+
+
+def test_used_grounds_zero() -> None:
+    assert extract_condition_new_from_utterance("подержанный") == 0
+    assert extract_condition_new_from_utterance("Поддержанная.") == 0
+    assert extract_condition_new_from_utterance("б/у") == 0
+    assert extract_condition_new_from_utterance("бэу") == 0
+
+
+def test_new_grounds_one() -> None:
+    assert extract_condition_new_from_utterance("новый") == 1
+    assert extract_condition_new_from_utterance("Новая.") == 1
+
+
+def test_zero_mileage_grounds_new() -> None:
+    """Without пробега / нулевой пробег = new car phrasing."""
+    assert extract_condition_new_from_utterance("без пробега") == 1
+
+
+def test_contradictory_condition_returns_none() -> None:
+    assert extract_condition_new_from_utterance("новая или подержанная") is None
+
+
+def test_no_condition_signal_returns_none() -> None:
+    assert extract_condition_new_from_utterance("BMW") is None
+    assert extract_condition_new_from_utterance("") is None
+
+
+# ---------- currency fallback ----------
+
+
+def test_dollars_grounds_usd() -> None:
+    assert extract_currency_from_utterance("в долларах") == "USD"
+    assert extract_currency_from_utterance("USD") == "USD"
+
+
+def test_byn_rubles_grounds_byn() -> None:
+    assert extract_currency_from_utterance("в рублях") == "BYN"
+    assert extract_currency_from_utterance("белорусских рублей") == "BYN"
+
+
+def test_eur_grounds_eur() -> None:
+    assert extract_currency_from_utterance("в евро") == "EUR"
+
+
+def test_russian_rubles_grounds_rub() -> None:
+    assert extract_currency_from_utterance("российских рублей") == "RUB"
+
+
+def test_ambiguous_currency_returns_none() -> None:
+    """Multiple currency cues = bot question echoed back, not a real choice."""
+    assert extract_currency_from_utterance("в рублях или долларах") is None
+
+
+def test_no_currency_signal_returns_none() -> None:
+    assert extract_currency_from_utterance("сто тысяч") is None
+
+
+# ---------- term_months fallback ----------
+
+
+def test_n_months_grounds_term() -> None:
+    assert extract_term_months_from_utterance("60 месяцев") == 60
+    assert extract_term_months_from_utterance("36 мес.") == 36
+
+
+def test_n_years_grounds_term_in_months() -> None:
+    assert extract_term_months_from_utterance("на 5 лет") == 60
+    assert extract_term_months_from_utterance("7 лет") == 84
+
+
+def test_term_out_of_range_rejected() -> None:
+    """11 months and 100 months are outside the 12-84 calc-eligible band."""
+    assert extract_term_months_from_utterance("11 месяцев") is None
+    assert extract_term_months_from_utterance("100 месяцев") is None
+
+
+def test_no_term_signal_returns_none() -> None:
+    assert extract_term_months_from_utterance("привет") is None
+    assert extract_term_months_from_utterance("") is None
+
+
+# ---------- prepaid_pct fallback ----------
+
+
+def test_n_percent_grounds_prepaid() -> None:
+    assert extract_prepaid_pct_from_utterance("20 процентов") == 20.0
+    assert extract_prepaid_pct_from_utterance("аванс 30 %") == 30.0
+
+
+def test_zero_prepaid_phrases() -> None:
+    assert extract_prepaid_pct_from_utterance("без аванса") == 0.0
+    assert extract_prepaid_pct_from_utterance("нулевой аванс") == 0.0
+
+
+def test_no_prepaid_signal_returns_none() -> None:
+    assert extract_prepaid_pct_from_utterance("BMW") is None
+    assert extract_prepaid_pct_from_utterance("") is None
+
+
+def test_prepaid_pct_above_100_rejected() -> None:
+    assert extract_prepaid_pct_from_utterance("200 процентов") is None
+
+
+# ---------- type_schedule fallback ----------
+
+
+def test_annuity_grounds_zero_string() -> None:
+    """Annuity = "0" string (matches profile schema Literal["0", "1"])."""
+    assert extract_type_schedule_from_utterance("аннуитет") == "0"
+    assert extract_type_schedule_from_utterance("Аннуитетный график.") == "0"
+
+
+def test_linear_grounds_one_string() -> None:
+    assert extract_type_schedule_from_utterance("линейный") == "1"
+    assert extract_type_schedule_from_utterance("дифференцированный") == "1"
+
+
+def test_ambiguous_schedule_returns_none() -> None:
+    assert extract_type_schedule_from_utterance("аннуитет или линейный") is None
+
+
+def test_no_schedule_signal_returns_none() -> None:
+    assert extract_type_schedule_from_utterance("BMW") is None
+    assert extract_type_schedule_from_utterance("") is None
