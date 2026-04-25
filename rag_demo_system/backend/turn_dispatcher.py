@@ -281,6 +281,27 @@ def _dispatch_once(
     proposed.update(derive_implied_flips(profile, proposed))
     first_time, delta = partition_patches(profile, proposed)
 
+    # Bug 1 loop guard (live call 6ca0eaca, 2026-04-25): while
+    # CHANGE_PENDING is staged, the classifier sometimes re-emits the
+    # SAME change_field/change_value pair on the next turn. Without this
+    # guard, step 4 below re-stages an identical pending_change and the
+    # bot asks "Меняю срок на 48, всё верно?" forever. Drop already-
+    # staged identical deltas so step 4 sees only NEW corrections (e.g.
+    # user replying "нет, 60" still re-stages with 60).
+    if (
+        profile.state == ProfileState.CHANGE_PENDING
+        and profile.pending_change
+        and delta
+    ):
+        staged = profile.pending_change.get("changes", {}) or {}
+        delta = {
+            field: change for field, change in delta.items()
+            if not (
+                field in staged
+                and staged[field].get("new") == change["new"]
+            )
+        }
+
     # Name capture (first-time only). Not a calc-grounded field so it
     # lives outside `_GROUNDED_FIELDS`; the classifier extracts name
     # from surface patterns ("меня зовут X") and we mirror the legacy

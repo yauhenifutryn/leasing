@@ -424,6 +424,56 @@ def test_change_pending_deny_does_not_apply_and_stays_in_change_pending() -> Non
     assert profile.pending_change is not None
 
 
+# ---------------------------------------------------------------- Bug 1
+# Bug 1 (live call 6ca0eaca, 2026-04-25): when in CHANGE_PENDING the
+# classifier sometimes re-emits the same change_field/change_value pair
+# on the next turn (Qwen seeing prior context bleeding through). Without
+# a loop guard, step 4 keeps re-staging the same EmitChangeConfirm and
+# the bot asks the same confirmation question forever.
+
+
+def test_change_pending_re_emit_same_delta_does_not_loop() -> None:
+    """Identical re-emit should NOT produce another EmitChangeConfirm."""
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 48}}}
+    classifier = make_classifier(
+        utterance="48 месяцев",
+        intent="CONVERSATION",
+        is_confirmation=False,
+        change_field="term_months",
+        change_value=48,
+    )
+    action = apply_turn(profile, classifier, utterance="48 месяцев")
+    # The loop bug: action would be EmitChangeConfirm with the same delta.
+    # Fix: drop already-staged identical deltas → step 4 doesn't fire.
+    assert not isinstance(action, EmitChangeConfirm)
+    # Staged change is preserved — user can still confirm it on next turn.
+    assert profile.state == ProfileState.CHANGE_PENDING
+    assert profile.pending_change == {
+        "changes": {"term_months": {"old": 36, "new": 48}}
+    }
+
+
+def test_change_pending_re_emit_different_value_re_stages() -> None:
+    """A NEW value while in CHANGE_PENDING should re-stage as a fresh
+    EmitChangeConfirm — only identical delta is dropped, not a genuine
+    correction ("нет, 60")."""
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 48}}}
+    classifier = make_classifier(
+        utterance="нет, 60 месяцев",
+        intent="CONVERSATION",
+        is_confirmation=False,
+        change_field="term_months",
+        change_value=60,
+    )
+    action = apply_turn(profile, classifier, utterance="нет, 60 месяцев")
+    assert isinstance(action, EmitChangeConfirm)
+    assert profile.pending_change["changes"]["term_months"]["new"] == 60
+
+
 # ---------------------------------------------------------------- Step 2
 # Step 2 — READBACK_PENDING + is_confirmation → CONFIRMED, and calc
 # fires immediately on the same call (step 6 picks it up after the
