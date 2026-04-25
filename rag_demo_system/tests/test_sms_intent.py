@@ -130,3 +130,71 @@ def test_ok_after_calc_is_sms() -> None:
 def test_nyet_after_calc_not_sms() -> None:
     """'Нет' alone should not trigger SMS."""
     assert detect_sms_intent("Нет.", _ok_calc()) is False
+
+
+# ---------- Profile-state gating (Bug 15, 2026-04-25) ----------
+# Live call 1cae210d 22:39:07: user said "Да" to confirm a CHANGE_PENDING
+# (type_schedule линейный → аннуитет). The bot fired send_sms with stale
+# params instead of re-running the calculator. Root cause: detect_sms_intent
+# only checked tool history and didn't know the profile was waiting for a
+# change-confirm, where "Да" means "apply the change" — not "send SMS".
+
+
+def test_da_during_change_pending_not_sms() -> None:
+    """CHANGE_PENDING + 'Да' = confirm-the-change, NOT send SMS."""
+    from backend.session import ProfileState
+    assert detect_sms_intent(
+        "Да.",
+        _ok_calc(),
+        profile_state=ProfileState.CHANGE_PENDING,
+    ) is False
+
+
+def test_da_during_readback_pending_not_sms() -> None:
+    """READBACK_PENDING + 'Да' = confirm-the-readback, NOT send SMS."""
+    from backend.session import ProfileState
+    assert detect_sms_intent(
+        "Да.",
+        _ok_calc(),
+        profile_state=ProfileState.READBACK_PENDING,
+    ) is False
+
+
+def test_da_during_confirmed_is_sms() -> None:
+    """Post-calc CONFIRMED state — 'Да' here IS the SMS confirm."""
+    from backend.session import ProfileState
+    assert detect_sms_intent(
+        "Да.",
+        _ok_calc(),
+        profile_state=ProfileState.CONFIRMED,
+    ) is True
+
+
+def test_da_during_collecting_with_calc_history_is_sms() -> None:
+    """COLLECTING with calc history (post-calc, pre-state-update) = SMS confirm.
+    Defensive: the existing call sites pass state explicitly; legacy call
+    sites that don't pass state still get the old behaviour.
+    """
+    from backend.session import ProfileState
+    assert detect_sms_intent(
+        "Да.",
+        _ok_calc(),
+        profile_state=ProfileState.COLLECTING,
+    ) is True
+
+
+def test_explicit_sms_keyword_during_change_pending_blocked() -> None:
+    """Even explicit 'отправь смс' during CHANGE_PENDING should be blocked.
+    Sending SMS now would deliver stale params; the user must finish the
+    change-confirm flow first."""
+    from backend.session import ProfileState
+    assert detect_sms_intent(
+        "Отправь смс.",
+        _ok_calc(),
+        profile_state=ProfileState.CHANGE_PENDING,
+    ) is False
+
+
+def test_no_state_arg_preserves_legacy_behaviour() -> None:
+    """Backwards-compat: omitting profile_state must match prior behaviour."""
+    assert detect_sms_intent("Да.", _ok_calc()) is True
