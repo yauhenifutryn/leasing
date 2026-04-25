@@ -32,6 +32,8 @@ _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     # condition_new
     "новый", "новая", "новое",
     "бу", "б/у", "бэу", "б-у", "подержанный", "подержанная", "подержанное",
+    # Issue 3 (Whisper transcribes "под-держанный" with double-д) — accept both.
+    "поддержанный", "поддержанная", "поддержанное",
     "старый", "старая", "старое",
     # subject (single-word slot-fill replies to "легковой или грузовой?")
     "легковой", "грузовой", "спецтехника", "оборудование",
@@ -159,7 +161,10 @@ _CURRENCY_CUE_RE = re.compile(
 # пробег" are NEW-car phrases despite containing "пробег".
 _CONDITION_USED_CUE_RE = re.compile(
     r"\b("
-    r"подержан\w+|бывш\w+|"
+    # `поддержан` covers Whisper's double-д transcription (issue 3,
+    # 2026-04-25). The single-д spelling (`подержан`) is the canonical
+    # Russian form and stays as the primary alternative.
+    r"подержан\w+|поддержан\w+|бывш\w+|"
     r"б/у|б-у|бу|бэу|"
     r"пробег\w*|"
     r"не\s+нов\w+|"
@@ -183,7 +188,7 @@ _CONDITION_NEW_NEGATION_RE = re.compile(
 # has_field_signal for condition_new.
 _CONDITION_NEW_CUE_RE = re.compile(
     r"\b("
-    r"нов\w+|подержан\w+|бывш\w+|"
+    r"нов\w+|подержан\w+|поддержан\w+|бывш\w+|"
     r"б/у|б-у|бу|бэу|"
     r"пробег\w*|"
     r"не\s+нов\w+|"

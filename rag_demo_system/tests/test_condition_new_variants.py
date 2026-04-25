@@ -47,6 +47,12 @@ _USED_VARIANTS = [
     "авто б-у",
     "подержанная машина",
     "бывший в употреблении",
+    # Issue 3 (live call 77cbbccd 2026-04-25): Whisper consistently
+    # transcribes "по-дер-жан-ный" with a double-д prefix. The original
+    # `подержан\w+` regex misses these. Accept both spellings.
+    "поддержанная BMW",
+    "поддержанный автомобиль",
+    "Поддержанная.",
 ])
 def test_has_field_signal_accepts_variant(utterance: str) -> None:
     assert has_field_signal("condition_new", 0, utterance), (

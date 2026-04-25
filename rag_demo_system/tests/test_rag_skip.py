@@ -32,8 +32,15 @@ def test_no_name_patch_no_skip():
 
 
 def test_long_utterance_no_skip():
-    assert should_skip_rag("Привет, я Вадим, очень рад познакомиться с вами",
-                           {"name": "Вадим"}, {}) is False
+    # Issue 2 (2026-04-25) raised the cap from 5 to 10 tokens to fit
+    # polite Russian openers ("Ксения, добрый день. Меня зовут Сергей.").
+    # This test now uses a >10-token utterance to keep enforcing the
+    # upper bound: a long monologue may carry real intent we shouldn't
+    # silently swallow with an open greeting.
+    assert should_skip_rag(
+        "Привет, я Вадим, очень рад с вами познакомиться и поговорить о лизинге",
+        {"name": "Вадим"}, {},
+    ) is False
 
 
 def test_call_site_guard_skips_greeting_when_name_already_set():
@@ -114,4 +121,35 @@ def test_action_only_hint_with_no_name_no_skip():
         "Здравствуйте.",
         {},
         {"action": "conversation"},
+    ) is False
+
+
+# Issue 2 (live call 77cbbccd 2026-04-25): "Ксения, добрый день. Меня зовут
+# Сергей." is 6 tokens — over the previous 5-token cap, so the gate
+# rejected and the LLM dove into the funnel ("тип клиента, что в лизинг").
+# Bump to 10 tokens so a polite greeting + name introduction still skips.
+def test_polite_greeting_with_bot_name_and_intro_still_skips():
+    assert should_skip_rag(
+        "Ксения, добрый день. Меня зовут Сергей.",
+        {"name": "Сергей"},
+        {"action": "conversation"},
+    ) is True
+
+
+def test_courteous_greeting_with_intro_still_skips():
+    assert should_skip_rag(
+        "Здравствуйте, очень рада звонку, меня зовут Анна",
+        {"name": "Анна"},
+        {},
+    ) is True
+
+
+def test_eleven_word_intro_still_blocks_skip():
+    """Above the new 10-token cap — still blocks. Long openers may carry
+    real intent we don't want to miss."""
+    assert should_skip_rag(
+        "Здравствуйте, очень приятно познакомиться с вами, меня зовут "
+        "Анна Сергеевна Ивановна",
+        {"name": "Анна"},
+        {},
     ) is False

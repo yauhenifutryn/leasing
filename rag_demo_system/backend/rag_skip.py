@@ -32,6 +32,12 @@ def should_skip_rag(utterance: str, patches: dict, hints: dict) -> bool:
     if "?" in (utterance or ""):
         return False
     tokens = (utterance or "").strip().split()
-    if len(tokens) > 5:
+    # Issue 2 (live call 77cbbccd 2026-04-25): the previous cap of 5 tokens
+    # rejected polite Belarusian greetings like "Ксения, добрый день. Меня
+    # зовут Сергей." (6 tokens) and the bot fell into the calc-funnel
+    # straight after the name. Bumped to 10 to fit a courteous opener +
+    # bot-name + intro in one turn while still blocking long openers that
+    # may carry real intent we don't want to miss.
+    if len(tokens) > 10:
         return False
     return True

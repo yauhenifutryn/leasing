@@ -33,7 +33,11 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
         if "currency" in fields:
             parts.append("валюта (BYN или USD)")
         if "condition_new" in fields:
-            parts.append("новый или б/у")
+            # Issue 3 (2026-04-25): client prefers "подержанный" wording over
+            # "б/у". Both spellings still ground via _CONDITION_USED_CUE_RE,
+            # so callers who say "б/у" are still understood; the bot just
+            # phrases the question with the more natural word.
+            parts.append("новый или подержанный")
         return "Уточните, пожалуйста, " + ", ".join(parts) + "."
 
     # Fix 1.13 (2026-04-19) — age_years must be asked before term/prepaid.
@@ -49,7 +53,7 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     # term/prepaid; this priority bump supersedes 1.5's placement.
     if "age_years" in fields:
         return (
-            "Сколько лет вашему транспорту? Для б/у техники это обязательный параметр."
+            "Сколько лет вашему транспорту? Для подержанной техники это обязательный параметр."
         )
 
     if fields & {"term_months", "prepaid", "type_schedule"}:
