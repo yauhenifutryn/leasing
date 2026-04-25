@@ -1017,20 +1017,9 @@ async def _stream_voice_response(
     # "график отправлен" without invoking send_sms. detect_sms_intent now
     # gates on recent successful calc + short affirmation. See sms_intent.py.
     from .sms_intent import detect_sms_intent
-    # Bug 15 (live call 1cae210d, 2026-04-25) — pass profile_state so
-    # detect_sms_intent rejects "Да" / explicit SMS keywords while
-    # READBACK_PENDING or CHANGE_PENDING is in flight. Without this,
-    # confirming a CHANGE_PENDING ("Да" to "Меняю график на аннуитет,
-    # всё верно?") fired SMS with stale (pre-change) calculator output.
-    _sms_intent_state = None
-    try:
-        _sms_intent_state = session.client_profile.state
-    except Exception:  # noqa: BLE001
-        pass
     has_sms_intent = detect_sms_intent(
         message,
         list(session.tool_calls_history) + list(session.tool_calls_this_turn),
-        profile_state=_sms_intent_state,
     )
     # "session-wide" view: switch to cumulative history since tool_calls_this_turn
     # is reset at turn start (see VoiceSession.reset_turn_state).
@@ -2013,28 +2002,6 @@ async def _stream_voice_response(
     # on a prior turn (tool_calls_this_turn is reset at turn start).
     _sms_all_calls = session.tool_calls_history + session.tool_calls_this_turn
     _sms_from_classifier = _extracted_hints.get("action") == "sms" and _sms_all_calls
-    # Bug 15 — defense in depth. detect_sms_intent already rejects when
-    # state ∈ {READBACK_PENDING, CHANGE_PENDING}, but the classifier-action
-    # path (`_sms_from_classifier`) bypasses that gate. Block SMS here too
-    # so a stale classifier hint can't fire SMS while the profile is
-    # waiting for a readback or change-confirm transition.
-    _sms_state_blocks = False
-    try:
-        _sms_state_blocks = session.client_profile.state in (
-            ProfileState.READBACK_PENDING, ProfileState.CHANGE_PENDING
-        )
-    except Exception:  # noqa: BLE001
-        _sms_state_blocks = False
-    if _sms_state_blocks:
-        if has_sms_intent or _sms_from_classifier:
-            print(
-                f"[SMS:{session_id[:8]}] blocked — profile state "
-                f"{getattr(session.client_profile, 'state', None)} "
-                "(must finish readback/change-confirm first)",
-                flush=True,
-            )
-        has_sms_intent = False
-        _sms_from_classifier = False
     sms_context = ""
     if (has_sms_intent or _sms_from_classifier) and _sms_all_calls and session.client_phone:
         last_calc = next(
