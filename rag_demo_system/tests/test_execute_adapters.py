@@ -501,3 +501,99 @@ async def test_tts_sink_skips_send_when_interrupted_before_start(monkeypatch) ->
 
     assert ws.sent_json == []
     assert ws.sent_text == []
+
+
+# ============================================================ Bug 3 — drain
+# Bug 3 (apply_turn=1 barge-in regression): mod_audio_fork buffers ~10s
+# of PCM. Without holding `assistant_speaking=True` through the actual
+# audio playback duration, the VAD barge-in gate (app.py:3140-3142)
+# flips off while the caller still hears the tail. await_playback_drain
+# bridges that window and short-circuits on interrupt with a killAudio.
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_tracks_audio_duration_after_say(monkeypatch) -> None:
+    """Sink must expose cumulative audio seconds so the caller can hold
+    the assistant_speaking flag through actual playback."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=3840))
+    monkeypatch.setattr("backend.text_utils.split_for_tts_streaming", lambda t: [t])
+
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=_BareSession())
+    await sink.say("Привет.")
+    # 3840 bytes / (24000 Hz * 2 bytes/sample) = 0.08 s
+    assert sink.total_audio_seconds == pytest.approx(0.08, abs=0.005)
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_drain_blocks_through_audio_duration(monkeypatch) -> None:
+    """Drain should block close to the cumulative push duration so the
+    barge-in gate stays open while mod_audio_fork drains its buffer."""
+    from backend import execute_adapters as mod
+
+    # 9600 bytes / 48000 = 0.2 s. Bound loosely to keep the test stable
+    # under loaded CI runners — the floor proves drain didn't fast-path.
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=9600))
+    monkeypatch.setattr("backend.text_utils.split_for_tts_streaming", lambda t: [t])
+
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=_BareSession())
+    await sink.say("Тест.")
+
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
+    await sink.await_playback_drain()
+    elapsed = loop.time() - t0
+    # Drain must wait at least ~half the audio duration to be useful;
+    # the exact bound depends on `say` timing so we only check the
+    # lower-bound guard against fast-path return.
+    assert elapsed >= 0.1
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_drain_short_circuits_on_interrupt(monkeypatch) -> None:
+    """When session.interrupted flips during drain, the wait returns
+    promptly and emits killAudio so mod_audio_fork flushes the tail."""
+    from backend import execute_adapters as mod
+
+    # 96000 bytes / 48000 = 2 s of audio — without the interrupt path
+    # drain would block for ~2s; we expect it to bail in <0.4 s.
+    monkeypatch.setattr(mod, "synthesize_audio", _synth_long_pcm_mock(bytes_per_phrase=96000))
+    monkeypatch.setattr("backend.text_utils.split_for_tts_streaming", lambda t: [t])
+
+    sess = _BareSession()
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=sess)
+    await sink.say("Длинный ответ.")
+
+    async def _flip_after(delay: float) -> None:
+        await asyncio.sleep(delay)
+        sess.interrupted = True
+
+    asyncio.create_task(_flip_after(0.1))
+
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
+    await sink.await_playback_drain()
+    elapsed = loop.time() - t0
+
+    assert elapsed < 0.5
+    kill_frames = [t for t in ws.sent_text if "killAudio" in t]
+    assert len(kill_frames) >= 1
+
+
+@pytest.mark.asyncio
+async def test_tts_sink_drain_no_op_when_no_audio_pushed(monkeypatch) -> None:
+    """If say() pushed no audio (interrupt before start, empty payload),
+    drain returns immediately with no killAudio."""
+    from backend import execute_adapters as mod
+
+    monkeypatch.setattr(mod, "synthesize_audio", lambda t, s: {"audio_b64": ""})
+    ws = _ChunkedWebSocket()
+    sink = mod.TtsSink(websocket=ws, session_id="s1", session=_BareSession())
+    await sink.say("hi")
+    await sink.await_playback_drain()
+    assert sink.total_audio_seconds == 0.0
+    assert all("killAudio" not in t for t in ws.sent_text)

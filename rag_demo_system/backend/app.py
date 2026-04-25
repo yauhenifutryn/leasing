@@ -1757,6 +1757,13 @@ async def _stream_voice_response(
                 rag_future=_rag_future_adapter,
             ):
                 _chunks.append(_chunk)
+            # Bug 3 fix: hold assistant_speaking=True through the actual
+            # audio playback duration. mod_audio_fork still has buffered
+            # PCM after the last yield; without this drain the VAD
+            # barge-in gate at line 3140 / 3443 / 3546 (which keys on
+            # assistant_speaking) flips off while the caller is still
+            # hearing the tail. Mirrors legacy _speak_tts:200-212.
+            await _tts_sink.await_playback_drain()
         finally:
             session.assistant_speaking = False
 

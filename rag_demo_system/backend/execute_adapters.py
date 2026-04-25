@@ -96,11 +96,15 @@ class TtsSink:
          downstream buffer — without this the caller hears 300–500ms
          of tail audio before the bot goes quiet.
 
-    Deliberately omits the 50ms playback-wait loop that `_speak_tts`
-    adds at app.py:200-212 — for the FireLLMFallback streaming path we
-    want the next sentence's synth to overlap with the prior sentence's
-    playback (spec §7.2 #2). The effect on barge-in latency is zero
-    because the chunk-level interrupt still fires immediately.
+    Per-sentence playback wait is deliberately omitted so the next
+    sentence's synth overlaps the prior sentence's playback (spec §7.2
+    #2). For the FINAL sentence of a turn there is no follow-up to mask
+    the buffer drain, so the caller must invoke `await_playback_drain`
+    once execute_action returns — this holds `assistant_speaking=True`
+    through the actual audio playback duration so VAD-based barge-in
+    (gated on `assistant_speaking`) keeps detecting user speech while
+    mod_audio_fork drains its ~10s PCM buffer. Bug 3 (apply_turn=1
+    barge-in regression).
     """
 
     # 1920 bytes = 40ms at 24kHz 16-bit mono — matches Jambonz frame.
@@ -118,6 +122,13 @@ class TtsSink:
         self._session_id = session_id
         self._session = session
         self._rtc = rtc_handler
+        # Bug 3 drain accounting. `_first_push_time` is set on the first
+        # frame pushed to the wire so `await_playback_drain` can compute
+        # the wall-clock deadline relative to the same time origin
+        # `_total_audio_seconds` is measured against (cumulative bytes
+        # pushed / sample_rate / 2-bytes-per-sample).
+        self._first_push_time: Optional[float] = None
+        self.total_audio_seconds: float = 0.0
 
     async def say(self, text: str) -> None:
         if not text:
@@ -170,9 +181,11 @@ class TtsSink:
         import base64 as _b64
         pcm = _b64.b64decode(audio_b64)
         sample_rate = audio_resp.get("sample_rate_hz") or 24000
+        bytes_pushed = 0
 
         for i in range(0, len(pcm), self._CHUNK_SIZE):
             if self._interrupted():
+                self._account_pushed(bytes_pushed, sample_rate)
                 return True
             chunk = pcm[i:i + self._CHUNK_SIZE]
             try:
@@ -185,10 +198,49 @@ class TtsSink:
                         "delta": _b64.b64encode(chunk).decode(),
                         "sample_rate_hz": sample_rate,
                     })
+                bytes_pushed += len(chunk)
             except Exception:  # noqa: BLE001
                 self._flag_interrupted()
+                self._account_pushed(bytes_pushed, sample_rate)
                 return True
+        self._account_pushed(bytes_pushed, sample_rate)
         return False
+
+    def _account_pushed(self, bytes_pushed: int, sample_rate: int) -> None:
+        """Update drain accounting from the bytes that actually reached the
+        wire. Stamps `_first_push_time` once on the first non-zero push so
+        `await_playback_drain` has a consistent time origin."""
+        if bytes_pushed <= 0:
+            return
+        if self._first_push_time is None:
+            self._first_push_time = asyncio.get_event_loop().time()
+        # 16-bit mono PCM → 2 bytes per sample.
+        self.total_audio_seconds += bytes_pushed / float(sample_rate * 2)
+
+    async def await_playback_drain(self) -> None:
+        """Bug 3 fix: hold the caller (and `assistant_speaking=True`) until
+        the actual audio duration has elapsed since the first push.
+
+        mod_audio_fork buffers ~10s of PCM. Without this wait, the outer
+        orchestrator's `finally: assistant_speaking=False` flips while the
+        caller still hears the tail; the VAD barge-in gate at
+        app.py:3140-3142 is keyed on `assistant_speaking` and stops
+        detecting user speech during that window. Mirrors the playback-
+        wait loop at app.py:200-212 in the legacy `_speak_tts` helper.
+
+        Short-circuits on interrupt and emits `killAudio` so
+        mod_audio_fork flushes the queued tail."""
+        if self._first_push_time is None or self.total_audio_seconds <= 0:
+            return
+        loop = asyncio.get_event_loop()
+        deadline = self._first_push_time + self.total_audio_seconds
+        while True:
+            if loop.time() >= deadline:
+                return
+            if self._interrupted():
+                await self._send_kill_audio()
+                return
+            await asyncio.sleep(0.05)
 
     async def _send_kill_audio(self) -> None:
         """Control frame to flush mod_audio_fork's play queue on the
