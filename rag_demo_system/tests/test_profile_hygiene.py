@@ -35,6 +35,60 @@ def test_keeps_real_user_name_matching_different_first_token():
     assert out.get("name") == "Николай"
 
 
+# ---------- Bug 20 (live call 45247512 2026-04-25) ----------
+# Classifier hallucinated `name="не указано"` when user asked "А как меня
+# звали?". The patch landed, then the stale-name guard later rejected the
+# real "Никита" because a "name" was already on file. Filter must reject
+# meta-phrases that are clearly not human names.
+
+
+def test_drops_ne_ukazano_as_name():
+    """The exact live regression: classifier emits name='не указано'."""
+    out = filter_patches(
+        {"name": "не указано"},
+        "Понял, спасибо. А как меня звали?",
+        bot_name="Ксения",
+    )
+    assert "name" not in out
+
+
+def test_drops_neizvestno_as_name():
+    out = filter_patches({"name": "неизвестно"}, "не помнишь меня?", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_ne_skazano_as_name():
+    out = filter_patches({"name": "не сказано"}, "ты не запомнила", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_anonim_as_name():
+    out = filter_patches({"name": "аноним"}, "просто клиент", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_polzovatel_as_name():
+    out = filter_patches({"name": "пользователь"}, "клиент", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_klient_as_name():
+    out = filter_patches({"name": "клиент"}, "звонящий клиент", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_keeps_real_name_after_blacklist_filter():
+    """Regression check: the blacklist must not reject real names."""
+    out = filter_patches({"name": "Никита"}, "я Никита", bot_name="Ксения")
+    assert out.get("name") == "Никита"
+
+
+def test_blacklist_case_insensitive():
+    """Classifier might emit any casing."""
+    out = filter_patches({"name": "Не Указано"}, "...", bot_name="Ксения")
+    assert "name" not in out
+
+
 def test_ipeshnik_collapsed_to_yur_litso():
     # Fix 41a: ИП / ипэшник / самозанятый / микробизнес all collapse to
     # "Юридическое лицо" so readback says "юр.лицо" consistent with the

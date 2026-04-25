@@ -17,6 +17,24 @@ MVP_TERM_RANGE = (12, 84)
 # Enum-field slot-fill answers — single-word utterances that match these are
 # valid replies to clarification questions (e.g. "Аннуитет" → type_schedule).
 # We let such patches bypass the <2-token noise filter.
+# Bug 20 (live call 45247512 2026-04-25) — meta-phrases Qwen3-4B sometimes
+# emits as `name` when the user's utterance is a question about names, not
+# a self-introduction. The literal string lands in the profile, then the
+# stale-name guard locks the real name out on later turns. Reject these
+# at the filter so the name slot stays empty until a real human name lands.
+_NON_NAME_BLACKLIST: frozenset[str] = frozenset({
+    "не указано", "не указан", "не указана",
+    "неизвестно", "неизвестный", "неизвестная",
+    "не сказано", "не сказан", "не сказана",
+    "не назвал", "не назвала", "не названо",
+    "аноним", "анонимный", "анонимно",
+    "пользователь", "клиент", "звонящий", "абонент",
+    "имя", "имени", "без имени",
+    "никто", "никого",
+    "n/a", "na", "none", "null", "unknown",
+})
+
+
 _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     # type_schedule
     "аннуитет", "аннуитетный", "аннуитетная", "аннуитетное",
@@ -261,6 +279,17 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
         # (rare; covered by the flat check too).
         if v_str in utterance:
             return True
+        # Bug 19 (live call 45247512 2026-04-25) — age_years word-numeral
+        # path. User says "три года" → classifier emits age_years=3.
+        # Without this, change-value grounding rejects the patch and the
+        # CHANGE_PENDING state never stages, sending "Да" to the post-calc
+        # SMS path. extract_age_years_from_utterance handles ноль..пятнадцать
+        # plus all grammatical case variants and requires a year-unit anchor.
+        if field == "age_years":
+            from .utterance_grounding import extract_age_years_from_utterance
+            extracted = extract_age_years_from_utterance(utterance)
+            if extracted is not None and extracted == _int:
+                return True
         # Fix 34: Russian spelled multipliers. "80 тысяч" → 80000, "3 миллиона"
         # → 3000000. Only applies to cost / prepaid_amount (big numbers).
         # Term / prepaid_pct / age are small enough that callers say the raw
@@ -376,10 +405,22 @@ def filter_patches(
     # Drop bot name (or bot name + patronymic) echoed as user name.
     # Classifier sometimes captures "Ксения Николаевна" from formal user
     # address — we reject anything whose first token matches bot_name.
+    #
+    # Bug 20 (live call 45247512 2026-04-25): also reject meta-phrases the
+    # classifier hallucinates from question-shaped utterances like "А как
+    # меня звали?" — Qwen3-4B emitted name="не указано" ("not specified")
+    # which then locked out the real name "Никита" via the stale-name guard.
     _raw_name = out.get("name")
     if isinstance(_raw_name, str):
-        _name_tokens = _raw_name.strip().lower().split()
+        _name_lower = _raw_name.strip().lower()
+        _name_tokens = _name_lower.split()
         if _name_tokens and _name_tokens[0] == bot_name.lower():
+            out.pop("name")
+        elif _name_lower in _NON_NAME_BLACKLIST:
+            print(
+                f"[Profile] non-name patch dropped: '{_raw_name}'",
+                flush=True,
+            )
             out.pop("name")
 
     # Normalize / validate client_type.

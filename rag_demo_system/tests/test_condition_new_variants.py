@@ -117,3 +117,32 @@ def test_slot_fill_single_word_variants_pass(utterance: str) -> None:
     assert "condition_new" in out, (
         f"single-word condition answer '{utterance}' must survive filter_patches"
     )
+
+
+# ---------- Bug 19 (live call 45247512 2026-04-25) ----------
+# `has_field_signal` for numeric fields requires the literal digit. User said
+# "три года" (word numeral); classifier emitted change_field=age_years,
+# change_value=3. Grounding check failed → patch rejected → CHANGE_PENDING
+# never staged → state stayed CONFIRMED → "Да" hit the legitimate post-calc
+# SMS path. Fix: route age_years grounding through extract_age_years_from_
+# utterance which already handles word numerals (added in 686933d).
+
+
+@pytest.mark.parametrize("utterance,value,expected", [
+    ("три года", 3, True),
+    ("Два года, я сказал.", 2, True),
+    ("пять лет", 5, True),
+    ("на десять лет", 10, True),
+    # Negative: word doesn't match value → must NOT ground.
+    ("три года", 5, False),
+    ("два года", 7, False),
+    # Negative: bare word without year-unit must NOT ground.
+    ("три", 3, False),
+    # Digit form still works (regression check).
+    ("3 года", 3, True),
+    ("на 5 лет", 5, True),
+])
+def test_age_years_word_numeral_grounding(utterance: str, value: int, expected: bool) -> None:
+    assert has_field_signal("age_years", value, utterance) is expected, (
+        f"age_years={value} grounding mismatch for {utterance!r}"
+    )
