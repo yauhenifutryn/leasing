@@ -1011,8 +1011,16 @@ async def _stream_voice_response(
     # This adds ~200ms latency but guarantees correct behavior.
     from .llm import call_openai_compatible
 
-    sms_triggers = ["отправ", "смс", "sms", "пришли"]
-    has_sms_intent = any(t in message.lower() for t in sms_triggers)
+    # Bug 4 (live call 6dd5880b 2026-04-25) — affirmation-after-calc path.
+    # Bare "Да" / "Да, открой" right after the bot's post-calc SMS prompt was
+    # not recognised, so the direct-send path skipped and Qwen3.5 hallucinated
+    # "график отправлен" without invoking send_sms. detect_sms_intent now
+    # gates on recent successful calc + short affirmation. See sms_intent.py.
+    from .sms_intent import detect_sms_intent
+    has_sms_intent = detect_sms_intent(
+        message,
+        list(session.tool_calls_history) + list(session.tool_calls_this_turn),
+    )
     # "session-wide" view: switch to cumulative history since tool_calls_this_turn
     # is reset at turn start (see VoiceSession.reset_turn_state).
     tools_used_in_session = bool(session.tool_calls_history) or bool(session.tool_calls_this_turn)
