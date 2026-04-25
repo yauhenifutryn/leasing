@@ -214,6 +214,14 @@
     var fields = msg.fields || {};
     var order = ['name', 'subject', 'cost', 'currency', 'client_type', 'condition_new',
                  'age_years', 'term_months', 'prepaid_pct', 'prepaid_amount', 'type_schedule'];
+    // Bug C — render the BYN projection inline on the cost row when the
+    // backend computed it (Физлицо + USD path). Operator sees both the
+    // user's literal answer and what the calculator will actually use,
+    // matching the readback's dual-disclosure behaviour.
+    var convCost = msg.converted_cost;
+    var convCur = msg.converted_currency;
+    var showConv = (convCost !== null && convCost !== undefined
+                    && (convCost !== fields.cost || convCur !== fields.currency));
     for (var i = 0; i < order.length; i++) {
       var k = order[i];
       var v = fields[k];
@@ -223,6 +231,12 @@
       var ks = document.createElement('span'); ks.className = 'k'; ks.textContent = k + ': ';
       var vs = document.createElement('span'); vs.className = 'v'; vs.textContent = hasVal ? String(v) : '—';
       row.appendChild(ks); row.appendChild(vs);
+      if (k === 'cost' && hasVal && showConv) {
+        var conv = document.createElement('span');
+        conv.style.cssText = 'color:#8e44ad; margin-left:6px; font-weight:normal;';
+        conv.textContent = '→ ' + convCost + ' ' + (convCur || '');
+        row.appendChild(conv);
+      }
       grid.appendChild(row);
     }
     var missing = msg.missing || [];

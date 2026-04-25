@@ -1651,6 +1651,29 @@ async def _stream_voice_response(
                     f"graph={_ts} missing={sorted(_p.missing_fields())}",
                     flush=True,
                 )
+                # Bug C (live call 6a9d359b 2026-04-26) — show the BYN
+                # projection when the conversion path applies. On the
+                # legacy DirectTool branch (app.py:2642), Физлицо + USD
+                # gets converted to BYN at calc-time only; profile keeps
+                # the user's literal answer. The operator-facing snapshot
+                # was misleading — it showed 100000 USD with no hint that
+                # the calculator would actually run on 300000 BYN. Project
+                # the same conversion inline here so the UI can render
+                # "100000 USD → 300000 BYN" when applicable.
+                _converted_cost = None
+                _converted_currency = None
+                if (
+                    _p.cost is not None
+                    and (_p.currency or "").upper() == "USD"
+                    and "Физическое" in str(_p.client_type or "")
+                ):
+                    try:
+                        from .profile_prompts import _get_usd_byn_rate
+                        _rate = _get_usd_byn_rate()
+                        _converted_cost = round(float(_p.cost) * float(_rate), 2)
+                        _converted_currency = "BYN"
+                    except Exception:  # noqa: BLE001
+                        pass
                 await broadcast_sip_event({
                     "type": "sip.profile.snapshot",
                     "call_id": session_id,
@@ -1668,6 +1691,10 @@ async def _stream_voice_response(
                         "prepaid_amount": _p.prepaid_amount,
                         "type_schedule": _p.type_schedule,
                     },
+                    "original_cost": getattr(_p, "original_cost", None),
+                    "original_currency": getattr(_p, "original_currency", None),
+                    "converted_cost": _converted_cost,
+                    "converted_currency": _converted_currency,
                     "missing": sorted(_p.missing_fields()),
                 })
             except Exception:  # noqa: BLE001
@@ -2033,8 +2060,30 @@ async def _stream_voice_response(
     # on a prior turn (tool_calls_this_turn is reset at turn start).
     _sms_all_calls = session.tool_calls_history + session.tool_calls_this_turn
     _sms_from_classifier = _extracted_hints.get("action") == "sms" and _sms_all_calls
+    # Bug A (live call 6a9d359b 2026-04-26) — change wins over SMS.
+    # When the classifier or sticky-patch logic detected a profile change
+    # this turn, the user's utterance is a change request, not an SMS
+    # confirm — even if it starts with "Да". Prefer the classifier's
+    # structured signals over keyword-based intent: _sa_change_field is
+    # set whenever the classifier emitted change_field; _change_staged_this_turn
+    # tracks implicit change-detection on CONFIRMED state; _changed_this_turn
+    # captures any non-name patches that landed via apply_patches. Any of
+    # these means SMS direct-send must defer to the change-confirm path.
+    _change_signal_this_turn = bool(
+        _change_staged_this_turn
+        or _sa_change_field
+        or any(k for k in _changed_this_turn if k != "name")
+    )
     sms_context = ""
-    if (has_sms_intent or _sms_from_classifier) and _sms_all_calls and session.client_phone:
+    if (has_sms_intent or _sms_from_classifier) and _change_signal_this_turn:
+        print(
+            f"[Jambonz:{session_id[:8]}] SMS suppressed by change signal: "
+            f"staged={_change_staged_this_turn} field={_sa_change_field!r} "
+            f"changed={list(_changed_this_turn)}",
+            flush=True,
+        )
+        # Fall through: legacy LLM / change-confirm path handles it.
+    elif (has_sms_intent or _sms_from_classifier) and _sms_all_calls and session.client_phone:
         last_calc = next(
             (tc for tc in reversed(_sms_all_calls)
              if tc.get("tool") == "calculator"), None)
@@ -2740,7 +2789,18 @@ async def _stream_voice_response(
                 _direct_tool_result = None
 
     # ── Clarify client type: classifier detected restricted subject/currency ──
-    _clarify_needed = needs_tool and _extracted_hints.get("action") == "clarify_client_type"
+    # Bug B (live call 6a9d359b 2026-04-26) — gate on actual profile state.
+    # The 4B classifier sometimes hallucinates action=clarify_client_type
+    # when conversation history shows client_type was asked recently, even
+    # if it was already captured. Profile is the source of truth: when
+    # client_type is filled, ignore the action label and let the normal
+    # response path handle the turn. Mirrors the same principle the v2
+    # baseline applied to the COLLECTING-clarify gate (commit 9579218).
+    _clarify_needed = (
+        needs_tool
+        and _extracted_hints.get("action") == "clarify_client_type"
+        and not (session.client_profile.client_type or "").strip()
+    )
     if _clarify_needed:
         _subj = _extracted_hints.get("subject", "предмет лизинга")
         _cur = _extracted_hints.get("currency")

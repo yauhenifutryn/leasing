@@ -42,6 +42,16 @@ _AFFIRMATIONS: frozenset[str] = frozenset({
 _CHANGE_KEYWORDS: tuple[str, ...] = (
     "измен", "поменя", "пересчит", "другой", "переделай",
     "не нужно", "не надо",
+    # Graph-type stems: any utterance naming a graph type after a calc is
+    # a change request, not an SMS confirm. Live regression on call
+    # 6a9d359b 2026-04-26: "Да, давай сделаем линейный график" was caught
+    # by the leading "да" affirmation path before this. Belt-and-suspenders
+    # — the primary gate now lives in app.py at the SMS direct-fire site
+    # and consults the classifier's structured change signals.
+    "линейн", "аннуит",
+    # Change directive forms not covered by "поменя"/"измен":
+    "сдела",  # сделай / сделаем / сделать
+    "поставь", "ставь",
 )
 
 _NEGATIONS: tuple[str, ...] = ("нет", "не", "не-а")

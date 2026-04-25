@@ -159,6 +159,38 @@ def test_da_during_readback_pending_not_sms() -> None:
     ) is False
 
 
+# ---------- Bug A (live call 6a9d359b 2026-04-26): "Да + change" ----------
+# User said "Да, давай сделаем линейный график, пожалуйста." right after
+# bot's "Хотите изменить параметры или отправить график по СМС?". Pre-fix,
+# the leading "Да" + post-calc state matched the affirmation-after-calc
+# path and SMS fired with stale annuity numbers. The user clearly wanted
+# to change the schedule, not send SMS.
+
+
+def test_da_with_linear_graph_change_not_sms() -> None:
+    """'Да + линейный график' is a change request, not an SMS confirm."""
+    assert detect_sms_intent(
+        "Да, давай сделаем линейный график, пожалуйста.", _ok_calc()
+    ) is False
+
+
+def test_da_with_annuity_change_not_sms() -> None:
+    """'Да + аннуитетный' is a change request, not an SMS confirm."""
+    assert detect_sms_intent(
+        "Да, давай сделаем аннуитетный.", _ok_calc()
+    ) is False
+
+
+def test_sdelai_alone_not_sms() -> None:
+    """'Сделай линейный' is a directive change request even without 'Да'."""
+    assert detect_sms_intent("Сделай линейный график.", _ok_calc()) is False
+
+
+def test_postav_alone_not_sms() -> None:
+    """'Поставь аннуитет' is a directive change request."""
+    assert detect_sms_intent("Поставь аннуитет.", _ok_calc()) is False
+
+
 def test_da_during_confirmed_is_sms() -> None:
     """Post-calc CONFIRMED state — 'Да' here IS the SMS confirm."""
     from backend.session import ProfileState
