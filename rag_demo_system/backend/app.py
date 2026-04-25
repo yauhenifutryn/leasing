@@ -1924,7 +1924,11 @@ async def _stream_voice_response(
         if has_sms_intent:
             needs_tool = True
         # Override: if classifier extracted a tool action, force TOOL regardless of intent field
-        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm", "clarify_client_type", "invalid_param"):
+        # Bug F (codex-rescue 2026-04-26 + live call 22043183): clarify_client_type
+        # was forcing TOOL on RAG turns where the classifier hallucinated the action
+        # from "офис"/"компания"/"директор" subject cues. Removed from this override
+        # set — the clarify branch below now requires its own leasing-signal gate.
+        if _extracted_hints.get("action") in ("calculate", "recalculate", "change_param", "sms", "confirm", "invalid_param"):
             needs_tool = True
         _t_classify_ms = (time.time() - _t_classify_start) * 1000
         print(f"[Classifier] result: intent={'TOOL' if needs_tool else 'RAG'} hints={_extracted_hints} ({_t_classify_ms:.0f}ms)", flush=True)
@@ -2858,13 +2862,32 @@ async def _stream_voice_response(
     # The 4B classifier sometimes hallucinates action=clarify_client_type
     # when conversation history shows client_type was asked recently, even
     # if it was already captured. Profile is the source of truth: when
-    # client_type is filled, ignore the action label and let the normal
-    # response path handle the turn. Mirrors the same principle the v2
-    # baseline applied to the COLLECTING-clarify gate (commit 9579218).
+    # client_type is filled, ignore the action label.
+    # Bug F (live call 22043183 2026-04-26, codex-rescue diagnosis) — also
+    # require an explicit leasing signal in the utterance OR a leasing
+    # numeric hint from the classifier. Without this, the bot fired
+    # "Вы физическое или юридическое лицо?" on the first turn when the
+    # caller asked an info question about office address ("офис" matches
+    # the subject taxonomy at classifier_schema.py and seeds the false
+    # action label). Profile is empty on turn 1 so the client_type guard
+    # alone doesn't help — leasing-signal must accompany it.
+    import re as _re_clarify
+    _clarify_leasing_signal = bool(_re_clarify.search(
+        r"\b(лизинг|лизингов|рассчит|расчет|расчёт|посчит|калькул|аванс|срок|"
+        r"стоимост|машин\w*|автомобил\w*|авто|купить|приобрест|взять)\b",
+        (message or "").lower(),
+    )) or any(
+        _extracted_hints.get(_k) not in (None, "")
+        for _k in (
+            "cost", "currency", "term", "term_months", "prepaid", "prepaid_pct",
+            "prepaid_amount", "condition_new", "age_years", "type_schedule",
+        )
+    )
     _clarify_needed = (
         needs_tool
         and _extracted_hints.get("action") == "clarify_client_type"
         and not (session.client_profile.client_type or "").strip()
+        and _clarify_leasing_signal
     )
     if _clarify_needed:
         _subj = _extracted_hints.get("subject", "предмет лизинга")
