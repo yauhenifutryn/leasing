@@ -190,7 +190,7 @@ def build_readback_text(profile: Any) -> str:
     subj = profile.subject or "предмет лизинга"
     cond = (
         "новый" if profile.condition_new == 1
-        else "б/у" if profile.condition_new == 0
+        else "подержанный" if profile.condition_new == 0
         else "—"
     )
     # Fix 1.11 (2026-04-19) — when condition_new=0, age_years is a required
@@ -344,7 +344,7 @@ _FIELD_RU = {
     "type_schedule": "тип графика",
     "currency": "валюта",
     "cost": "стоимость",
-    "condition_new": "состояние (новый/б/у)",
+    "condition_new": "состояние (новый/подержанный)",
     "subject": "предмет лизинга",
     # Fix 1.12 (2026-04-19) — live call 743c1a0e: change-confirm read out
     # "Меняю age_years на 5" because age_years was missing from this map
@@ -366,8 +366,8 @@ _VALUE_RU: dict[str, dict[Any, str]] = {
         1: "линейный",
     },
     "condition_new": {
-        "0": "б/у",
-        0: "б/у",
+        "0": "подержанный",
+        0: "подержанный",
         "1": "новый",
         1: "новый",
     },

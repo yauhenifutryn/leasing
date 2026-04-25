@@ -171,7 +171,7 @@ class CalculatorTool(ToolDefinition):
                         },
                         "condition_new": {
                             "type": "integer",
-                            "description": "1 = новый, 0 = б/у.",
+                            "description": "1 = новый, 0 = подержанный (он же б/у).",
                         },
                         "age": {
                             "type": "integer",
@@ -402,7 +402,7 @@ class CalculatorTool(ToolDefinition):
             f"  Предмет: {p.get('subject', '?')}",
             f"  Стоимость: {p.get('cost', '?')} {_mark('currency', p.get('currency', 'BYN'))}",
             f"  Тип клиента: {_mark('client_type', p.get('client_type', '?'))}",
-            f"  Состояние: {'новый' if p.get('condition_new', 1) == 1 else 'б/у'}"
+            f"  Состояние: {'новый' if p.get('condition_new', 1) == 1 else 'подержанный'}"
             + (f" ({p.get('age')} лет)" if p.get("age") is not None else ""),
             f"  Аванс: {_mark('prepaid', p.get('prepaid', '?'))}%: {result['advance_sum']} {p.get('currency', 'BYN')}",
             f"  Срок: {_mark('term', p.get('term', '?'))} мес.",
