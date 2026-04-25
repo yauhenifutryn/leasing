@@ -1017,9 +1017,21 @@ async def _stream_voice_response(
     # "график отправлен" without invoking send_sms. detect_sms_intent now
     # gates on recent successful calc + short affirmation. See sms_intent.py.
     from .sms_intent import detect_sms_intent
+    # Bug 15 (live call 1cae210d, 2026-04-25) — pass profile_state so
+    # detect_sms_intent rejects "Да" while READBACK_PENDING or
+    # CHANGE_PENDING is in flight. Without this, confirming a
+    # CHANGE_PENDING ("Да" to "Меняю график на аннуитет, всё верно?")
+    # fired SMS with stale (pre-change) calculator output instead of
+    # re-running the calculator with the new schedule.
+    _sms_intent_state = None
+    try:
+        _sms_intent_state = session.client_profile.state
+    except Exception:  # noqa: BLE001
+        pass
     has_sms_intent = detect_sms_intent(
         message,
         list(session.tool_calls_history) + list(session.tool_calls_this_turn),
+        profile_state=_sms_intent_state,
     )
     # "session-wide" view: switch to cumulative history since tool_calls_this_turn
     # is reset at turn start (see VoiceSession.reset_turn_state).

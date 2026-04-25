@@ -22,10 +22,14 @@ The affirmation path is gated on:
   - utterance does NOT contain a change-keyword ("измени", "поменя",
     "пересчит", "другой", "переделай") that would indicate the user
     wants to alter params instead of confirming SMS
+  - profile state is NOT READBACK_PENDING or CHANGE_PENDING (Bug 15,
+    live call 1cae210d 2026-04-25). In those states the user's "Да" is
+    confirming a profile transition, not the SMS offer — sending now
+    would deliver stale calc params from before the change.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 _EXPLICIT_TRIGGERS: tuple[str, ...] = ("отправ", "смс", "sms", "пришли")
@@ -46,6 +50,7 @@ _NEGATIONS: tuple[str, ...] = ("нет", "не", "не-а")
 def detect_sms_intent(
     message: str,
     tool_calls_history: Iterable[dict[str, Any]],
+    profile_state: Optional[Any] = None,
 ) -> bool:
     """True if the user's utterance should trigger SMS-direct-send.
 
@@ -53,9 +58,23 @@ def detect_sms_intent(
         message: latest user utterance (raw, before any normalisation).
         tool_calls_history: cumulative session tool-call history. Only the
             most recent entry matters for the affirmation path.
+        profile_state: ProfileState (or its string value). When provided
+            and equal to READBACK_PENDING or CHANGE_PENDING, both paths
+            fail closed — the user's confirmation belongs to that pending
+            profile transition, not to the SMS offer. Bug 15.
     """
     if not message:
         return False
+
+    # Bug 15 — never SMS while a readback or change-confirm is in flight.
+    # The user's affirmation (or even an explicit "отправь смс") is
+    # ambiguous in those states; the safe default is to let the profile
+    # transition complete and the calculator re-run before SMS becomes
+    # eligible again.
+    if profile_state is not None:
+        state_value = getattr(profile_state, "value", profile_state)
+        if state_value in ("READBACK_PENDING", "CHANGE_PENDING"):
+            return False
 
     msg_lower = message.lower()
 
