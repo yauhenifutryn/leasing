@@ -3727,28 +3727,25 @@ async def _jambonz_process_utterance(
 
     # Echo detection: if STT output matches recent bot speech, discard.
     # Catches speaker-mode echo where phone mic picks up bot's own TTS.
-    # Uses word-set overlap (not just substring) to catch Whisper paraphrasing.
+    # Issue 8 fix (live 77cfa127 2026-04-25): the previous in-line
+    # word-overlap check at threshold 0.6 false-positived legitimate
+    # short user replies that echo bot vocabulary (user "новая машина в
+    # долларах" answering bot's "новая или б/у... в рублях или
+    # долларах?"). New logic in backend/echo_filter.is_echo:
+    #   - Substring of bot speech → echo (unchanged).
+    #   - Short user utterances (≤ 5 words) skip overlap check entirely.
+    #   - Long utterances need ≥ 0.85 overlap (was 0.6).
     _chat_sess = state.get(session_id)
     if _chat_sess and _chat_sess.transcript:
         _recent_bot = " ".join(
             t.get("text", "") for t in _chat_sess.transcript[-4:]
             if t.get("role") == "assistant"
-        ).upper()
-        _text_up = text.upper().strip()
-        if len(_text_up) >= 3 and _recent_bot:
-            # Method 1: exact substring (original, catches literal fragments)
-            _is_echo = _text_up in _recent_bot
-            # Method 2: word-set overlap (catches Whisper paraphrasing of echo)
-            if not _is_echo:
-                _user_words = set(_text_up.split())
-                _bot_words = set(_recent_bot.split())
-                if len(_user_words) >= 2:
-                    _overlap = len(_user_words & _bot_words) / len(_user_words)
-                    _is_echo = _overlap >= 0.6
-            if _is_echo:
-                print(f"[Jambonz:{session_id[:8]}] Echo filtered: '{text}' (matches bot speech)", flush=True)
-                session.assistant_speaking = False
-                return
+        )
+        from .echo_filter import is_echo as _is_echo_fn
+        if _is_echo_fn(text, _recent_bot):
+            print(f"[Jambonz:{session_id[:8]}] Echo filtered: '{text}' (matches bot speech)", flush=True)
+            session.assistant_speaking = False
+            return
 
     print(f"[Jambonz:{session_id[:8]}] STT({_stt_ms:.0f}ms): {text}", flush=True)
     await broadcast_sip_event({
