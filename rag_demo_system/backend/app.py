@@ -2318,6 +2318,41 @@ async def _stream_voice_response(
             # fall through to LLM rather than silently killing TTS.
             print(f"[Orchestrator] COLLECTING clarify FAILED, falling through: {_clar_exc}", flush=True)
 
+    # ── Profile-complete force-readback (intent-agnostic) ──
+    # Live call 04f734c8 (2026-04-25): user said "Ладно, давай линейный."
+    # → classifier emitted intent=CONVERSATION → the CONVERSATION-incomplete
+    # gate above didn't fire (profile WAS complete after this turn),
+    # `needs_tool` was False so the readback gate inside that block didn't
+    # see this turn either, and control fell through to the LLM. The LLM
+    # ignored the captured snapshot and re-asked for every field.
+    #
+    # Profile is the source of truth. The moment any patch lands that
+    # completes is_complete_for_calc(), the next bot action MUST be the
+    # deterministic readback — independent of how the classifier labelled
+    # the turn. No LLM in the loop on this critical handoff.
+    if (
+        bool(_changed_this_turn)
+        and _collect_profile_42b.state == ProfileState.COLLECTING
+        and _collect_profile_42b.is_complete_for_calc()
+        and _collect_profile_42b.confirmed_at is None
+        and not _sa_is_confirm
+        and not _is_question
+    ):
+        _collect_profile_42b.state = ProfileState.READBACK_PENDING
+        _collect_profile_42b.readback_emitted_at = time.time()
+        _readback_complete = build_readback_text(_collect_profile_42b)
+        print(
+            f"[Orchestrator] force-readback after final-slot capture: "
+            f"changed={list(_changed_this_turn.keys())} intent={_intent_val}",
+            flush=True,
+        )
+        await _emit_plain_assistant_response(
+            _readback_complete, websocket, session_id,
+            backend=backend, session=session,
+        )
+        session.assistant_speaking = False
+        return
+
     # ── Tool-intent gates (Gates 1 & 2) ──
     # Enforces server-side clarify + readback BEFORE any calculator call.
     # Only active when the classifier detected a tool intent; RAG paths skip.
