@@ -77,10 +77,15 @@
     document.getElementById('filterLabel').textContent = ' — ' + filterUser;
   }
 
-  // Dropdown changes filter without page reload
+  // Dropdown changes filter without page reload. Clear log so the new
+  // filter shows a fresh view (we don't store events, so we can't
+  // retro-filter what's already on screen). Also re-render call badges
+  // so concurrent calls from other users disappear from the active list.
   filterSelect.addEventListener('change', function() {
     filterUser = this.value || null;
     document.getElementById('filterLabel').textContent = filterUser ? ' — ' + filterUser : '';
+    while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
+    updateCallBadges();
   });
 
   function connect() {
@@ -131,10 +136,16 @@
       callToUser[cid] = msg.sip_user;
     }
 
-    // Filter: if ?user=sergey, only show events from Sergey's calls
-    if (filterUser && cid && callToUser[cid] && callToUser[cid] !== filterUser) {
-      if (t === 'sip.call.end') delete callToUser[cid];
-      return;
+    // Filter: if ?user=sergey, only show events from Sergey's calls.
+    // Fail-closed when the call_id -> user mapping is unknown (call
+    // started before this monitor session opened): otherwise events
+    // from concurrent users leak through and logs get mixed.
+    if (filterUser && cid) {
+      var mapped = callToUser[cid];
+      if (!mapped || mapped !== filterUser) {
+        if (t === 'sip.call.end') delete callToUser[cid];
+        return;
+      }
     }
 
     if (t === 'sip.call.start') {
@@ -197,6 +208,7 @@
     for (var cid in activeCalls) {
       if (!activeCalls.hasOwnProperty(cid)) continue;
       var info = activeCalls[cid];
+      if (filterUser && info.user !== filterUser) continue;
       var badge = document.createElement('span');
       badge.className = 'call-badge';
 
