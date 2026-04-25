@@ -1761,8 +1761,33 @@ async def _stream_voice_response(
             # produced no `change_field` from the classifier, and the stale-
             # patch guard correctly rejected the subject/cost patches — so
             # profile stayed stale and the calculator re-ran old params.
+            # Bug E (live call f59681d2 2026-04-26) — post-calc COLLECTING.
+            # The legacy direct_call path runs the calculator and presents
+            # the result without transitioning state out of COLLECTING. From
+            # the user's perspective they have heard a readback and are now
+            # changing params — the change-staging path MUST fire here.
+            # Without this, classifier change_field/change_value gets dropped
+            # silently, calc re-runs with stale values, and the next "Да"
+            # bypasses the SMS gate (which only blocks READBACK_PENDING /
+            # CHANGE_PENDING). Treat COLLECTING + complete + has-calc-OK
+            # as equivalent to CONFIRMED for change-staging purposes.
+            _has_successful_calc = any(
+                tc.get("tool") == "calculator" and (tc.get("result") or {}).get("ok")
+                for tc in (session.tool_calls_history + session.tool_calls_this_turn)
+            )
+            _post_calc_collecting = (
+                _profile_now.state == ProfileState.COLLECTING
+                and _profile_now.is_complete_for_calc()
+                and _has_successful_calc
+            )
+            _change_eligible_states = (
+                ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING,
+            )
             _implicit_enter = False
-            if not _sa_change_field and _profile_now.state == ProfileState.CONFIRMED:
+            if not _sa_change_field and (
+                _profile_now.state == ProfileState.CONFIRMED
+                or _post_calc_collecting
+            ):
                 for _hint_key, _field_key in _EXTRA_KEYS_TO_CHANGE:
                     _hv = _extracted_hints.get(_hint_key)
                     if _hv in (None, ""):
@@ -1774,8 +1799,9 @@ async def _stream_voice_response(
                         continue
                     _implicit_enter = True
                     break
-            _enter_change = bool(_sa_change_field) and _profile_now.state in (
-                ProfileState.CONFIRMED, ProfileState.CHANGE_PENDING
+            _enter_change = bool(_sa_change_field) and (
+                _profile_now.state in _change_eligible_states
+                or _post_calc_collecting
             )
             _enter_change = _enter_change or _implicit_enter
             if _enter_change:
