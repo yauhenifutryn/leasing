@@ -67,3 +67,51 @@ def test_call_site_guard_allows_skip_on_first_name_turn():
         "Меня зовут Женя.", patches, hints
     )
     assert skip is True
+
+
+# Bug 5 (live call 6dd5880b 2026-04-25) — funnel-aggression after name-only.
+# Classifier emits a non-empty `action` (e.g. "clarify" or "conversation")
+# alongside name=Никита on a bare "Привет, я Никита." Old guard blocked
+# skip-RAG on ANY non-empty hints dict, so the bot dove into clarify funnel
+# instead of emitting the open greeting.
+def test_pure_name_capture_with_action_clarify_still_skips():
+    """Classifier action='clarify' alone (no profile slots) shouldn't block."""
+    assert should_skip_rag(
+        "Привет, я Никита.",
+        {"name": "Никита"},
+        {"action": "clarify"},
+    ) is True
+
+
+def test_pure_name_capture_with_action_conversation_still_skips():
+    assert should_skip_rag(
+        "Здравствуйте, я Сергей.",
+        {"name": "Сергей"},
+        {"action": "conversation"},
+    ) is True
+
+
+def test_name_plus_subject_hint_blocks_skip():
+    """If classifier extracted profile data (subject), user wants calc, not greeting."""
+    assert should_skip_rag(
+        "Я Вадим, хочу легковой.",
+        {"name": "Вадим"},
+        {"action": "calculate", "subject": "Легковой автомобиль"},
+    ) is False
+
+
+def test_name_plus_cost_hint_blocks_skip():
+    assert should_skip_rag(
+        "Я Вадим, сто тысяч.",
+        {"name": "Вадим"},
+        {"action": "calculate", "cost": 100000},
+    ) is False
+
+
+def test_action_only_hint_with_no_name_no_skip():
+    """No name patch -> not a name-capture turn even if hints are non-profile."""
+    assert should_skip_rag(
+        "Здравствуйте.",
+        {},
+        {"action": "conversation"},
+    ) is False
