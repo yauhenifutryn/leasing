@@ -1622,6 +1622,45 @@ async def _stream_voice_response(
                         flush=True,
                     )
 
+            # Bug D (live call 2809a6f9 2026-04-26) — RAG-turn patch guard.
+            # The classifier extracts hints from EVERY utterance. When the
+            # caller asks generic info questions ("адрес офиса?", "кто
+            # директор?"), the model can hallucinate leasing fields
+            # (subject="Недвижимость", client_type="Юридическое лицо" from
+            # "компании"). Without this gate, those hallucinations seed
+            # the profile before the user has even said they want to
+            # lease anything. Principle: profile-filling only happens
+            # when the user is actually talking about leasing OR when we
+            # are already mid-flow (any core field filled). Name is the
+            # one exception — capturing it from a greeting is always OK.
+            _has_any_core_field = any(
+                getattr(_profile_current, f, None) is not None
+                for f in ("subject", "cost", "client_type", "condition_new",
+                          "age_years", "term_months", "prepaid_pct",
+                          "prepaid_amount", "type_schedule")
+            )
+            _tool_flow_actions = {
+                "calculate", "recalculate", "change_param", "change_field",
+                "confirm", "clarify_client_type", "invalid_param", "sms",
+            }
+            _action_signals_tool = (
+                _extracted_hints.get("action") in _tool_flow_actions
+                or bool(_sa_change_field)
+                or _sa_is_confirm
+                or _sa_wants_readback
+            )
+            _in_tool_flow = needs_tool or _has_any_core_field or _action_signals_tool
+            if not _in_tool_flow and _profile_patches:
+                _name_only = {k: v for k, v in _profile_patches.items() if k == "name"}
+                _dropped_keys = sorted(set(_profile_patches) - set(_name_only))
+                if _dropped_keys:
+                    print(
+                        f"[Profile] RAG-turn-guard: dropped {_dropped_keys} "
+                        f"(intent={_intent}, action={_extracted_hints.get('action')!r}, "
+                        f"no core field set yet)",
+                        flush=True,
+                    )
+                _profile_patches = _name_only
             # Hygiene filter before merge: drops noise, normalizes enums, validates MVP ranges.
             _had_patches = bool(_profile_patches)
             if _had_patches:
