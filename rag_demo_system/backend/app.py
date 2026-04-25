@@ -1759,12 +1759,20 @@ async def _stream_voice_response(
 
     # --- Skip RAG for pure name-capture turns (prevents KB hallucinations on names) ---
     # Skip-RAG name-capture path only applies on the VERY FIRST name turn.
-    # Once profile.name is set, any further {name: X} patch is almost certainly
-    # a classifier hallucination (extracting nouns/discourse markers as names),
-    # so we must NOT route to the greeting path — the user has asked a real
-    # question (about address, director, terms, etc.) that needs RAG.
-    _name_already_captured = bool((session.client_profile.name or "").strip())
-    if (not _name_already_captured) and should_skip_rag(message or "", _profile_patches, _extracted_hints):
+    # Once profile.name is set, the line-1453 gate prevents `name` from being
+    # added to `_profile_patches` again (stale-name-patch filter), so a later
+    # turn that asks "what is my name?" or "what is the address?" reaches
+    # this point with `_profile_patches` empty of "name" and routes to RAG.
+    #
+    # Bug 5 (live call f5c47706 2026-04-25): the previous gate
+    # `not _name_already_captured` was wrong — by the time we reach this
+    # line, `apply_patches` (line 1464) has already written profile.name,
+    # so the flag was True on the first turn and the open-greeting path
+    # never fired. New gate: `"name" in _profile_patches` is True only
+    # when this turn captured a fresh name (the patch survived line 1453's
+    # "name was empty pre-patch" guard).
+    _name_just_captured_this_turn = "name" in _profile_patches
+    if _name_just_captured_this_turn and should_skip_rag(message or "", _profile_patches, _extracted_hints):
         print(f"[Grounding] skip-RAG: name-capture session={session_id[:8]}", flush=True)
         # Cancel the in-flight RAG task since we won't use its result
         try:
