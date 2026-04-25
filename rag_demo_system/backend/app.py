@@ -2285,18 +2285,29 @@ async def _stream_voice_response(
                 flush=True,
             )
 
-    # ── Fix 42b (narrower retry): CONVERSATION-intent collect-clarify ──
-    # When the user answers a clarification question with a short CONVERSATION
-    # utterance (e.g. "ИП" or "Физлицо") and at least one field was captured,
-    # emit the next-missing-field prompt deterministically. Without this gate
-    # CONVERSATION turns fall through to the LLM which sometimes re-asks fields
-    # that are already in the profile (session b9e9fcfb, 2026-04-18).
+    # ── COLLECTING-clarify gate (intent-agnostic) ──
+    # When the user answers a clarification question with a slot-fill
+    # utterance and at least one field gets captured, emit the
+    # next-missing-field prompt deterministically. Without this gate the
+    # turn falls through to the LLM which sometimes re-asks fields that
+    # are already in the profile (session b9e9fcfb 2026-04-18, live call
+    # 12b9826a 2026-04-25 — Bug 16 юр.лицо path lost subject).
     #
-    # Narrowed vs the first attempt:
-    #   - Only fires when classifier intent == CONVERSATION (TOOL uses Gate 1).
-    #   - Skips when the message looks like a real question (contains "?", or
-    #     starts with an interrogative) so info questions still route to RAG.
-    #   - Does NOT fire if state already transitioned past COLLECTING.
+    # Bug 16 (2026-04-25) — gate was previously `intent == CONVERSATION`
+    # only. Live call showed it failed to fire even when the classifier
+    # logged exactly that. The right architectural rule is intent-
+    # agnostic and mirrors the force-readback gate below: if state is
+    # COLLECTING, profile is incomplete, and a slot just landed, the
+    # next bot action MUST be the deterministic clarify — independent
+    # of how the classifier labelled the turn. This makes the behavior
+    # universal across (физ/юр) × (легк/груз/спец/оборудование).
+    #
+    # Guards:
+    #   - state == COLLECTING (CONFIRMED / CHANGE_PENDING handled upstream).
+    #   - _changed_this_turn truthy (something was captured this turn).
+    #   - profile incomplete (otherwise force-readback gate below handles it).
+    #   - utterance is not a question (info Qs route to RAG).
+    #   - utterance is not a confirmation (handled upstream by state gates).
     _intent_val = str(_sa_parsed.get("intent") if isinstance(_sa_parsed, dict) else "").upper()
     _collect_profile_42b = session.client_profile
     _is_question = (
@@ -2305,16 +2316,16 @@ async def _stream_voice_response(
                          message or "", re.IGNORECASE))
     )
     if (
-        _intent_val == "CONVERSATION"
-        and _collect_profile_42b.state == ProfileState.COLLECTING
+        _collect_profile_42b.state == ProfileState.COLLECTING
         and bool(_changed_this_turn)
         and not _collect_profile_42b.is_complete_for_calc()
         and not _is_question
+        and not _sa_is_confirm
     ):
         _missing_42b = _collect_profile_42b.missing_fields()
         print(
             f"[Orchestrator] COLLECTING clarify: patched={list(_changed_this_turn.keys())} "
-            f"still_missing={sorted(_missing_42b)} intent=CONVERSATION",
+            f"still_missing={sorted(_missing_42b)} intent={_intent_val or '-'}",
             flush=True,
         )
         try:

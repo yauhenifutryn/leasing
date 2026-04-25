@@ -60,6 +60,25 @@ def test_age_years_after_cost_still_deferred() -> None:
     assert "возраст" not in text.lower() and "сколько лет" not in text.lower()
 
 
+def test_term_prepaid_schedule_after_client_type_capture() -> None:
+    """Bug 16 (live call 12b9826a, 2026-04-25): юр.лицо + грузовик flow.
+    User had subject + cost + currency + condition + age + client_type set.
+    Only term/prepaid/schedule remained. The clarify prompt must ask for
+    those three and NOT re-ask subject (which the LLM was hallucinating
+    when the deterministic gate failed to fire)."""
+    text = build_clarification_prompt(
+        {"prepaid", "term_months", "type_schedule"}, None
+    )
+    low = text.lower()
+    assert "срок" in low, f"must ask term: {text}"
+    assert "аванс" in low, f"must ask prepaid: {text}"
+    assert "график" in low or "аннуитет" in low, f"must ask schedule: {text}"
+    # Subject hallucination guard — must NOT re-ask which kind of subject.
+    assert "транспорт" not in low or "лизинг" in low, (
+        f"prompt should not re-ask subject category: {text}"
+    )
+
+
 def test_change_confirm_speaks_russian_age_label() -> None:
     # Fix 1.12 — "Меняю age_years на 5" must never be spoken. The change-
     # confirm must render the Russian label. Live call 743c1a0e shipped
