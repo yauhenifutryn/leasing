@@ -1454,6 +1454,30 @@ async def _stream_voice_response(
                 _profile_patches["name"] = _sa_name
             elif _sa_name:
                 print(f"[Profile] stale name patch ignored: '{_sa_name}' (already have '{session.client_profile.name}')", flush=True)
+
+            # Issue 7 (live call 77cfa127 2026-04-25) — utterance-fallback
+            # subject grounding. Qwen3-4B classifier sometimes returns
+            # intent=RAG/CONVERSATION on calc-prep utterances ("Я думаю
+            # взять себе машину") and skips slot extraction entirely. Run
+            # a deterministic regex pass over the raw utterance so an
+            # unambiguous category cue ("машина" → Легковой, "грузовик"
+            # → Грузовой, etc.) still seeds profile.subject. Conservative:
+            # only fires when classifier didn't provide subject AND
+            # profile.subject is currently None.
+            if (
+                "subject" not in _profile_patches
+                and getattr(_profile_current, "subject", None) is None
+            ):
+                from .utterance_grounding import extract_subject_from_utterance
+                _fallback_subject = extract_subject_from_utterance(message or "")
+                if _fallback_subject:
+                    _profile_patches["subject"] = _fallback_subject
+                    print(
+                        f"[Profile] utterance-fallback subject='{_fallback_subject}' "
+                        f"(classifier omitted)",
+                        flush=True,
+                    )
+
             # Hygiene filter before merge: drops noise, normalizes enums, validates MVP ranges.
             _had_patches = bool(_profile_patches)
             if _had_patches:
