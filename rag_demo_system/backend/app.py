@@ -1651,6 +1651,25 @@ async def _stream_voice_response(
                     f"graph={_ts} missing={sorted(_p.missing_fields())}",
                     flush=True,
                 )
+                await broadcast_sip_event({
+                    "type": "sip.profile.snapshot",
+                    "call_id": session_id,
+                    "state": _p.state.value,
+                    "fields": {
+                        "name": _p.name,
+                        "subject": _p.subject,
+                        "cost": _p.cost,
+                        "currency": _p.currency,
+                        "client_type": _p.client_type,
+                        "condition_new": _p.condition_new,
+                        "age_years": getattr(_p, "age_years", None),
+                        "term_months": _p.term_months,
+                        "prepaid_pct": _p.prepaid_pct,
+                        "prepaid_amount": _p.prepaid_amount,
+                        "type_schedule": _p.type_schedule,
+                    },
+                    "missing": sorted(_p.missing_fields()),
+                })
             except Exception:  # noqa: BLE001
                 pass
             # Handle change_field post-confirmation OR extra changes mid-pending.
@@ -3150,6 +3169,16 @@ async def _stream_voice_response(
         state.update(chat_session)
         session.turn_count += 1
         print(f"[Jambonz:{session_id[:8]}] Transcript saved ({len(all_sentences)} sentences{', interrupted' if session.interrupted else ''})", flush=True)
+        # Belt-and-suspenders: emit the assembled final answer so the SIP
+        # monitor always shows the complete assistant message even if a
+        # streaming delta got dropped or the consumer broke on barge-in
+        # before the last sentence was broadcast.
+        await broadcast_sip_event({
+            "type": "sip.llm.final",
+            "call_id": session_id,
+            "text": full_answer,
+            "interrupted": bool(session.interrupted),
+        })
 
     # ── Per-turn latency breakdown ──
     # Grep-friendly single-line summary for outlier analysis. One line per turn.
