@@ -66,6 +66,19 @@ class ClientProfile:
     # consumes the offer or supersedes it.
     last_offer: Optional[str] = None
 
+    # Bug 1 (live call bf7a95a8 2026-04-26): subject was filled silently
+    # ("Я бы себе хотел что-то купить" → readback announced Легковой
+    # автомобиль the user never confirmed). This flag is the structural
+    # gate: only flips True when subject is captured via a path with
+    # explicit utterance evidence (apply_turn step 5 first-time capture
+    # from grounded patches, or change-confirm cycle). When the flag is
+    # False but ``subject`` happens to be set anyway (any future leak),
+    # ``missing_fields()`` treats subject as missing so the clarify gate
+    # asks the user before the readback fires. Defaults True only when
+    # subject was provided at construction (test fixtures, snapshots
+    # rebuilt from disk) — see ``__post_init__``.
+    subject_user_grounded: bool = False
+
     confirmed_at: Optional[float] = None
     last_change_pending: Optional[str] = None
     locked_fields: set[str] = field(default_factory=set)
@@ -90,6 +103,17 @@ class ClientProfile:
         "type_schedule",
     )
 
+    def __post_init__(self) -> None:
+        # Construction-time assumption (bug 1 fix, 2026-04-26): when callers
+        # provide ``subject`` at construction, treat it as already user-
+        # grounded. Test fixtures and snapshot rebuilds rely on this so
+        # they don't all have to flip the flag manually. The runtime
+        # capture path (apply_turn) explicitly flips the flag when subject
+        # lands via grounded patches; new ClientProfile() with no subject
+        # leaves the flag False as intended.
+        if self.subject is not None and not self.subject_user_grounded:
+            self.subject_user_grounded = True
+
     def missing_fields(self) -> set[str]:
         missing: set[str] = set()
         for f_name in self._CORE_FIELDS:
@@ -99,6 +123,13 @@ class ClientProfile:
             missing.add("prepaid")
         if self.condition_new == 0 and self.age_years is None:
             missing.add("age_years")
+        # Bug 1 (live call bf7a95a8 2026-04-26): silent-default subject
+        # must surface as missing so the clarify gate fires before the
+        # readback. The flag is True iff subject was captured from a path
+        # with utterance evidence (apply_turn first-time capture or
+        # change-confirm) or provided at construction.
+        if self.subject is not None and not self.subject_user_grounded:
+            missing.add("subject")
         return missing
 
     def is_complete_for_calc(self) -> bool:

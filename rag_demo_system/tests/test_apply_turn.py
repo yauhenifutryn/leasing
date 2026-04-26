@@ -1453,3 +1453,259 @@ def test_build_fallback_messages_omits_memory_block_when_absent():
         snapshot=None,
     )
     assert msgs[0]["content"] == "Сообщение клиента: привет"
+
+
+# ---------------------------------------------------------------------------
+# Section 3 polish (2026-04-26 follow-ups to live test bf7a95a8):
+# Bug 1 — subject-grounding flag prevents silent-default subject from
+#         passing through to readback.
+# Bug 2 — meta-question detector routes "А какой лучше?" away from a
+#         re-emitted EmitClarify into FireLLMFallback so the bot can
+#         actually answer the user's question.
+# ---------------------------------------------------------------------------
+
+def test_subject_grounded_flag_defaults_true_when_constructed_with_subject():
+    """ClientProfile fixtures and snapshots that pass `subject=...` at
+    construction time treat that as already user-grounded. Without this,
+    every existing test that bootstraps a partial profile with a subject
+    would unexpectedly fall into the "missing subject" branch.
+    """
+    from backend.session import ClientProfile
+    p = ClientProfile(subject="Легковой автомобиль")
+    assert p.subject_user_grounded is True
+
+
+def test_subject_grounded_flag_defaults_false_for_empty_profile():
+    from backend.session import ClientProfile
+    p = ClientProfile()
+    assert p.subject_user_grounded is False
+
+
+def test_missing_fields_includes_subject_when_set_silently():
+    """The bug 1 invariant: even if profile.subject is set, when the
+    user-grounded flag is False the field is treated as missing so the
+    clarify gate fires instead of letting the silent default reach the
+    readback.
+    """
+    from backend.session import ClientProfile
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        type_schedule="0",
+    )
+    # Simulate the silent-leak path: subject is present, but the grounded
+    # flag was never flipped True (e.g. the value was set via a path that
+    # bypassed the strict utterance-cue gate).
+    p.subject_user_grounded = False
+    assert "subject" in p.missing_fields()
+    assert not p.is_complete_for_calc()
+
+
+def test_subject_grounded_flips_true_when_utterance_fallback_seeds_it():
+    """When the utterance-fallback regex extracts subject from a clear
+    user mention, the grounded flag must flip True so the readback fires.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    co = ClassifierOutput.model_validate(
+        {"intent": "RAG", "is_confirmation": False},
+        context={"utterance": "Я думаю взять себе машину"},
+    )
+    apply_turn(p, co, "Я думаю взять себе машину", turn_id=1)
+    assert p.subject == "Легковой автомобиль"
+    assert p.subject_user_grounded is True
+
+
+def test_subject_grounded_flips_true_when_classifier_grounds_it():
+    """When the classifier proposes subject and the value is grounded by
+    an utterance cue, the flag must flip True.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": False,
+            "subject": "Грузовой автомобиль",
+        },
+        context={"utterance": "хочу взять грузовик"},
+    )
+    apply_turn(p, co, "хочу взять грузовик", turn_id=1)
+    assert p.subject == "Грузовой автомобиль"
+    assert p.subject_user_grounded is True
+
+
+def test_silent_subject_blocks_readback_and_emits_subject_clarify():
+    """Live regression bf7a95a8 (2026-04-26): user says vague calc-prep
+    utterance ("Я бы себе хотел что-то купить"), every other slot lands
+    in subsequent turns, but subject was set silently. Without this fix
+    the readback fires with subject=Легковой автомобиль the user never
+    confirmed. With the fix, the clarify gate asks for subject before
+    any readback.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    # Simulate the post-leak state: profile is otherwise complete but
+    # subject was set via a path that did NOT flip the grounded flag.
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        type_schedule="0",
+        state=ProfileState.COLLECTING,
+    )
+    p.subject = "Легковой автомобиль"          # silent assignment
+    p.subject_user_grounded = False             # never confirmed by utterance
+
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "is_confirmation": False},
+        context={"utterance": "ну хорошо"},
+    )
+    action = apply_turn(p, co, "ну хорошо", turn_id=1)
+    assert isinstance(action, EmitClarify), (
+        f"silent subject must force a subject-ask clarify, got {type(action).__name__}"
+    )
+    assert "subject" in action.missing
+
+
+def test_meta_question_routes_to_llm_fallback_instead_of_reclarify():
+    """Bug 2 (live regression bf7a95a8 2026-04-26): user replies to the
+    type_schedule clarify with "А какой лучше?". The bot must answer the
+    meta-question via LLM/RAG, not re-emit the same clarify prompt.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    # Profile is missing only type_schedule; everything else is captured.
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "CONVERSATION", "is_confirmation": False},
+        context={"utterance": "А какой лучше?"},
+    )
+    action = apply_turn(p, co, "А какой лучше?", turn_id=1)
+    assert isinstance(action, FireLLMFallback), (
+        f"meta-question must drift to LLM, got {type(action).__name__}"
+    )
+    # Snapshot must be carried so the LLM has the captured-field anchor.
+    assert action.snapshot is not None
+    assert action.snapshot.subject == "Легковой автомобиль"
+
+
+def test_meta_question_variations_all_drift_to_llm():
+    """The meta-question detector must be generic across phrasings, not
+    hard-coded per prompt. Sample a handful of variants on the same
+    incomplete profile.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    variants = [
+        "А какой лучше тип графика, подскажи, ну какой дешевле?",
+        "Что лучше выбрать?",
+        "В чём разница между ними?",
+        "Не понимаю, что выбрать.",
+        "Объясни, пожалуйста, чем отличаются.",
+        "Что выгоднее по итогу?",
+    ]
+    for utt in variants:
+        p = ClientProfile(
+            client_type="Физическое лицо",
+            subject="Легковой автомобиль",
+            cost=80000.0,
+            currency="BYN",
+            condition_new=1,
+            prepaid_pct=20.0,
+            term_months=36,
+            state=ProfileState.COLLECTING,
+        )
+        co = ClassifierOutput.model_validate(
+            {"intent": "CONVERSATION", "is_confirmation": False},
+            context={"utterance": utt},
+        )
+        action = apply_turn(p, co, utt, turn_id=1)
+        assert isinstance(action, FireLLMFallback), (
+            f"meta-question variant {utt!r} must drift to LLM, "
+            f"got {type(action).__name__}"
+        )
+
+
+def test_clarify_still_fires_when_no_meta_question():
+    """The new meta-question gate must NOT swallow plain calc-intent
+    turns that legitimately need a clarify ask.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "is_confirmation": False},
+        context={"utterance": "хочу посчитать лизинг"},
+    )
+    action = apply_turn(p, co, "хочу посчитать лизинг", turn_id=1)
+    assert isinstance(action, EmitClarify)
+
+
+def test_meta_question_with_actual_answer_captures_field_first():
+    """If the user phrases a meta-question but ALSO names the answer
+    in the same breath (\"А какой лучше? Линейный давай.\"), the
+    structured slot capture wins — type_schedule fills, profile becomes
+    complete, readback fires. The meta gate is only consulted when
+    the clarify branch would otherwise return.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        state=ProfileState.COLLECTING,
+    )
+    utt = "А какой лучше? Линейный давай."
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": False,
+            "type_schedule": "1",
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert p.type_schedule == "1"
+    assert isinstance(action, EmitReadback), (
+        f"answer-with-meta-question still captures the answer; "
+        f"expected EmitReadback, got {type(action).__name__}"
+    )

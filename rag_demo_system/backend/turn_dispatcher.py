@@ -11,6 +11,7 @@ refactor.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, AsyncGenerator, Optional
 
 from .classifier_schema import ClassifierOutput, value_grounded
@@ -182,6 +183,42 @@ _CALC_INTENT_ACTIONS = frozenset({
 # path produces the same OOR messages and the same USD→BYN behaviour.
 _PHYS_REJECT_CURRENCIES = frozenset({"EUR", "RUB", "RUR", "CNY"})
 _PHYS_ALLOWED_SUBJECTS = frozenset({"легковой автомобиль", "прочий транспорт"})
+
+
+# Bug 2 (live call bf7a95a8 2026-04-26): clarify-gate meta-question
+# detector. When the bot has emitted a clarify ("Подскажите тип графика
+# — аннуитет или линейный") and the user replies with a meta-question
+# instead of an answer ("А какой лучше?"), step 5b previously re-emitted
+# the same prompt verbatim, looping until the user gave up. Generic
+# across all clarify variants, not regex-per-prompt: detect the user is
+# asking ABOUT the open question and route the turn to FireLLMFallback
+# so the LLM can explain. The next user utterance returns to the
+# clarify gate with the field actually answered.
+_META_QUESTION_RE = re.compile(
+    r"\b(?:"
+    r"как(?:ой|ая|ое|ие)\s+(?:луч\w+|выгодн\w+|дешев\w+|правильн\w+|"
+        r"разниц\w*|подойд\w+|подход\w+)|"
+    r"что\s+(?:луч\w+|выбра\w+|выгодн\w+|дешев\w+|посовет\w+|порекоменд\w+)|"
+    r"в\s+ч[её]м\s+разниц\w*|"
+    r"чем\s+отлич\w+|"
+    r"не\s+поним\w+|"
+    r"объясн\w+|"
+    r"поясн\w+|"
+    r"посовет\w+"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_meta_question(utterance: str) -> bool:
+    """True when the utterance is a meta-question about the open clarify
+    rather than a concrete answer. Conservative: returns False on empty
+    input, on plain affirmations, and on straightforward field answers
+    (those have their own grounded cues that the classifier or fallback
+    regex picks up before this gate is consulted)."""
+    if not utterance:
+        return False
+    return bool(_META_QUESTION_RE.search(utterance))
 
 
 def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
@@ -416,6 +453,19 @@ def _dispatch_once(
                 proposed.pop("age_years", None)
 
     proposed.update(derive_implied_flips(profile, proposed))
+
+    # Bug 1 (live call bf7a95a8 2026-04-26): flip the subject-grounded
+    # flag on any turn where subject lands in `proposed` — that means it
+    # passed `_grounded_proposed_patches` (utterance cue match) or
+    # `_apply_utterance_fallbacks` (extract_subject_from_utterance regex).
+    # Either way the user just produced explicit evidence, so the gate
+    # in `ClientProfile.missing_fields()` should stop treating subject
+    # as silently inferred. Fires BEFORE partition_patches so a no-op
+    # re-mention ("да, машину") still flips the flag even though it
+    # produces no first_time / delta entry.
+    if proposed.get("subject"):
+        profile.subject_user_grounded = True
+
     first_time, delta = partition_patches(profile, proposed)
 
     # Bug 1 loop guard (live call 6ca0eaca, 2026-04-25): while
@@ -655,6 +705,20 @@ def _dispatch_once(
         and profile.state in (ProfileState.COLLECTING, ProfileState.CONFIRMED)
         and (_is_calc_intent(classifier_output) or _has_any_core_field)
     ):
+        # Bug 2 (live call bf7a95a8 2026-04-26): when the user replies to
+        # an open clarify with a meta-question ("А какой лучше?", "в чём
+        # разница?", "не понимаю"), re-emitting the same prompt loops the
+        # caller. Detect the meta-question pattern and drift to LLM
+        # fallback so the model can explain. The snapshot anchor is
+        # included so the LLM sees the captured fields and answers in
+        # context. The next user utterance re-enters the clarify gate
+        # with the field actually answered.
+        if _is_meta_question(utterance):
+            return FireLLMFallback(
+                user_utterance=utterance,
+                rag_context=None,
+                snapshot=build_snapshot(profile),
+            )
         return EmitClarify(
             missing=sorted(profile.missing_fields()),
             snapshot=build_snapshot(profile),
