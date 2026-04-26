@@ -292,26 +292,57 @@ def _dispatch_once(
     # -------- pre-compute: grounded patches + implied flips + partition
     proposed = _grounded_proposed_patches(classifier_output, utterance)
 
-    # Bug Q (live call 730d3aab 2026-04-26): age_years utterance fallback.
-    # The classifier prompt conservatively requires explicit "возраст
-    # техники" context to emit age_years, so a terse "Два года" (answer
-    # to bot's "Сколько лет вашему транспорту?") doesn't get extracted.
-    # Profile stays missing age_years, bot keeps asking the same question.
-    # Mirror the legacy fallback at app.py:1500-1512 — when condition_new=0
-    # AND profile.age_years is None AND classifier didn't emit age_years,
-    # try utterance_grounding's word-form age extractor.
-    if (
-        "age_years" not in proposed
-        and getattr(profile, "age_years", None) is None
-        and getattr(profile, "condition_new", None) == 0
-    ):
-        try:
-            from .utterance_grounding import extract_age_years_from_utterance
-            _fb_age = extract_age_years_from_utterance(utterance or "")
-            if _fb_age is not None:
-                proposed["age_years"] = _fb_age
-        except Exception:  # noqa: BLE001
-            pass
+    # Year-form disambiguation (Bugs Q + S, 2026-04-26).
+    # Russian "X лет/года/год" carries either age-of-vehicle ("Сколько
+    # лет вашему транспорту?" → "Два года") or term ("на три года",
+    # "три года срок"). Surface form is identical; meaning depends on
+    # what the bot is currently asking. Conversation state is the
+    # reliable signal — utterance regex is not.
+    #
+    # Two states:
+    #   (A) Age-collection: condition_new=0 AND age_years is None.
+    #       Bot just asked age. Year-form grounds age_years; any
+    #       classifier-emitted term_months from the same utterance is
+    #       misattribution and gets dropped.
+    #   (B) Term-collection: term_months is None AND we're past age
+    #       (age_years filled OR condition_new=1). Year-form grounds
+    #       term_months; classifier-emitted age_years on this utterance
+    #       gets dropped.
+    try:
+        from .utterance_grounding import extract_age_years_from_utterance
+        _utt_year = extract_age_years_from_utterance(utterance or "")
+    except Exception:  # noqa: BLE001
+        _utt_year = None
+    if _utt_year is not None:
+        _age_phase = (
+            getattr(profile, "condition_new", None) == 0
+            and getattr(profile, "age_years", None) is None
+        )
+        _term_phase = (
+            getattr(profile, "term_months", None) is None
+            and (
+                getattr(profile, "age_years", None) is not None
+                or getattr(profile, "condition_new", None) == 1
+            )
+        )
+        if _age_phase:
+            if "age_years" not in proposed:
+                proposed["age_years"] = _utt_year
+            # Drop misattributed term_months whose value matches _utt_year*12.
+            _tm = proposed.get("term_months")
+            if (
+                isinstance(_tm, int)
+                and _tm > 0
+                and _tm % 12 == 0
+                and _tm // 12 == _utt_year
+            ):
+                proposed.pop("term_months", None)
+        elif _term_phase:
+            if "term_months" not in proposed:
+                proposed["term_months"] = _utt_year * 12
+            _ag = proposed.get("age_years")
+            if isinstance(_ag, int) and _ag == _utt_year:
+                proposed.pop("age_years", None)
 
     proposed.update(derive_implied_flips(profile, proposed))
     first_time, delta = partition_patches(profile, proposed)

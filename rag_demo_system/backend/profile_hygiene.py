@@ -335,49 +335,31 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
             parsed = parse_ru_number(utterance)
             if parsed is not None and parsed == _int:
                 return True
-        # Fix 40b: years-to-months conversion for term_months.
-        # User says "на 7 лет" → classifier emits term_months=84.
-        # The digits "84" never appear in the utterance, so require the
-        # whole-year equivalent to match.
-        # Bug Q (live call 730d3aab 2026-04-26): tightened to require an
-        # explicit term-context cue ("на X лет", "срок X лет"). Bare
-        # "X лет/года" alone (response to "сколько лет машине?") was
-        # spuriously grounding term_months and confusing downstream
-        # narration. Real "term-as-years" mentions universally use "на"
-        # ("на семь лет") or "срок" ("срок 5 лет"), so requiring one of
-        # those keeps the legitimate path while filtering age responses.
-        # Bug S (live call 4e522fb5 2026-04-26): also accept suffix
-        # order "X лет/года срок" ("три года срок и аванс 38%"). Real
-        # callers say it both ways; only bare "X лет" without "срок/на"
-        # is the age-confusable form we want to filter.
+        # Years-to-months grounding for term_months.
+        # User says "на 7 лет" / "три года срок" → classifier emits
+        # term_months=84/36. The literal digits never appear in the
+        # utterance, so check that the year-equivalent is present.
+        #
+        # Bug S (live call 4e522fb5 2026-04-26): replaced earlier
+        # keyword/suffix/word-list regex (which was hardcoded and missed
+        # "три года срок") with delegation to extract_age_years_from_utterance.
+        # That helper already handles digit form, all Russian numeral words
+        # 0..15, and every grammatical case ("три"/"трёх"/"трех"/"тремя"
+        # etc.) — one source of truth.
+        #
+        # Note: this means bare "X лет/года" (e.g. age answer) WILL ground
+        # term_months when classifier mis-emits it. The disambiguation
+        # ("bot is asking age, not term") lives in turn_dispatcher where
+        # conversation state is available — see _dispatch_once age fallback.
+        # A stateless utterance gate cannot distinguish age from term
+        # reliably; trying to do so via keyword regex was the original
+        # source of the suffix/prefix brittleness.
         if field == "term_months":
             if _int > 0 and _int % 12 == 0:
                 _years = _int // 12
-                _pre = rf"\b(?:на|срок\w*)\s+(?:в\s+)?{_years}\s*(?:лет\b|год\w*|года\b)"
-                _post = rf"\b{_years}\s*(?:лет|год\w*|года)\b\s*срок\w*"
-                if re.search(_pre, utterance, re.IGNORECASE) or re.search(
-                    _post, utterance, re.IGNORECASE
-                ):
+                from .utterance_grounding import extract_age_years_from_utterance
+                if extract_age_years_from_utterance(utterance) == _years:
                     return True
-                # Word-form: "три года срок", "на пять лет" etc.
-                # Leasing range 12-84 months = 1-7 years.
-                _ru_year_words = {
-                    1: r"(?:один|одного|одна)",
-                    2: r"(?:два|две|двух)",
-                    3: r"(?:три|тр[её]х)",
-                    4: r"(?:четыре|четыр[её]х)",
-                    5: r"пят[ьи]",
-                    6: r"шест[ьи]",
-                    7: r"сем[ьи]",
-                }
-                _word = _ru_year_words.get(_years)
-                if _word:
-                    _w_pre = rf"\b(?:на|срок\w*)\s+(?:в\s+)?{_word}\s+(?:лет|год\w*|года)\b"
-                    _w_post = rf"\b{_word}\s+(?:лет|год\w*|года)\b\s*срок\w*"
-                    if re.search(_w_pre, utterance, re.IGNORECASE) or re.search(
-                        _w_post, utterance, re.IGNORECASE
-                    ):
-                        return True
             # Half-year ("полтора года" → 18, "полгода" → 6)
             if _int == 18 and re.search(r"полтора\s*года", utterance, re.IGNORECASE):
                 return True

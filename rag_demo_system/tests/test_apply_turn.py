@@ -1167,3 +1167,133 @@ def test_multi_field_change_surfaces_when_companion_grounding_drops():
     # Must be clarify, NOT a change-confirm that silently drops subject.
     assert isinstance(action, EmitClarify)
     assert "subject" in action.missing
+
+
+# ---------------------------------------------------------------- Bugs Q + S
+# Year-form disambiguation: "X лет/года" carries either age-of-vehicle
+# OR term, depending on conversation state. The semantic rule lives in
+# turn_dispatcher._dispatch_once (state-aware), not in stateless regex.
+
+
+def test_year_form_in_age_phase_grounds_age_not_term() -> None:
+    """Bug Q (live call 730d3aab): condition_new=0, age_years=None.
+    User says 'Два года' answering 'Сколько лет вашему транспорту?'.
+    Classifier silent → utterance fallback grounds age_years=2; profile
+    must NOT carry term_months=24."""
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=0,
+        age_years=None,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "is_confirmation": False},
+        context={"utterance": "два года"},
+    )
+    apply_turn(p, co, "два года", turn_id=1)
+    assert p.age_years == 2
+    assert p.term_months is None
+
+
+def test_year_form_age_phase_drops_misattributed_term() -> None:
+    """Bug Q hardening: even when classifier mis-emits term_months=24
+    from 'Два года' while we're in age-collection state, dispatcher
+    drops it (year-form belongs to age in this phase)."""
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=0,
+        age_years=None,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": False,
+            "term_months": 24,
+        },
+        context={"utterance": "два года"},
+    )
+    apply_turn(p, co, "два года", turn_id=1)
+    assert p.age_years == 2
+    assert p.term_months is None  # misattribution dropped
+
+
+def test_year_form_in_term_phase_grounds_term_via_fallback() -> None:
+    """Bug S (live call 4e522fb5): age already captured (used vehicle
+    with age_years=2), term_months still None. User says 'три года
+    срок'. Classifier conservative on this surface → utterance
+    fallback in term-phase grounds term_months=36."""
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=0,
+        age_years=2,
+        term_months=None,
+        prepaid_pct=38.0,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "is_confirmation": False},
+        context={"utterance": "три года срок"},
+    )
+    apply_turn(p, co, "три года срок", turn_id=1)
+    assert p.term_months == 36
+
+
+def test_year_form_in_term_phase_new_vehicle_grounds_term() -> None:
+    """condition_new=1 (no age applies); term still missing.
+    User says 'на пять лет'. Even with classifier silent, fallback
+    grounds term_months=60 because we're past the age-collection state."""
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=None,
+        prepaid_pct=20.0,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "is_confirmation": False},
+        context={"utterance": "на пять лет"},
+    )
+    apply_turn(p, co, "на пять лет", turn_id=1)
+    assert p.term_months == 60
+    assert p.age_years is None  # no age for new vehicles
+
+
+def test_year_form_term_phase_drops_misattributed_age() -> None:
+    """Inverse safeguard: term-phase, classifier mis-emits age_years=5
+    from 'на пять лет'. Dispatcher routes the year-form to term and
+    drops the misattributed age (age has no role for new vehicles
+    or already-captured age)."""
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=None,
+        prepaid_pct=20.0,
+        state=ProfileState.COLLECTING,
+    )
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": False,
+            "age_years": 5,
+        },
+        context={"utterance": "на пять лет"},
+    )
+    apply_turn(p, co, "на пять лет", turn_id=1)
+    assert p.term_months == 60
+    assert p.age_years is None  # condition_new=1 disqualifies age

@@ -211,40 +211,44 @@ def test_numeric_term_with_unit_passes():
 
 
 # Bug S (live call 4e522fb5 2026-04-26): years-as-term grounding.
-# Both word-order ("три года срок" / "срок три года") and word-numeral
-# ("на пять лет") forms must ground term_months. These exercise
-# has_field_signal directly (the orchestrator's grounding gate);
-# filter_patches doesn't run grounding for term_months.
+# Stateless utterance check: any year-form ("X лет/года") with a value
+# matching N//12 is sufficient to ground term_months=N. Disambiguation
+# of age-vs-term lives in turn_dispatcher (state-aware), not here.
+# These tests delegate to extract_age_years_from_utterance under the
+# hood, which handles digit + word-numeral 0..15 + all case variants.
 
-def test_term_years_word_form_suffix_срок_grounds():
-    # Live regression: "Ну давай где-то три года срок и аванс 38 процентов."
+def test_term_years_word_form_three_grounds():
+    # "три года срок" — word numeral, suffix order
     assert has_field_signal(
         "term_months", 36,
         "ну давай где-то три года срок и аванс 38 процентов",
     ) is True
 
 
-def test_term_years_word_form_prefix_на_grounds():
+def test_term_years_word_form_five_grounds():
     assert has_field_signal("term_months", 60, "на пять лет") is True
 
 
-def test_term_years_digit_form_suffix_срок_grounds():
+def test_term_years_digit_form_two_grounds():
     assert has_field_signal("term_months", 24, "2 года срок") is True
 
 
-def test_term_years_digit_form_prefix_срок_grounds():
-    # Existing prefix path stays green.
+def test_term_years_digit_form_seven_grounds():
     assert has_field_signal("term_months", 84, "срок 7 лет") is True
 
 
-def test_term_bare_word_years_without_cue_dropped():
-    # Bug Q regression guard: bare "Два года" (age answer) must NOT
-    # ground term_months even if the classifier mistakenly emits it.
-    assert has_field_signal("term_months", 24, "два года") is False
+def test_term_bare_word_years_grounds_via_year_form():
+    # Bare "два года" carries the year value, so stateless grounding
+    # accepts it. Whether this gets applied as term or age is decided
+    # by turn_dispatcher based on profile state — see
+    # tests/test_turn_dispatcher_year_disambig.py (Bugs Q + S).
+    assert has_field_signal("term_months", 24, "два года") is True
 
 
-def test_term_bare_digit_years_without_cue_dropped():
-    assert has_field_signal("term_months", 24, "2 года") is False
+def test_term_value_not_in_utterance_dropped():
+    # Sanity: year-form must match the months value. "пять лет" emits 60,
+    # not 36 — classifier emitting term_months=36 from this is mis-grounded.
+    assert has_field_signal("term_months", 36, "пять лет") is False
 
 
 def test_numeric_prepaid_percent_passes():
