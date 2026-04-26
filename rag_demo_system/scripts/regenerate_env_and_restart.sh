@@ -37,14 +37,19 @@ GPU_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/d
 GPU_GB=$(( ${GPU_MIB:-0} / 1024 ))
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
 
+# vLLM 0.19 (2026-04 upgrade) reserves CUDA-graph memory more aggressively
+# against the budget — prior tiers dropped to negative KV-cache size on
+# fresh VMs ("Available KV cache memory: -0.3 GiB" → engine refuses to
+# start). Bumped each tier ~+0.10 to restore the previously-effective
+# KV cache size. Verified on H100 PCIe 80GB at 0.70.
 if [ "$GPU_GB" -ge 120 ]; then
-  GPU_UTIL="0.68"; SESSIONAGENT_GPU_UTIL="0.10"
+  GPU_UTIL="0.78"; SESSIONAGENT_GPU_UTIL="0.10"
 elif [ "$GPU_GB" -ge 90 ]; then
-  GPU_UTIL="0.62"; SESSIONAGENT_GPU_UTIL="0.11"
+  GPU_UTIL="0.72"; SESSIONAGENT_GPU_UTIL="0.11"
 elif [ "$GPU_GB" -ge 75 ]; then
-  GPU_UTIL="0.60"; SESSIONAGENT_GPU_UTIL="0.12"  # 48GB main + 9.6GB SA = 57.6GB
+  GPU_UTIL="0.70"; SESSIONAGENT_GPU_UTIL="0.12"  # 56GB main + 9.6GB SA = 65.6GB
 else
-  GPU_UTIL="0.55"; SESSIONAGENT_GPU_UTIL="0.00"  # SA disabled on small GPU
+  GPU_UTIL="0.65"; SESSIONAGENT_GPU_UTIL="0.00"  # SA disabled on small GPU
 fi
 
 echo "[regen] GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL}"

@@ -550,25 +550,32 @@ write_env_file() {
   # Dynamic utilization: leave ~20GB for voice services (Whisper, embedding, reranker)
   # + ~6GB for SessionAgent (Qwen3-4B-FP8 + KV cache).
   # Model uses ~36GB FP8. Rest is KV cache for concurrent requests.
+  #
+  # vLLM 0.19 (2026-04 upgrade) reserves CUDA-graph memory more aggressively
+  # against the budget — the prior 0.60/0.62/0.68 thresholds drop to a
+  # negative KV-cache figure on a fresh VM ("Available KV cache memory:
+  # -0.3 GiB" → engine refuses to start). Bumped each tier ~+0.10 to
+  # restore the previously-effective KV cache size. Verified on H100 PCIe
+  # 80GB at 0.70 (Codex CP-3.6 follow-up, fresh VM 38.128.232.83).
   local SESSIONAGENT_GPU_UTIL
   if [ "$GPU_GB" -ge 120 ]; then
     # H200 141GB or larger: plenty of room
-    GPU_UTIL="0.68"
+    GPU_UTIL="0.78"
     SESSIONAGENT_GPU_UTIL="0.10"
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL} (large GPU)"
   elif [ "$GPU_GB" -ge 90 ]; then
     # H100 NVL 94GB
-    GPU_UTIL="0.62"
+    GPU_UTIL="0.72"
     SESSIONAGENT_GPU_UTIL="0.11"
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL} (standard)"
   elif [ "$GPU_GB" -ge 75 ]; then
-    # H100 80GB or A100 80GB: 48GB main + 9.6GB SA = 57.6GB, ~22GB headroom
-    GPU_UTIL="0.60"
+    # H100 80GB or A100 80GB: 56GB main + 9.6GB SA = 65.6GB, ~14GB headroom
+    GPU_UTIL="0.70"
     SESSIONAGENT_GPU_UTIL="0.12"
     log "GPU: ${GPU_NAME} ${GPU_GB}GB -> main ${GPU_UTIL}, sessionagent ${SESSIONAGENT_GPU_UTIL} (tight)"
   else
     # Smaller GPU, may not fit both models
-    GPU_UTIL="0.55"
+    GPU_UTIL="0.65"
     SESSIONAGENT_GPU_UTIL="0.00"  # disabled, falls back to main
     log "WARNING: GPU ${GPU_NAME} has only ${GPU_GB}GB. SessionAgent disabled; using main LLM for classifier."
   fi
