@@ -2033,6 +2033,67 @@ async def _stream_voice_response(
             _append_turn(chat_session, message, _full_answer, settings.app.memory_turns)
             state.update(chat_session)
             session.turn_count += 1
+            # Bug 55-style FINAL broadcast for the apply_turn path so the
+            # monitor consistently shows the assembled assistant message
+            # for both legacy and flag=1 dispatch.
+            try:
+                await broadcast_sip_event({
+                    "type": "sip.llm.final",
+                    "call_id": session_id,
+                    "text": _full_answer,
+                    "interrupted": bool(session.interrupted),
+                })
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Issue #4 (live call cdbcf56b 2026-04-26) — post-dispatch
+        # snapshot. The earlier broadcast at app.py:1654 fires BEFORE
+        # apply_turn ran, so the monitor sees pre-state-machine values.
+        # Re-broadcast after execute_action completes so the UI reflects
+        # any state transitions (CHANGE_PENDING after EmitChangeConfirm,
+        # CONFIRMED after FireCalc, profile mutations from step 1/5/5a).
+        try:
+            _p_post = session.client_profile
+            _ts_post = _p_post.type_schedule if _p_post.type_schedule is not None else '-'
+            _conv_cost_post = None
+            _conv_cur_post = None
+            if (
+                _p_post.cost is not None
+                and (_p_post.currency or "").upper() == "USD"
+                and "Физическое" in str(_p_post.client_type or "")
+            ):
+                try:
+                    from .profile_prompts import _get_usd_byn_rate
+                    _r = _get_usd_byn_rate()
+                    _conv_cost_post = round(float(_p_post.cost) * float(_r), 2)
+                    _conv_cur_post = "BYN"
+                except Exception:
+                    pass
+            await broadcast_sip_event({
+                "type": "sip.profile.snapshot",
+                "call_id": session_id,
+                "state": _p_post.state.value,
+                "fields": {
+                    "name": _p_post.name,
+                    "subject": _p_post.subject,
+                    "cost": _p_post.cost,
+                    "currency": _p_post.currency,
+                    "client_type": _p_post.client_type,
+                    "condition_new": _p_post.condition_new,
+                    "age_years": getattr(_p_post, "age_years", None),
+                    "term_months": _p_post.term_months,
+                    "prepaid_pct": _p_post.prepaid_pct,
+                    "prepaid_amount": _p_post.prepaid_amount,
+                    "type_schedule": _p_post.type_schedule,
+                },
+                "original_cost": getattr(_p_post, "original_cost", None),
+                "original_currency": getattr(_p_post, "original_currency", None),
+                "converted_cost": _conv_cost_post,
+                "converted_currency": _conv_cur_post,
+                "missing": sorted(_p_post.missing_fields()),
+            })
+        except Exception:  # noqa: BLE001
+            pass
 
         try:
             await websocket.send_json({

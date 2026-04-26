@@ -278,6 +278,14 @@ def render_calc_result(result: dict[str, Any]) -> str:
     # boundary. Sub-unit precision is preserved in SMS (it goes through
     # calculator.format_sms_body and the client can read exact figures).
     # Percentages render as int when whole, else one decimal place.
+    # Issue #5 (live call cdbcf56b 2026-04-26): "мес." was spoken as
+    # "мес" (clipped). Spell out "месяцев" so TTS pronounces the full
+    # word. No abbreviation-expansion dependency.
+    # Issue #3 (live call cdbcf56b): under APPLY_TURN_ENABLED=1 the
+    # FireCalc handler speaks render_calc_result verbatim and returns —
+    # no follow-up offer was appended, so the caller had to volunteer
+    # "СМС" or "линейный" without prompting. Append the canonical
+    # post-calc offer (mirrors the legacy LLM prompt at app.py:2956).
     return (
         f"{conv_prefix}"
         f"Аванс {_fmt_pct(params.get('prepaid', 30))}%: "
@@ -286,8 +294,9 @@ def render_calc_result(result: dict[str, Any]) -> str:
         f"Выкупной: {_fmt_money(result.get('buyout_sum'))} {currency}. "
         f"Общая сумма: {_fmt_money(result.get('total'))} {currency}. "
         f"Удорожание: {_fmt_pct(result.get('increase_percent'))}%. "
-        f"Срок: {result.get('num_payments', '?')} мес."
+        f"Срок: {result.get('num_payments', '?')} месяцев."
         f"{defaults_note}"
+        f" Хотите изменить параметры или отправить график платежей по СМС?"
     )
 
 
