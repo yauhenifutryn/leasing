@@ -112,5 +112,18 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP-3.6 (P1+P2) | 32b3324 | 2026-04-26 | Codex P1: utterance-fallback extractors re-wired into apply_turn pre-compute. Codex P2: `memory_block` threaded through FireLLMFallback prompt via `session.memory_block`. 5 regression tests added. |
 | (provisioner) | f5f54bb | 2026-04-26 | vLLM 0.19 cudagraph accounting fix: `gpu_memory_utilization` tiers bumped ~+0.10 (H100 80GB: 0.60→0.70). Fixes "Available KV cache memory: -0.3 GiB" engine-refused-to-start on fresh VMs. |
 | refactor-v1 | 2a41330 | 2026-04-26 | Section 3 close. Live SIP test on call bf7a95a8 GREEN: full happy path + USD→BYN + change-confirm recalc + SMS + post-calc RAG (Codex P2 fix verified). |
+| polish #1 (subject + meta-q) | 50c73c7 | 2026-04-26 | Section 3 polish: subject_user_grounded flag + meta-question detector. 78/78 in test_apply_turn.py, 824/832 backend. |
+| polish #2 (self/other ref) | c9c3f0b | 2026-04-26 | Section 3 polish: self/other-reference disambiguation for client_type grounding (live 5e6f4c48). 842/850 backend. |
+| polish #3 (cost RU-numeral) | 46ab5c3 | 2026-04-26 | Section 3 polish — Fix 1: extract_cost_from_utterance via parse_ru_number wired into _FALLBACKS. Closes live regression on "Сто десять тысяч долларов" (call 5fa0bb3d). 853/861 backend. |
+| polish #4 (last_offer + clarify) | 2d67acb | 2026-04-26 | Section 3 polish — Fix 2+3: clear last_offer on any change-intent signal; EmitClarify keyed by change_field when change_value can't ground. Closes SMS-after-bare-change-intent + LLM-hallucinated-confirm regressions (call 5fa0bb3d). 859/867 backend. |
+| polish #5 (step 6 gate) | 762c576 | 2026-04-26 | Section 3 polish — Fix 4: step 6 FireCalc gated on pre_turn_state. Prevents post-SMS RAG-stickiness — "Спасибо. Кто владелец?" no longer re-fires calc on stale params (call 2ab41112). 862/870 backend. |
+| refactor-v1.1 | 762c576 | 2026-04-26 | Section 3 polish baseline. Live-verified on call d4e4e5eb 19:00 — all 4 fixes + RAG + 14-turn session memory + USD→BYN dual disclosure clean. |
+| voice-pipeline merge | b7cc7c6 | 2026-04-26 | Section 3 + polish merged into feature/voice-pipeline (--no-ff, revertable via `git revert -m 1 b7cc7c6`). Pre-merge SHA 69493e1. Live retest on call eb4323a7 19:11 GREEN. Sections 1-3 of master plan all CLOSED. |
 
 (Append rows as checkpoints complete.)
+
+## Polish backlog (post-Section-3, deferred — fold into Section 3.5/4/6 as appropriate)
+
+- [ ] **Half-year / fractional year forms** — live regression call eb4323a7 (2026-04-26 19:11): "Давай на два с половиной года" → captured term_months=24 (silent truncation, should be 30). Same fail on "полтора года", "три с половиной". Root cause: `extract_age_years_from_utterance` + `parse_ru_number` are integer-only. ~30-line parser-side fix; allow fractional year→month for term_months only (age_years stays int by spec). Memory: TBD; spec the fix when picked up.
+- [ ] **Subject default-to-car** — open product question. Memory: `project_subject_default_question_open.md`.
+- [ ] **Clarify meta-question regression** — ~30-line fix in turn_dispatcher._dispatch_once step 5b. Memory: `project_clarify_meta_question_regression.md`.
