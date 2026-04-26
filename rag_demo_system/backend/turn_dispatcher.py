@@ -110,6 +110,10 @@ def _apply_utterance_fallbacks(
         ("currency", ug.extract_currency_from_utterance),
         ("prepaid_pct", ug.extract_prepaid_pct_from_utterance),
         ("type_schedule", ug.extract_type_schedule_from_utterance),
+        # Issue 1 (live call 5fa0bb3d 2026-04-26): RU-numeral cost form
+        # ("Сто десять тысяч долларов") — Qwen3-4B silently drops cost.
+        # Reuses parse_ru_number; conservative range gate excludes leakage.
+        ("cost", ug.extract_cost_from_utterance),
     )
     for field_name, extractor in _FALLBACKS:
         if field_name in proposed:

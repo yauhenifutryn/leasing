@@ -29,6 +29,7 @@ from backend.utterance_grounding import (
     extract_age_years_from_utterance,
     extract_client_type_from_utterance,
     extract_condition_new_from_utterance,
+    extract_cost_from_utterance,
     extract_currency_from_utterance,
     extract_prepaid_pct_from_utterance,
     extract_subject_from_utterance,
@@ -376,4 +377,70 @@ def test_ambiguous_schedule_returns_none() -> None:
 
 def test_no_schedule_signal_returns_none() -> None:
     assert extract_type_schedule_from_utterance("BMW") is None
+
+
+# ---------- cost fallback (Issue 1, live call 5fa0bb3d 2026-04-26) ----------
+# Classifier omitted cost on "Сто десять тысяч долларов и поддержанный".
+# Digit-form is captured reliably by the classifier; the regression-prone
+# case is the fully-spelled-out Russian numeral. Reuses parse_ru_number from
+# numeric_words_ru so percent-only utterances and digit-only utterances are
+# correctly rejected (those go through the classifier path).
+
+
+def test_ru_numeral_cost_grounds() -> None:
+    """The live regression case: spelled-out cost in RU numerals."""
+    assert (
+        extract_cost_from_utterance("Сто десять тысяч долларов и поддержанный")
+        == 110000
+    )
+
+
+def test_ru_numeral_cost_simple_thousand() -> None:
+    assert extract_cost_from_utterance("двадцать тысяч долларов") == 20000
+
+
+def test_ru_numeral_cost_million() -> None:
+    assert extract_cost_from_utterance("один миллион рублей") == 1000000
+
+
+def test_digit_form_cost_grounds() -> None:
+    """Digit form supported as a sanity check (also typically captured by
+    the classifier, but the fallback should still work end-to-end)."""
+    assert extract_cost_from_utterance("110000 долларов") == 110000
+
+
+def test_digit_form_with_grouping_grounds() -> None:
+    assert extract_cost_from_utterance("150 000 рублей") == 150000
+
+
+def test_digit_with_thousand_word_grounds() -> None:
+    """'80 тысяч' shape — N digits + scale word."""
+    assert extract_cost_from_utterance("80 тысяч долларов") == 80000
+
+
+def test_no_cost_signal_returns_none() -> None:
+    assert extract_cost_from_utterance("привет, как дела") is None
+    assert extract_cost_from_utterance("") is None
+
+
+def test_percent_only_utterance_returns_none() -> None:
+    """parse_ru_number drops percent contexts, so a pure-prepaid-pct
+    utterance must NOT ground as cost."""
+    assert extract_cost_from_utterance("двадцать процентов") is None
+
+
+def test_age_years_does_not_ground_as_cost() -> None:
+    """A small numeric like '5 лет' must not become cost=5."""
+    assert extract_cost_from_utterance("5 лет") is None
+
+
+def test_term_months_does_not_ground_as_cost() -> None:
+    """'60 месяцев' must not ground as cost=60."""
+    assert extract_cost_from_utterance("60 месяцев") is None
+
+
+def test_below_min_cost_rejected() -> None:
+    """Cost values below the realistic leasing range are rejected — these
+    are almost always term/age/prepaid leakage."""
+    assert extract_cost_from_utterance("100 долларов") is None
     assert extract_type_schedule_from_utterance("") is None

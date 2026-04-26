@@ -22,6 +22,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from .numeric_words_ru import parse_ru_number
+
 # Mirror classifier_schema._SUBJECT_VALUE_CUES priority order: most-specific
 # categories first so "грузовая машина" doesn't get caught by the bare-car
 # fallback below.
@@ -412,6 +414,102 @@ _CUR_RUB_RE = re.compile(
     r"\b(российск\w+\s+рубл\w*|росс\.?\s*руб\w*|rub|русск\w+\s+рубл\w*)\b",
     re.IGNORECASE,
 )
+
+
+# ============================================================ cost
+# Issue 1 (live call 5fa0bb3d, 2026-04-26): user said "Сто десять тысяч
+# долларов и поддержанный". The Qwen3-4B classifier captured
+# currency=USD and condition_new=0 but silently dropped cost. The bot
+# then re-asked "Уточните, пожалуйста, стоимость." User repeated with
+# digits ("110 тысяч долларов") and it worked — so this is exclusively
+# a classifier reliability gap on fully-spelled-out RU numerals.
+#
+# Fix: utterance-level fallback that reuses parse_ru_number from
+# numeric_words_ru (the same parser profile_hygiene.has_field_signal
+# uses for cost grounding) and a digit/scale-word path mirroring the
+# Fix-34 multiplier rule. Range gate (10_000 ≤ cost ≤ 100_000_000)
+# rejects stray small numerics ("5 лет", "60 месяцев") that would
+# otherwise leak through. parse_ru_number itself drops percent contexts
+# ("двадцать процентов") so the prepaid-pct path is safe.
+_COST_MIN = 10_000
+_COST_MAX = 100_000_000
+# Digit + thousand/million word ("80 тысяч", "3 миллиона", "150 000").
+_COST_DIGIT_THOUSAND_RE = re.compile(
+    r"\b(\d{1,4})\s*(тысяч\w*|тыс\b|k\b|к\b)",
+    re.IGNORECASE,
+)
+_COST_DIGIT_MILLION_RE = re.compile(
+    r"\b(\d{1,3})\s*(миллион\w*|млн\b)",
+    re.IGNORECASE,
+)
+# Bare digit form, allowing space/comma grouping. Caller flattens
+# whitespace before applying. Out-of-range values are dropped, so a
+# stray "60 месяцев" won't ground as cost=60.
+_COST_BARE_DIGIT_RE = re.compile(r"(?<!\d)(\d{4,9})(?!\d)")
+# Year/month-unit suffix on the numeric — reject so age/term answers
+# do not surface as cost.
+_NON_COST_NUMERIC_RE = re.compile(
+    r"\b\d+\s*(?:лет|года|год|годов|г\.?|месяц\w*|мес\.?|"
+    r"процент\w*|проц\.?|%)",
+    re.IGNORECASE,
+)
+
+
+def extract_cost_from_utterance(utterance: str) -> Optional[int]:
+    """Return integer cost from the utterance, or None.
+
+    Order of attempts:
+      1. Word-form via parse_ru_number ("сто десять тысяч долларов").
+      2. Digit + scale-word ("80 тысяч", "3 миллиона").
+      3. Bare digits with grouping ("150 000").
+
+    Conservative range gate (10_000-100_000_000) rejects small numerics
+    that are almost always age/term/prepaid leakage. The
+    `_NON_COST_NUMERIC_RE` guard suppresses the bare-digit path when the
+    utterance carries a year/month/percent suffix on the same number,
+    so "5 лет" / "60 месяцев" / "20 процентов" never ground as cost.
+    """
+    if not utterance:
+        return None
+
+    # Word-form (the primary regression case).
+    parsed = parse_ru_number(utterance)
+    if parsed is not None and _COST_MIN <= parsed <= _COST_MAX:
+        return parsed
+
+    # Digit + scale-word.
+    m = _COST_DIGIT_THOUSAND_RE.search(utterance)
+    if m:
+        try:
+            n = int(m.group(1)) * 1000
+        except (TypeError, ValueError):
+            n = 0
+        if _COST_MIN <= n <= _COST_MAX:
+            return n
+    m = _COST_DIGIT_MILLION_RE.search(utterance)
+    if m:
+        try:
+            n = int(m.group(1)) * 1_000_000
+        except (TypeError, ValueError):
+            n = 0
+        if _COST_MIN <= n <= _COST_MAX:
+            return n
+
+    # Bare digit. Reject when the number carries a non-cost unit suffix
+    # (years/months/percent) — those answers belong to other slots.
+    if _NON_COST_NUMERIC_RE.search(utterance):
+        return None
+    flat = re.sub(r"[\s,_]+", "", utterance)
+    bm = _COST_BARE_DIGIT_RE.search(flat)
+    if bm:
+        try:
+            n = int(bm.group(1))
+        except (TypeError, ValueError):
+            return None
+        if _COST_MIN <= n <= _COST_MAX:
+            return n
+
+    return None
 
 
 def extract_currency_from_utterance(utterance: str) -> Optional[str]:
