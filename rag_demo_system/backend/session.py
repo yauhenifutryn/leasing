@@ -57,6 +57,15 @@ class ClientProfile:
     original_cost: Optional[float] = None
     original_currency: Optional[str] = None
 
+    # Bare-"Да" → SMS support (live call cdbcf56b 2026-04-26). Set to "sms"
+    # by execute_action's FireCalc handler when the post-calc readback is
+    # spoken (which always ends with "Хотите изменить или отправить по
+    # СМС?"). apply_turn reads this on the next turn: if the user replies
+    # with a bare affirmation and no change_field, the answer is "yes,
+    # send the SMS" — fire FireSMS. Cleared on any other turn that
+    # consumes the offer or supersedes it.
+    last_offer: Optional[str] = None
+
     confirmed_at: Optional[float] = None
     last_change_pending: Optional[str] = None
     locked_fields: set[str] = field(default_factory=set)

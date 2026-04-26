@@ -402,6 +402,22 @@ def _dispatch_once(
     # Without this preprocessing, calc is invoked with raw USD cost and
     # returns ok=False (no matching rates), producing "?" placeholder
     # output. Live regression observed on session ac0e35d6 (2026-04-24).
+    # STEP 5c (live call cdbcf56b 2026-04-26): bare "Да" after the
+    # post-calc SMS-or-change offer means "yes, send the SMS". The
+    # FireCalc handler stamps profile.last_offer = "sms" right after
+    # speaking the offer; the next turn's classifier emits is_confirmation=
+    # True with no change_field. Without this branch the same input would
+    # match STEP 6 below (CONFIRMED + is_confirmation + complete) and
+    # re-fire FireCalc with identical params instead of sending SMS.
+    if (
+        getattr(profile, "last_offer", None) == "sms"
+        and classifier_output.is_confirmation
+        and not classifier_output.change_field
+        and classifier_output.action != "change_param"
+    ):
+        profile.last_offer = None
+        return FireSMS(snapshot=build_snapshot(profile))
+
     if (
         profile.state == ProfileState.CONFIRMED
         and classifier_output.is_confirmation
@@ -581,6 +597,13 @@ async def execute_action(
             _reset_calc_failure(session, calc_sig)
             _append_tool_call(session, action.calc_params, result)
             spoken = render_calc_result(result)
+            # Stamp last_offer="sms" so a bare "Да" on the next turn
+            # routes through apply_turn STEP 5c → FireSMS instead of
+            # re-firing FireCalc (live call cdbcf56b 2026-04-26).
+            try:
+                session.client_profile.last_offer = "sms"
+            except Exception:  # noqa: BLE001
+                pass
         else:
             _bump_calc_failure(session, calc_sig)
             if _circuit_open(session):

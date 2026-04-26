@@ -209,7 +209,19 @@ def canonicalize_change_value(field: str, value):
             return str(value) if value in (0, 1) else _DROP_CHANGE_VALUE
         if isinstance(value, str):
             s = value.strip()
-            return s if s in ("0", "1") else _DROP_CHANGE_VALUE
+            if s in ("0", "1"):
+                return s
+            # Bug G (live call 504eace0 2026-04-26): Qwen sometimes emits
+            # the human form ("линейный" / "аннуитетный") in change_value
+            # instead of the canonical "0" / "1" code. Without this lookup,
+            # canonicalize drops the pair and apply_turn never sees the
+            # delta — the schedule change request silently falls back to
+            # FireLLMFallback. Map via the same cue patterns that
+            # value_grounded uses for top-level type_schedule consistency.
+            for code, cue_re in _TYPE_SCHEDULE_VALUE_CUES.items():
+                if cue_re.search(s):
+                    return code
+            return _DROP_CHANGE_VALUE
         return _DROP_CHANGE_VALUE
 
     if field == "currency":
