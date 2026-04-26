@@ -675,3 +675,115 @@ def test_value_grounded_cost_mixed_percent_and_cost():
     # asserts on the order. With percent first, the cost survives.
     from backend.classifier_schema import value_grounded
     assert value_grounded("cost", 100000, "двадцать процентов и сто тысяч долларов") is True
+
+
+# ---------------------------------------------------------------------------
+# Live regression 5e6f4c48 (2026-04-26): self/other-reference disambiguation
+# for client_type grounding. Ambiguous cues like "компании / организации /
+# фирмы / предприятия / бизнеса" used to silently capture
+# client_type="Юридическое лицо" whenever the user RAG-asked about the bot's
+# company ("Расскажи кто директор вашей компании?"). The leak chained into
+# Bug R's _has_any_core_field gate and looped step 5b on every RAG turn.
+# Strong cues (ИП / юрлицо / физлицо / ООО) keep grounding unconditionally.
+# ---------------------------------------------------------------------------
+
+def test_client_type_yur_dropped_on_other_reference_company():
+    """Live repro 5e6f4c48: 'вашей компании' must not ground юр."""
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(
+        raw,
+        utterance="Расскажи, кто директор вашей компании?",
+    )
+    assert out.client_type is None
+
+
+def test_client_type_yur_dropped_on_other_reference_organization():
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(
+        raw, utterance="расскажите про вашу организацию",
+    )
+    assert out.client_type is None
+
+
+def test_client_type_yur_dropped_on_other_reference_firm():
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="а где у вас фирма?")
+    assert out.client_type is None
+
+
+def test_client_type_yur_dropped_on_other_reference_business():
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="чем занимается ваш бизнес?")
+    assert out.client_type is None
+
+
+def test_client_type_yur_passes_with_self_reference_company():
+    """'я от компании' / 'наша компания' must still ground юр."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="я от компании ABC")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_with_self_reference_our_company():
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="наша компания хочет лизинг")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_strong_cue_unconditional_ip():
+    """Strong cue 'ИП' is self-status by linguistic form — ground even
+    without an explicit self-reference marker."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="ИП")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_strong_cue_unconditional_yur():
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="юрлицо")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_strong_cue_unconditional_ooo():
+    """Existing test parity (line 319): 'мы ООО' grounds even without
+    extra self-reference; ООО is a strong corporate-form cue."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="мы ООО Ромашка")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_other_ref_overrides_self_ref():
+    """Other-reference takes precedence over self-reference when the
+    cue is ambiguous — 'я хочу узнать про вашу компанию' is a question
+    about the bot, not a self-status statement."""
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(
+        raw, utterance="я хочу узнать про вашу компанию",
+    )
+    assert out.client_type is None
+
+
+def test_client_type_fiz_unaffected_by_self_other_logic():
+    """Физическое лицо cues (физлицо/физик/физическ) are linguistically
+    self-referential; the self/other gate must not regress them."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Физическое лицо"})
+    out = parse_classifier_output(raw, utterance="физическое лицо")
+    assert out.client_type == "Физическое лицо"
+
+
+def test_value_grounded_client_type_yur_drops_other_reference():
+    """The public value_grounded API must agree with the validator;
+    apply_turn's _grounded_proposed_patches uses it on the
+    change_field/change_value path."""
+    from backend.classifier_schema import value_grounded
+    assert value_grounded(
+        "client_type", "Юридическое лицо",
+        "Расскажи, кто директор вашей компании?",
+    ) is False
+
+
+def test_value_grounded_client_type_yur_keeps_self_reference():
+    from backend.classifier_schema import value_grounded
+    assert value_grounded(
+        "client_type", "Юридическое лицо", "я от компании",
+    ) is True

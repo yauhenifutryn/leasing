@@ -230,11 +230,23 @@ _CLIENT_TYPE_LEGAL_RE = re.compile(
 
 def extract_client_type_from_utterance(utterance: str) -> Optional[str]:
     """Return canonical client_type ("Физическое лицо" / "Юридическое лицо")
-    from the utterance, or None if neither cue fires or both fire."""
+    from the utterance, or None if neither cue fires or both fire.
+
+    Live regression 5e6f4c48 (2026-04-26): the юр-cue list contains
+    ambiguous nouns (организация / компания / фирма / предприятие /
+    бизнес) that the user can use to refer to the BOT's company while
+    RAG-asking ("вашей компании"). To prevent the silent юр capture
+    that chains into Bug R's _has_any_core_field gate, delegate the
+    юр decision to ``classifier_schema._client_type_value_grounded``
+    so the same self/other-reference rules apply uniformly across the
+    classifier-validate path AND the utterance-fallback path.
+    """
     if not utterance:
         return None
+    from .classifier_schema import _client_type_value_grounded  # lazy
+
     has_phys = bool(_CLIENT_TYPE_PHYS_RE.search(utterance))
-    has_legal = bool(_CLIENT_TYPE_LEGAL_RE.search(utterance))
+    has_legal = _client_type_value_grounded("Юридическое лицо", utterance)
     if has_phys and not has_legal:
         return "Физическое лицо"
     if has_legal and not has_phys:

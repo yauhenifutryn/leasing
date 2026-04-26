@@ -1709,3 +1709,122 @@ def test_meta_question_with_actual_answer_captures_field_first():
         f"answer-with-meta-question still captures the answer; "
         f"expected EmitReadback, got {type(action).__name__}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Live regression 5e6f4c48 (2026-04-26): RAG turns must not enter the step 5b
+# clarify branch even when the profile carries captured fields. Bug R's
+# _has_any_core_field gate previously fired EmitClarify on every RAG turn
+# once any field was captured (often silently from utterances like "вашей
+# компании"), looping the bot's subject prompt while the user kept asking
+# unrelated questions about the leasing company.
+# ---------------------------------------------------------------------------
+
+def test_rag_intent_drifts_to_llm_even_when_core_field_captured():
+    """Live repro 5e6f4c48: profile has a captured field, user asks a
+    plain RAG question. The clarify gate must be skipped so the LLM
+    can answer instead of re-emitting subject-ask."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Юридическое лицо",  # captured legitimately on a prior turn
+        state=ProfileState.COLLECTING,
+    )
+    utt = "Расскажи, кто директор?"
+    co = ClassifierOutput.model_validate(
+        {"intent": "RAG", "is_confirmation": False},
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert isinstance(action, FireLLMFallback), (
+        f"RAG turn must drift to LLM even with a captured field, "
+        f"got {type(action).__name__}"
+    )
+
+
+def test_rag_intent_drifts_to_llm_with_subject_captured():
+    """Mirror case for subject — RAG question after subject was
+    captured legitimately must still drift to LLM."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        subject="Легковой автомобиль",
+        state=ProfileState.COLLECTING,
+    )
+    utt = "А какой у вас адрес в Минске?"
+    co = ClassifierOutput.model_validate(
+        {"intent": "RAG", "is_confirmation": False},
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert isinstance(action, FireLLMFallback)
+
+
+def test_calc_intent_still_emits_clarify_when_incomplete():
+    """Sanity: TOOL intent is unaffected by the RAG-skip — calc-prep
+    turns still flow through step 5b to gather missing slots."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    utt = "хочу посчитать лизинг"
+    co = ClassifierOutput.model_validate(
+        {"intent": "TOOL", "is_confirmation": False},
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert isinstance(action, EmitClarify)
+
+
+def test_bug_r_bare_affirmation_still_emits_clarify():
+    """Bug R regression guard: 'Давай' classified as CONVERSATION (NOT
+    RAG) with a captured field must still enter step 5b so we ask for
+    the missing slot rather than letting the LLM invent a default."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        subject="Легковой автомобиль",
+        state=ProfileState.COLLECTING,
+    )
+    utt = "Давай"
+    co = ClassifierOutput.model_validate(
+        {"intent": "CONVERSATION", "is_confirmation": False},
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert isinstance(action, EmitClarify)
+
+
+def test_silent_client_type_from_other_reference_no_longer_captured():
+    """End-to-end: the live regression utterance no longer captures
+    client_type even when the classifier emits it."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    utt = "Расскажи, кто директор вашей компании?"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "RAG",
+            "is_confirmation": False,
+            "client_type": "Юридическое лицо",
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert p.client_type is None, (
+        f"silent юр capture from 'вашей компании' must be dropped, "
+        f"got {p.client_type!r}"
+    )
+    assert isinstance(action, FireLLMFallback), (
+        f"with no captured fields, RAG turn drifts to LLM — "
+        f"got {type(action).__name__}"
+    )

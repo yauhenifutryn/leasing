@@ -700,8 +700,19 @@ def _dispatch_once(
                   "condition_new", "term_months", "prepaid_pct",
                   "prepaid_amount", "type_schedule")
     )
+    # Live regression 5e6f4c48 (2026-04-26): Bug R's _has_any_core_field
+    # gate over-fires when the classifier (or a permissive grounding
+    # cue) silently captures a field on a RAG turn — every subsequent
+    # RAG question loops the clarify prompt instead of drifting to LLM.
+    # When the classifier explicitly labels the turn as RAG, the user is
+    # asking about company info, not progressing the leasing flow; skip
+    # step 5b and let the LLM/RAG path answer. Bug R's bare-affirmation
+    # case ("Давай") is intent=CONVERSATION, not RAG, so it is preserved.
+    _intent_label = (getattr(classifier_output, "intent", None) or "").upper()
+    _is_rag_turn = _intent_label == "RAG"
     if (
-        not profile.is_complete_for_calc()
+        not _is_rag_turn
+        and not profile.is_complete_for_calc()
         and profile.state in (ProfileState.COLLECTING, ProfileState.CONFIRMED)
         and (_is_calc_intent(classifier_output) or _has_any_core_field)
     ):

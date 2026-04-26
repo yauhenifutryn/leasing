@@ -128,6 +128,84 @@ _CLIENT_TYPE_VALUE_CUES: dict[str, re.Pattern[str]] = {
     ),
 }
 
+
+# Live regression 5e6f4c48 (2026-04-26): self/other reference disambiguation
+# for юридическое лицо. The full _CLIENT_TYPE_VALUE_CUES["Юридическое лицо"]
+# regex matches ambiguous nouns like "компании / организации / фирмы /
+# предприятия / бизнеса" that the user can use to refer to the BOT's
+# company while RAG-asking ("вашей компании", "о вашей фирме"). Without
+# this distinction, every such RAG turn silently captures
+# client_type=Юридическое лицо and chains into Bug R's _has_any_core_field
+# gate, looping step 5b on every subsequent turn.
+#
+# Strong cues are linguistically self-status terms — users essentially
+# never ask the bot "вы ИП?" or "вы юрлицо?", so these ground
+# unconditionally. Ambiguous cues require an explicit self-reference
+# marker AND the absence of an other-reference marker; other-reference
+# wins over self-reference because "я хочу узнать про вашу компанию"
+# is a question about the bot, not a self-status statement.
+_CLIENT_TYPE_LEGAL_STRONG_RE = re.compile(
+    r"\b("
+    r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+|"
+    r"юрлиц\w*|юридическ\w+|"
+    r"ооо|оао|зао|"
+    r"микробизнес\w*|малый\s+бизнес|"
+    r"предпринимат\w+"
+    r")",
+    re.IGNORECASE,
+)
+_CLIENT_TYPE_LEGAL_AMBIGUOUS_RE = re.compile(
+    r"\b("
+    r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|бизнес\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+_SELF_REFERENCE_RE = re.compile(
+    r"\b("
+    r"я\b|мы\b|меня\b|мне\b|нас\b|нам\b|нами\b|"
+    r"наш\w*|"          # наш, наша, наше, наши, нашей, нашу, нашего, ...
+    r"мо[йяёе]\w*|"      # мой, моя, моё, моё, моего, моей, ...
+    r"у\s+меня|у\s+нас|"
+    r"от\s+(?:меня|нас)|для\s+(?:меня|нас)"
+    r")",
+    re.IGNORECASE,
+)
+_OTHER_REFERENCE_RE = re.compile(
+    r"\b("
+    r"вы\b|вас\b|вам\b|вами\b|"
+    r"ваш\w*|"           # ваш, ваша, ваше, ваши, вашей, вашу, вашего, ...
+    r"у\s+вас|от\s+вас|для\s+вас"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _client_type_value_grounded(value: str, utterance: str) -> bool:
+    """Self/other-reference-aware grounding for client_type.
+
+    Replaces the bare ``_CLIENT_TYPE_VALUE_CUES`` regex match for
+    Юридическое лицо. Strong self-status cues ground unconditionally;
+    ambiguous nouns ("компания / организация / фирма / предприятие /
+    бизнес") require an explicit self-reference marker and the
+    absence of an other-reference marker. Физическое лицо bypasses
+    the gate because its cue set ("физлицо / физик / физическ") is
+    already restricted to self-status terms.
+    """
+    if not utterance:
+        return False
+    cue_re = _CLIENT_TYPE_VALUE_CUES.get(value)
+    if not cue_re or not cue_re.search(utterance):
+        return False
+    if value == "Физическое лицо":
+        return True
+    if _CLIENT_TYPE_LEGAL_STRONG_RE.search(utterance):
+        return True
+    if _CLIENT_TYPE_LEGAL_AMBIGUOUS_RE.search(utterance):
+        if _OTHER_REFERENCE_RE.search(utterance):
+            return False
+        return bool(_SELF_REFERENCE_RE.search(utterance))
+    return False
+
 _RUSSIAN_RUBLE_RE = re.compile(r"\bросси\w*\s*рубл\w*|\brub\b", re.IGNORECASE)
 _BELARUS_RUBLE_RE = re.compile(r"\bрубл\w*|\bруб\b|\bbyn\b|\bblr\b|\bбелорусск\w+\s*рубл\w*", re.IGNORECASE)
 
@@ -286,8 +364,7 @@ def value_grounded(field: str, value, utterance: str) -> bool:
         return _subject_value_grounded(value, utterance)
     if field == "client_type" and isinstance(value, str):
         normalized = _normalize_client_type(value) or value
-        cue_re = _CLIENT_TYPE_VALUE_CUES.get(normalized)
-        return bool(cue_re and cue_re.search(utterance))
+        return _client_type_value_grounded(normalized, utterance)
     if field == "currency" and isinstance(value, str):
         return _currency_cue_match(value, utterance)
     if field == "type_schedule":
@@ -479,8 +556,7 @@ class ClassifierOutput(BaseModel):
                 drops.append(f"subject={self.subject!r}")
                 self.subject = None
         if self.client_type is not None:
-            cue_re = _CLIENT_TYPE_VALUE_CUES.get(self.client_type)
-            if cue_re is None or not (utterance and cue_re.search(utterance)):
+            if not _client_type_value_grounded(self.client_type, utterance or ""):
                 drops.append(f"client_type={self.client_type!r}")
                 self.client_type = None
         if self.currency is not None and not (
