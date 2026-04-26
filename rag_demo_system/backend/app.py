@@ -1668,7 +1668,33 @@ async def _stream_voice_response(
             _profile_patches = filter_patches(_profile_patches, message or "")
             if _had_patches:
                 print(f"[Profile] patches_post_filter={_profile_patches}", flush=True)
-            _changed = session.client_profile.apply_patches(_profile_patches)
+            # Bug N (live call ec87a8e1 2026-04-26): when APPLY_TURN_ENABLED=1,
+            # legacy apply_patches here mutates profile fields BEFORE apply_turn
+            # runs. apply_turn then sees a post-mutation profile, partition_patches
+            # finds no delta (proposed value already matches profile), and
+            # dispatches FireLLMFallback instead of EmitChangeConfirm. Symptom:
+            # bot LLM-narrates a fake change-confirm prompt and the user has to
+            # confirm 2-3 times before deterministic readback fires. Skip the
+            # legacy mutation when flag=1 — apply_turn becomes the sole source of
+            # profile mutation (its step 4 stages CHANGE_PENDING with delta;
+            # step 5 applies first_time additively; step 1 commits the change
+            # on the user's confirm). Only the {} for _changed_this_turn legacy
+            # code path needs to remain populated to keep downstream gates
+            # (RAG-turn-guard reads _changed_this_turn) consistent.
+            _apply_turn_active = (
+                os.environ.get("APPLY_TURN_ENABLED", "0") == "1"
+                and _sa_output is not None
+            )
+            if _apply_turn_active:
+                if _had_patches and _profile_patches:
+                    print(
+                        f"[Profile] legacy-apply-skipped (APPLY_TURN_ENABLED=1) "
+                        f"deferring to apply_turn: keys={list(_profile_patches)}",
+                        flush=True,
+                    )
+                _changed = {}
+            else:
+                _changed = session.client_profile.apply_patches(_profile_patches)
             if _changed:
                 print(f"[Profile] patched: {_changed}", flush=True)
                 _changed_this_turn = dict(_changed)
