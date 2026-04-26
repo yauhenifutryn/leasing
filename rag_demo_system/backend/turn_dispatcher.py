@@ -266,6 +266,13 @@ def _dispatch_once(
                 profile.original_cost = None
                 profile.original_currency = None
         profile.state = ProfileState.CONFIRMED
+        # Bug J (live call 69941ab4 2026-04-26): clear the stale post-calc
+        # SMS offer flag. Without this, the redispatch into STEP 5c would
+        # match (last_offer="sms" + is_confirmation + no change_field) and
+        # fire FireSMS instead of the FireCalc that step 6 should produce
+        # for the just-applied change. The user's "Да" is consuming the
+        # change-confirm, NOT the prior SMS offer.
+        profile.last_offer = None
         return Noop(reason="redispatch_change")
 
     # STEP 2: READBACK_PENDING + is_confirmation → CONFIRMED. No
@@ -355,6 +362,11 @@ def _dispatch_once(
             projected_patches[field_name] = change["new"]
         profile.state = ProfileState.CHANGE_PENDING
         profile.pending_change = {"changes": delta}
+        # Bug J: starting a change cycle supersedes any pending post-calc
+        # SMS offer. Without clearing here, the next "Да" (which confirms
+        # the change) would slot into STEP 5c → FireSMS instead of going
+        # through STEP 1's apply-pending-change → STEP 6 FireCalc path.
+        profile.last_offer = None
         return EmitChangeConfirm(
             changes=delta,
             snapshot=_project_snapshot(profile, projected_patches),

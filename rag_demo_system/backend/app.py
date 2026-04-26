@@ -2002,6 +2002,56 @@ async def _stream_voice_response(
         )
         print(f"[apply_turn] turn_id={turn_id} action={type(_action).__name__}", flush=True)
 
+        # Bug K (live call 69941ab4 2026-04-26) — broadcast snapshot
+        # IMMEDIATELY after apply_turn returns, before execute_action
+        # plays TTS audio. apply_turn has already done all state-machine
+        # work (step 1 apply-change, step 5/5a captures, step 6 USD→BYN
+        # preflight). Without this earlier broadcast, the monitor UI
+        # only updates after `await_playback_drain` (i.e. after the
+        # bot finishes speaking) — which made the panel look like it
+        # was lagging by a full TTS duration on every turn.
+        try:
+            _p_imm = session.client_profile
+            _conv_cost_imm = None
+            _conv_cur_imm = None
+            if (
+                _p_imm.cost is not None
+                and (_p_imm.currency or "").upper() == "USD"
+                and "Физическое" in str(_p_imm.client_type or "")
+            ):
+                try:
+                    from .profile_prompts import _get_usd_byn_rate
+                    _r_imm = _get_usd_byn_rate()
+                    _conv_cost_imm = round(float(_p_imm.cost) * float(_r_imm), 2)
+                    _conv_cur_imm = "BYN"
+                except Exception:
+                    pass
+            await broadcast_sip_event({
+                "type": "sip.profile.snapshot",
+                "call_id": session_id,
+                "state": _p_imm.state.value,
+                "fields": {
+                    "name": _p_imm.name,
+                    "subject": _p_imm.subject,
+                    "cost": _p_imm.cost,
+                    "currency": _p_imm.currency,
+                    "client_type": _p_imm.client_type,
+                    "condition_new": _p_imm.condition_new,
+                    "age_years": getattr(_p_imm, "age_years", None),
+                    "term_months": _p_imm.term_months,
+                    "prepaid_pct": _p_imm.prepaid_pct,
+                    "prepaid_amount": _p_imm.prepaid_amount,
+                    "type_schedule": _p_imm.type_schedule,
+                },
+                "original_cost": getattr(_p_imm, "original_cost", None),
+                "original_currency": getattr(_p_imm, "original_currency", None),
+                "converted_cost": _conv_cost_imm,
+                "converted_currency": _conv_cur_imm,
+                "missing": sorted(_p_imm.missing_fields()),
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
         session.assistant_speaking = True
         session.interrupted = False
         _chunks: list[str] = []
