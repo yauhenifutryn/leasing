@@ -318,9 +318,21 @@ def apply_turn(
     pass cannot re-enter steps 1 or 3 because the state transition
     that enabled them is consumed on the first pass.
     """
+    # Capture pre-turn state ONCE, before any iteration mutates it. This
+    # is the snapshot Step 6's FireCalc gate uses to distinguish "user
+    # entered the turn in a pre-calc state (READBACK_PENDING / CHANGE_
+    # PENDING) and a same-turn transition advanced us to CONFIRMED" from
+    # "state has been CONFIRMED since a prior turn (calc already fired)".
+    # Capturing here (not inside _dispatch_once) is critical because the
+    # redispatch loop's second iteration sees state=CONFIRMED — the
+    # transition already happened in iteration #1.
+    pre_turn_state = profile.state
     action: TurnAction = Noop(reason="uninitialized")
     for _ in range(2):
-        action = _dispatch_once(profile, classifier_output, utterance)
+        action = _dispatch_once(
+            profile, classifier_output, utterance,
+            pre_turn_state=pre_turn_state,
+        )
         if isinstance(action, Noop) and action.reason in _REDISPATCH_REASONS:
             continue
         break
@@ -331,11 +343,21 @@ def _dispatch_once(
     profile: ClientProfile,
     classifier_output: ClassifierOutput,
     utterance: str,
+    *,
+    pre_turn_state: ProfileState | None = None,
 ) -> TurnAction:
     """Single-iteration body of the apply_turn dispatch. Returns a
     Noop with reason ∈ _REDISPATCH_REASONS when the caller's loop
     should re-enter; otherwise returns a terminal TurnAction.
+
+    `pre_turn_state` is the profile.state snapshot from BEFORE the
+    redispatch loop. Used by step 6's FireCalc gate (Issue 4 fix).
+    Defaults to current profile.state when called directly (test
+    fixtures, isolated invocations).
     """
+    if pre_turn_state is None:
+        pre_turn_state = profile.state
+
     # STEP 1 (post-change apply): CHANGE_PENDING + is_confirmation →
     # apply the staged change via ClientProfile.apply_pending_change (which
     # preserves the prepaid_pct/prepaid_amount slot invariant + locked_fields
@@ -675,10 +697,31 @@ def _dispatch_once(
         profile.last_offer = None
         return FireSMS(snapshot=build_snapshot(profile))
 
+    # Issue 4 (live call 2ab41112 2026-04-26): post-SMS, the user said
+    # "Спасибо. Кто владелец Вашей компании?" — the small classifier
+    # emitted is_confirmation=True (cued by "Спасибо") with intent=RAG.
+    # The bare CONFIRMED+is_confirmation gate matched and re-fired calc
+    # with stale params instead of routing the RAG question to the LLM.
+    # Universal fix: only fire calc when EITHER (a) we entered the turn
+    # in READBACK_PENDING (the canonical readback→confirm flow that
+    # transitions to CONFIRMED inside step 2 of THIS turn), or (b) the
+    # classifier explicitly asked for calc / recalc. Bare is_confirmation
+    # in a sticky CONFIRMED state isn't enough signal — "спасибо" / "ок"
+    # / "хорошо" are routinely classified as is_confirmation=true.
+    # READBACK_PENDING (canonical readback→confirm flow, transitions in
+    # step 2) and CHANGE_PENDING (change-confirm flow, transitions in
+    # step 1 via redispatch) are the two legitimate pre-calc states.
+    # Both advance to CONFIRMED inside this turn.
+    _came_from_pre_calc_state = pre_turn_state in (
+        ProfileState.READBACK_PENDING,
+        ProfileState.CHANGE_PENDING,
+    )
+    _explicit_calc_intent = classifier_output.action in ("calculate", "recalculate")
     if (
         profile.state == ProfileState.CONFIRMED
         and classifier_output.is_confirmation
         and profile.is_complete_for_calc()
+        and (_came_from_pre_calc_state or _explicit_calc_intent)
     ):
         policy_action = _preflight_calc_policy(profile)
         if policy_action is not None:

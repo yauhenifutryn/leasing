@@ -337,7 +337,11 @@ def test_e8a_fire_calc_params_preserve_original_usd_fields() -> None:
         cost=240000.0, currency="BYN",
         original_cost=80000.0, original_currency="USD",
     )
-    profile.state = ProfileState.CONFIRMED
+    # Canonical readback→confirm flow: bot just spoke the readback, user
+    # confirmed. Step 2 transitions READBACK_PENDING→CONFIRMED in this
+    # turn, step 6 fires calc. Issue 4 (live 2ab41112) gate requires
+    # the pre-turn state to be a legitimate pre-calc state.
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да, рассчитывай")
     assert isinstance(action, FireCalc)
@@ -773,7 +777,7 @@ def test_step6_usd_profile_converts_to_byn_and_stashes_original() -> None:
     prefix. FireCalc carries the converted cost in both snapshot and
     calc_params."""
     profile = make_complete_profile(cost=80000.0, currency="USD")
-    profile.state = ProfileState.CONFIRMED
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     assert isinstance(action, FireCalc)
@@ -791,7 +795,7 @@ def test_step6_eur_for_physical_person_rejected_as_oor() -> None:
     """Физ лицо + EUR → FireOORMessage. Calculator API currently
     supports BYN/USD only for individuals."""
     profile = make_complete_profile(cost=80000.0, currency="EUR")
-    profile.state = ProfileState.CONFIRMED
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     assert isinstance(action, FireOORMessage)
@@ -801,7 +805,7 @@ def test_step6_eur_for_physical_person_rejected_as_oor() -> None:
 def test_step6_rub_for_physical_person_rejected_as_oor() -> None:
     """Физ лицо + RUB rejected (Belarusian бытие plus MVP scope)."""
     profile = make_complete_profile(cost=5000000.0, currency="RUB")
-    profile.state = ProfileState.CONFIRMED
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     assert isinstance(action, FireOORMessage)
@@ -828,7 +832,7 @@ def test_step6_legal_person_usd_does_not_convert() -> None:
     profile = make_complete_profile(
         client_type="Юридическое лицо", cost=80000.0, currency="USD",
     )
-    profile.state = ProfileState.CONFIRMED
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     assert isinstance(action, FireCalc)
@@ -842,7 +846,7 @@ def test_step6_byn_native_profile_no_conversion_no_stash() -> None:
     """Physical person who quotes in BYN from the start: no conversion,
     no disclosure."""
     profile = make_complete_profile(cost=240000.0, currency="BYN")
-    profile.state = ProfileState.CONFIRMED
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     assert isinstance(action, FireCalc)
@@ -860,7 +864,7 @@ def test_step6_re_calc_preserves_usd_disclosure_on_same_params() -> None:
         cost=240000.0, currency="BYN",
         original_cost=80000.0, original_currency="USD",
     )
-    profile.state = ProfileState.CONFIRMED
+    profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     assert isinstance(action, FireCalc)
@@ -1983,6 +1987,110 @@ def test_change_intent_with_grounded_value_routes_to_change_confirm():
     # Step 4 already clears last_offer; this is the same invariant
     # via a different code path.
     assert p.last_offer is None
+
+
+# ============================================================ Issue 4
+# Live call 2ab41112 2026-04-26: after a successful calc + SMS fire
+# (last_offer cleared), state stayed CONFIRMED. User said
+# "Спасибо. Последний вопрос. Кто владелец Вашей компании?" — the
+# small classifier emitted is_confirmation=True (cued by "Спасибо")
+# along with intent=RAG. Step 6's bare CONFIRMED+is_confirmation+
+# complete gate matched and re-fired FireCalc with stale params.
+# Expected behaviour: a RAG-intent turn after the SMS offer drifts
+# to FireLLMFallback so the bot can answer the actual question.
+#
+# Universal fix: gate step 6 on the original (pre-turn) state being
+# READBACK_PENDING (the canonical readback-confirm flow that
+# transitions COLLECTING→READBACK_PENDING→CONFIRMED in one turn) OR
+# on the classifier explicitly emitting calculate/recalculate. Bare
+# is_confirmation in a sticky CONFIRMED state is not enough signal.
+
+
+def test_post_calc_thanks_plus_rag_question_does_not_refire_calc():
+    """Issue 4: 'Спасибо. Кто владелец?' classified as
+    is_confirmation=True must NOT re-fire FireCalc when state has been
+    CONFIRMED since a prior calc. Should drift to LLM fallback so RAG
+    can answer."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED  # post-calc sticky state
+    p.last_offer = None  # SMS already fired, offer cleared
+
+    utt = "Спасибо. Последний вопрос. Кто владелец Вашей компании?"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "RAG",
+            "is_confirmation": True,  # cued by "Спасибо"
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=20)
+    assert isinstance(action, FireLLMFallback), (
+        f"post-SMS thank-you+question must NOT re-fire calc, "
+        f"got {type(action).__name__}"
+    )
+
+
+def test_post_calc_explicit_recalculate_intent_still_fires_calc():
+    """Counterpart to Issue 4: an explicit recalculate signal in the
+    post-calc CONFIRMED state still fires FireCalc. Without this guard
+    a user saying 'давай пересчитаем' would get LLM-narration instead
+    of an actual re-run."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_action import FireCalc
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = None
+
+    utt = "Давай пересчитаем"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": True,
+            "action": "recalculate",
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=20)
+    assert isinstance(action, FireCalc), (
+        f"explicit recalculate intent must fire calc, "
+        f"got {type(action).__name__}"
+    )
+
+
+def test_readback_pending_to_confirmed_in_one_turn_still_fires_calc():
+    """Counterpart to Issue 4: the canonical readback-confirm flow —
+    state was READBACK_PENDING at the top of the turn, classifier emits
+    is_confirmation=True, step 2 transitions to CONFIRMED, step 6 fires
+    FireCalc in the SAME turn. The Issue 4 gate must not break this."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_action import FireCalc
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.READBACK_PENDING  # bot just spoke readback
+    p.last_offer = None
+
+    utt = "Да"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": True,
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=10)
+    assert isinstance(action, FireCalc), (
+        f"readback→confirm canonical flow must fire calc, "
+        f"got {type(action).__name__}"
+    )
 
 
 def test_change_intent_prepaid_pct_clarify_uses_canonical_label():
