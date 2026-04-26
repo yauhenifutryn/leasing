@@ -1,13 +1,11 @@
-"""Contract test for the READBACK_PENDING deny-with-correction grounding guard.
+"""Unit tests for the value_grounded() guard used by apply_turn's
+deny-with-correction handling.
 
 Codex adversarial confirmation pass (2026-04-20, E-Codex-2): the readback
-deny-with-correction block previously promoted any differing classifier hint
-into pending_change without grounding — a plain "нет" turn carrying stale
-numeric drift could stage an unspoken correction. The guard reuses the same
-value_grounded() helper the CHANGE_PENDING staging path already uses.
-
-Full behavioural flow is exercised live via SIP; this is a source-level
-regression fence so the guard can't be silently removed.
+deny-with-correction handling previously promoted any differing classifier
+hint into pending_change without grounding — a plain "нет" turn carrying
+stale numeric drift could stage an unspoken correction. apply_turn's
+partition_patches now relies on value_grounded() for the same guarantee.
 """
 from __future__ import annotations
 
@@ -16,25 +14,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-
-_APP_PY = ROOT / "backend" / "app.py"
-
-
-def test_readback_deny_block_uses_value_grounded():
-    src = _APP_PY.read_text(encoding="utf-8")
-    # Find the READBACK deny-with-correction block.
-    idx = src.index("Deny-with-correction detection")
-    block = src[idx : idx + 1200]
-    # Grounding guard must be present in this block.
-    assert "value_grounded" in block, (
-        "READBACK deny-with-correction block must call value_grounded "
-        "before staging a delta (Codex E-Codex-2 regression)"
-    )
-    # And the rejection path must log the dropped delta so prod regressions
-    # surface in logs.
-    assert "READBACK delta rejected" in block, (
-        "ungrounded-delta rejection must log so we can see it in prod"
-    )
 
 
 def test_value_grounded_rejects_stale_numeric_on_plain_deny():

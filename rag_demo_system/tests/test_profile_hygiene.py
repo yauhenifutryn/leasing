@@ -4,7 +4,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.profile_hygiene import filter_patches
+from backend.profile_hygiene import filter_patches, has_field_signal
 
 
 def test_drops_patches_from_noise_short_utterance():
@@ -33,6 +33,60 @@ def test_drops_bot_name_lowercase_with_patronymic():
 def test_keeps_real_user_name_matching_different_first_token():
     out = filter_patches({"name": "Николай"}, "меня зовут Николай", bot_name="Ксения")
     assert out.get("name") == "Николай"
+
+
+# ---------- Bug 20 (live call 45247512 2026-04-25) ----------
+# Classifier hallucinated `name="не указано"` when user asked "А как меня
+# звали?". The patch landed, then the stale-name guard later rejected the
+# real "Никита" because a "name" was already on file. Filter must reject
+# meta-phrases that are clearly not human names.
+
+
+def test_drops_ne_ukazano_as_name():
+    """The exact live regression: classifier emits name='не указано'."""
+    out = filter_patches(
+        {"name": "не указано"},
+        "Понял, спасибо. А как меня звали?",
+        bot_name="Ксения",
+    )
+    assert "name" not in out
+
+
+def test_drops_neizvestno_as_name():
+    out = filter_patches({"name": "неизвестно"}, "не помнишь меня?", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_ne_skazano_as_name():
+    out = filter_patches({"name": "не сказано"}, "ты не запомнила", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_anonim_as_name():
+    out = filter_patches({"name": "аноним"}, "просто клиент", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_polzovatel_as_name():
+    out = filter_patches({"name": "пользователь"}, "клиент", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_drops_klient_as_name():
+    out = filter_patches({"name": "клиент"}, "звонящий клиент", bot_name="Ксения")
+    assert "name" not in out
+
+
+def test_keeps_real_name_after_blacklist_filter():
+    """Regression check: the blacklist must not reject real names."""
+    out = filter_patches({"name": "Никита"}, "я Никита", bot_name="Ксения")
+    assert out.get("name") == "Никита"
+
+
+def test_blacklist_case_insensitive():
+    """Classifier might emit any casing."""
+    out = filter_patches({"name": "Не Указано"}, "...", bot_name="Ксения")
+    assert "name" not in out
 
 
 def test_ipeshnik_collapsed_to_yur_litso():
@@ -154,6 +208,47 @@ def test_numeric_term_with_unit_passes():
     patches = {"term_months": 36}
     result = filter_patches(patches, "36 месяцев")
     assert result.get("term_months") == 36
+
+
+# Bug S (live call 4e522fb5 2026-04-26): years-as-term grounding.
+# Stateless utterance check: any year-form ("X лет/года") with a value
+# matching N//12 is sufficient to ground term_months=N. Disambiguation
+# of age-vs-term lives in turn_dispatcher (state-aware), not here.
+# These tests delegate to extract_age_years_from_utterance under the
+# hood, which handles digit + word-numeral 0..15 + all case variants.
+
+def test_term_years_word_form_three_grounds():
+    # "три года срок" — word numeral, suffix order
+    assert has_field_signal(
+        "term_months", 36,
+        "ну давай где-то три года срок и аванс 38 процентов",
+    ) is True
+
+
+def test_term_years_word_form_five_grounds():
+    assert has_field_signal("term_months", 60, "на пять лет") is True
+
+
+def test_term_years_digit_form_two_grounds():
+    assert has_field_signal("term_months", 24, "2 года срок") is True
+
+
+def test_term_years_digit_form_seven_grounds():
+    assert has_field_signal("term_months", 84, "срок 7 лет") is True
+
+
+def test_term_bare_word_years_grounds_via_year_form():
+    # Bare "два года" carries the year value, so stateless grounding
+    # accepts it. Whether this gets applied as term or age is decided
+    # by turn_dispatcher based on profile state — see
+    # tests/test_turn_dispatcher_year_disambig.py (Bugs Q + S).
+    assert has_field_signal("term_months", 24, "два года") is True
+
+
+def test_term_value_not_in_utterance_dropped():
+    # Sanity: year-form must match the months value. "пять лет" emits 60,
+    # not 36 — classifier emitting term_months=36 from this is mis-grounded.
+    assert has_field_signal("term_months", 36, "пять лет") is False
 
 
 def test_numeric_prepaid_percent_passes():

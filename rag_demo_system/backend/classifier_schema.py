@@ -76,6 +76,44 @@ _SUBJECT_VALUE_CUES: dict[str, re.Pattern[str]] = {
     ),
 }
 
+# Generic "car" fallback for bare "машина" / "автомобиль" with no modifier.
+# When the user says just "машину" we treat it as Легковой автомобиль unless
+# a competing subject category (truck / spec / equipment / real estate / other
+# transport) also appears in the utterance. Fixes the EmitClarify loop where
+# the user mirrors the bot's own word and grounding rejects it.
+_SUBJECT_GENERIC_CAR_RE = re.compile(
+    r"\b(машин\w*|автомобил\w*|авто)\b",
+    re.IGNORECASE,
+)
+_SUBJECT_COMPETING_RE = re.compile(
+    r"\b("
+    r"грузов\w*|грузовик\w*|фур\w+|тягач\w*|самосвал\w*|микроавтобус\w*|камаз|уаз|"
+    r"спецтехник\w*|погрузчик\w*|экскаватор\w*|бульдозер\w*|кран\w*|каток\w*|"
+    r"трактор\w*|комбайн\w*|"
+    r"оборудовани\w*|станк\w+|установк\w+|"
+    r"недвижимост\w*|квартир\w+|здани\w+|помещени\w+|склад\w*|офис\w*|"
+    r"автобус\w*|прицеп\w*|мотоцикл\w*|скутер\w*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _subject_value_grounded(value: str, utterance: str) -> bool:
+    """Return True when `utterance` grounds `value` under the value-aware
+    subject-cue rules, including the bare-"машина" fallback for
+    Легковой автомобиль.
+    """
+    if not utterance:
+        return False
+    cue_re = _SUBJECT_VALUE_CUES.get(value)
+    if cue_re and cue_re.search(utterance):
+        return True
+    if value == "Легковой автомобиль":
+        if _SUBJECT_GENERIC_CAR_RE.search(utterance) and not _SUBJECT_COMPETING_RE.search(utterance):
+            return True
+    return False
+
+
 _CLIENT_TYPE_VALUE_CUES: dict[str, re.Pattern[str]] = {
     "Физическое лицо": re.compile(
         r"\b(физлиц\w*|физик\w*|физическ\w+)",
@@ -89,6 +127,84 @@ _CLIENT_TYPE_VALUE_CUES: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
 }
+
+
+# Live regression 5e6f4c48 (2026-04-26): self/other reference disambiguation
+# for юридическое лицо. The full _CLIENT_TYPE_VALUE_CUES["Юридическое лицо"]
+# regex matches ambiguous nouns like "компании / организации / фирмы /
+# предприятия / бизнеса" that the user can use to refer to the BOT's
+# company while RAG-asking ("вашей компании", "о вашей фирме"). Without
+# this distinction, every such RAG turn silently captures
+# client_type=Юридическое лицо and chains into Bug R's _has_any_core_field
+# gate, looping step 5b on every subsequent turn.
+#
+# Strong cues are linguistically self-status terms — users essentially
+# never ask the bot "вы ИП?" or "вы юрлицо?", so these ground
+# unconditionally. Ambiguous cues require an explicit self-reference
+# marker AND the absence of an other-reference marker; other-reference
+# wins over self-reference because "я хочу узнать про вашу компанию"
+# is a question about the bot, not a self-status statement.
+_CLIENT_TYPE_LEGAL_STRONG_RE = re.compile(
+    r"\b("
+    r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+|"
+    r"юрлиц\w*|юридическ\w+|"
+    r"ооо|оао|зао|"
+    r"микробизнес\w*|малый\s+бизнес|"
+    r"предпринимат\w+"
+    r")",
+    re.IGNORECASE,
+)
+_CLIENT_TYPE_LEGAL_AMBIGUOUS_RE = re.compile(
+    r"\b("
+    r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|бизнес\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+_SELF_REFERENCE_RE = re.compile(
+    r"\b("
+    r"я\b|мы\b|меня\b|мне\b|нас\b|нам\b|нами\b|"
+    r"наш\w*|"          # наш, наша, наше, наши, нашей, нашу, нашего, ...
+    r"мо[йяёе]\w*|"      # мой, моя, моё, моё, моего, моей, ...
+    r"у\s+меня|у\s+нас|"
+    r"от\s+(?:меня|нас)|для\s+(?:меня|нас)"
+    r")",
+    re.IGNORECASE,
+)
+_OTHER_REFERENCE_RE = re.compile(
+    r"\b("
+    r"вы\b|вас\b|вам\b|вами\b|"
+    r"ваш\w*|"           # ваш, ваша, ваше, ваши, вашей, вашу, вашего, ...
+    r"у\s+вас|от\s+вас|для\s+вас"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _client_type_value_grounded(value: str, utterance: str) -> bool:
+    """Self/other-reference-aware grounding for client_type.
+
+    Replaces the bare ``_CLIENT_TYPE_VALUE_CUES`` regex match for
+    Юридическое лицо. Strong self-status cues ground unconditionally;
+    ambiguous nouns ("компания / организация / фирма / предприятие /
+    бизнес") require an explicit self-reference marker and the
+    absence of an other-reference marker. Физическое лицо bypasses
+    the gate because its cue set ("физлицо / физик / физическ") is
+    already restricted to self-status terms.
+    """
+    if not utterance:
+        return False
+    cue_re = _CLIENT_TYPE_VALUE_CUES.get(value)
+    if not cue_re or not cue_re.search(utterance):
+        return False
+    if value == "Физическое лицо":
+        return True
+    if _CLIENT_TYPE_LEGAL_STRONG_RE.search(utterance):
+        return True
+    if _CLIENT_TYPE_LEGAL_AMBIGUOUS_RE.search(utterance):
+        if _OTHER_REFERENCE_RE.search(utterance):
+            return False
+        return bool(_SELF_REFERENCE_RE.search(utterance))
+    return False
 
 _RUSSIAN_RUBLE_RE = re.compile(r"\bросси\w*\s*рубл\w*|\brub\b", re.IGNORECASE)
 _BELARUS_RUBLE_RE = re.compile(r"\bрубл\w*|\bруб\b|\bbyn\b|\bblr\b|\bбелорусск\w+\s*рубл\w*", re.IGNORECASE)
@@ -171,7 +287,19 @@ def canonicalize_change_value(field: str, value):
             return str(value) if value in (0, 1) else _DROP_CHANGE_VALUE
         if isinstance(value, str):
             s = value.strip()
-            return s if s in ("0", "1") else _DROP_CHANGE_VALUE
+            if s in ("0", "1"):
+                return s
+            # Bug G (live call 504eace0 2026-04-26): Qwen sometimes emits
+            # the human form ("линейный" / "аннуитетный") in change_value
+            # instead of the canonical "0" / "1" code. Without this lookup,
+            # canonicalize drops the pair and apply_turn never sees the
+            # delta — the schedule change request silently falls back to
+            # FireLLMFallback. Map via the same cue patterns that
+            # value_grounded uses for top-level type_schedule consistency.
+            for code, cue_re in _TYPE_SCHEDULE_VALUE_CUES.items():
+                if cue_re.search(s):
+                    return code
+            return _DROP_CHANGE_VALUE
         return _DROP_CHANGE_VALUE
 
     if field == "currency":
@@ -233,12 +361,10 @@ def value_grounded(field: str, value, utterance: str) -> bool:
     if value is None or value == "" or not utterance:
         return False
     if field == "subject" and isinstance(value, str):
-        cue_re = _SUBJECT_VALUE_CUES.get(value)
-        return bool(cue_re and cue_re.search(utterance))
+        return _subject_value_grounded(value, utterance)
     if field == "client_type" and isinstance(value, str):
         normalized = _normalize_client_type(value) or value
-        cue_re = _CLIENT_TYPE_VALUE_CUES.get(normalized)
-        return bool(cue_re and cue_re.search(utterance))
+        return _client_type_value_grounded(normalized, utterance)
     if field == "currency" and isinstance(value, str):
         return _currency_cue_match(value, utterance)
     if field == "type_schedule":
@@ -426,13 +552,11 @@ class ClassifierOutput(BaseModel):
 
         # --- Step 1: value-aware cue grounding ---
         if self.subject is not None:
-            cue_re = _SUBJECT_VALUE_CUES.get(self.subject)
-            if cue_re is None or not (utterance and cue_re.search(utterance)):
+            if not _subject_value_grounded(self.subject, utterance or ""):
                 drops.append(f"subject={self.subject!r}")
                 self.subject = None
         if self.client_type is not None:
-            cue_re = _CLIENT_TYPE_VALUE_CUES.get(self.client_type)
-            if cue_re is None or not (utterance and cue_re.search(utterance)):
+            if not _client_type_value_grounded(self.client_type, utterance or ""):
                 drops.append(f"client_type={self.client_type!r}")
                 self.client_type = None
         if self.currency is not None and not (
@@ -452,13 +576,45 @@ class ClassifierOutput(BaseModel):
             self.condition_new = None
 
         # --- Step 2: cross-field rules (run AFTER grounding) ---
-        # age_years is only meaningful for used equipment. Apply this after
-        # condition_new grounding so the rule sees the final grounded value —
-        # otherwise we'd leave age_years in an impossible state when
-        # condition_new got nulled by its own cue check.
-        if self.age_years is not None and self.condition_new != 0:
-            drops.append(f"age_years={self.age_years} (condition_new={self.condition_new})")
-            self.age_years = None
+        # age_years is only meaningful for used equipment.
+        #
+        # Bug 17 (live call 9ec121bc 2026-04-25): the previous rule dropped
+        # age_years whenever `condition_new != 0` — including the common
+        # case where the small classifier omits condition_new on the age-
+        # answer turn (it was captured a turn earlier). The validator
+        # cannot see profile state, so it nulled valid age values, the
+        # downstream gate stayed silent because no patch landed, and the
+        # LLM hallucinated re-asking already-captured fields.
+        #
+        # Fixed rule: drop age_years only when this turn carries
+        # contradictory or invalid signal:
+        #   (a) classifier emitted condition_new=1 on the same turn
+        #       ("новая машина пять лет" with condition_new=1), OR
+        #   (b) Step 1 grounding nulled condition_new because the
+        #       utterance contradicted the value (e.g. classifier said
+        #       condition_new=0 but utterance is "новая машина" — the
+        #       drops list will carry condition_new=...).
+        # When condition_new is simply omitted (None, no drop), trust
+        # the downstream apply path:
+        #   - utterance-fallback gate (app.py:1499) requires
+        #     profile.condition_new == 0 before adopting,
+        #   - sticky-block first-capture path applies it directly only
+        #     in COLLECTING state.
+        # A hallucinated age_years on a NEW-car profile therefore still
+        # can't poison state, while a real age-answer turn now flows
+        # through correctly.
+        if self.age_years is not None:
+            explicit_new = (self.condition_new == 1)
+            grounding_dropped_condition = any(
+                d.startswith("condition_new=") for d in drops
+            )
+            if explicit_new or grounding_dropped_condition:
+                drops.append(
+                    f"age_years={self.age_years} "
+                    f"(condition_new={self.condition_new}, "
+                    f"grounding_dropped={grounding_dropped_condition})"
+                )
+                self.age_years = None
 
         # --- Step 3: canonicalize change_value by change_field ---
         # Codex thorough review 2026-04-20: classifier often mirrors raw JSON

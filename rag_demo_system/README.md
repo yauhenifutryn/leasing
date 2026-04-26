@@ -20,6 +20,81 @@ The SessionAgent runs on its own vLLM instance so classifier calls do not
 queue behind the 35B main model. On GPUs below ~75 GB it is automatically
 disabled and the main LLM handles classification.
 
+## Architecture (post `refactor-v1`, 2026-04-26)
+
+The orchestrator (`rag_demo_system/backend/app.py::_stream_voice_response`)
+delegates every turn to a small structural pipeline instead of the legacy
+5-gate block. There is exactly one orchestration path now — no feature
+flag, no parallel legacy.
+
+```
+   user utterance
+        │
+        ▼
+┌─────────────────┐
+│ SessionAgent    │  Qwen3-4B-FP8 → strict-JSON `ClassifierOutput`
+│ (classifier)    │  (intent, slots, semantic flags)
+└────────┬────────┘
+         │  parsed + utterance-grounded
+         ▼
+┌─────────────────────────────────────────┐
+│ apply_turn (turn_dispatcher.py)         │
+│   step 1: CHANGE_PENDING + confirm      │
+│   step 2: READBACK_PENDING + confirm    │
+│   pre-compute: grounded patches         │
+│                + utterance fallbacks    │
+│                + year-form disambig     │
+│                + implied flips          │
+│                + partition_patches      │
+│   step 4: delta on captured field       │
+│           → EmitChangeConfirm           │
+│   step 5: first-time additive captures  │
+│   step 5b: COLLECTING + calc-intent     │
+│           → EmitClarify(missing_fields) │
+│   step 6: COLLECTING + complete         │
+│           → EmitReadback                │
+│   step 6: CONFIRMED + complete          │
+│           → FireCalc                    │
+│   step 6b: action=sms → FireSMS         │
+│   step 7: action=invalid → FireOOR      │
+│   else: FireLLMFallback                 │
+└────────┬────────────────────────────────┘
+         │  TurnAction
+         ▼
+┌─────────────────────────────────────────┐
+│ execute_action (turn_dispatcher.py)     │
+│   yields TTS chunks, calls calc/SMS,    │
+│   streams LLM, manages barge-in         │
+└─────────────────────────────────────────┘
+```
+
+**Key invariants:**
+- **One state machine**, in `backend/profile_state.py`. `ProfileState` ∈
+  {COLLECTING, READBACK_PENDING, CHANGE_PENDING, CONFIRMED}. State
+  transitions happen *only* in apply_turn.
+- **One mutation point.** Profile fields are written by apply_turn
+  (step 1 confirm-apply via `apply_pending_change`, step 5 first-time
+  additive). No other code path mutates the profile.
+- **Sole-source classifier.** SessionAgent is the only producer of
+  `ClassifierOutput`. Fast-path / skip-classifier / classifier-error
+  branches all synthesise a minimal `ClassifierOutput` so apply_turn
+  always has a non-None input.
+- **Year-form grounding is semantic.** "X лет/года/год" is disambiguated
+  by current `ProfileState` + filled fields, not by surface regex.
+  Age-phase fills `age_years`; term-phase fills `term_months`.
+- **Utterance fallbacks** (`extract_subject`, `extract_client_type`, …)
+  fire only when the classifier omitted a slot AND the profile field is
+  empty — explicit-change turns can never be overridden silently.
+- **Memory + RAG threading.** The orchestrator stamps `session.memory_block`
+  before dispatch; FireLLMFallback reads it and prepends to the LLM
+  prompt so follow-up RAG / conversation turns retain prior context.
+- **Stale-turn discard.** Each turn carries a monotonic `turn_id`;
+  apply_turn dispatch drops the turn if a newer one finalised first.
+
+**Production adapters** (`backend/execute_adapters.py`) bridge the pure
+turn dispatch to FastAPI / WebSocket / vLLM / FunAudioLLM / Jambonz:
+`LLMStreamBackend`, `TtsSink`, `CalcAdapter`, `RagFuture`.
+
 ## Quick Start (Any GPU Server)
 
 Canonical fresh-server flow (7 steps, in order):

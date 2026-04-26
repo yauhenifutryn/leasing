@@ -9,12 +9,43 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .numeric_words_ru import parse_ru_number
+
 MVP_PREPAID_RANGE = (0.0, 40.0)
 MVP_TERM_RANGE = (12, 84)
 
 # Enum-field slot-fill answers — single-word utterances that match these are
 # valid replies to clarification questions (e.g. "Аннуитет" → type_schedule).
 # We let such patches bypass the <2-token noise filter.
+# Bug 20 (live call 45247512 2026-04-25) — meta-phrases Qwen3-4B sometimes
+# emits as `name` when the user's utterance is a question about names, not
+# a self-introduction. The literal string lands in the profile, then the
+# stale-name guard locks the real name out on later turns. Reject these
+# at the filter so the name slot stays empty until a real human name lands.
+_NON_NAME_BLACKLIST: frozenset[str] = frozenset({
+    "не указано", "не указан", "не указана",
+    "неизвестно", "неизвестный", "неизвестная",
+    "не сказано", "не сказан", "не сказана",
+    "не назвал", "не назвала", "не названо",
+    "аноним", "анонимный", "анонимно",
+    "пользователь", "клиент", "звонящий", "абонент",
+    "имя", "имени", "без имени",
+    "никто", "никого",
+    "n/a", "na", "none", "null", "unknown",
+    # Bug O (live call 42b6e6bf 2026-04-26): caller said "Привет, Ксения,
+    # подскажи..." (addressing the bot). Classifier extracted name="Ксения"
+    # → profile.name=Ксения. Sticky-name-guard then locked "Никита" out on
+    # the later self-introduction turn ("Хорошо, я кстати Никита"). The
+    # bot-role words below are unambiguously NOT client names. The bot's
+    # actual name "Ксения" / "Ксюша" is NOT in this static blacklist
+    # because real clients can have those names — vocative-vs-self-intro
+    # detection lives at apply_turn's name-capture site (turn_dispatcher.py
+    # step ~313) where utterance context is available.
+    "помощница", "помощник", "ассистент",
+    "робот", "бот", "автоответчик",
+})
+
+
 _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     # type_schedule
     "аннуитет", "аннуитетный", "аннуитетная", "аннуитетное",
@@ -30,6 +61,8 @@ _ENUM_SLOT_FILL_WORDS: frozenset[str] = frozenset({
     # condition_new
     "новый", "новая", "новое",
     "бу", "б/у", "бэу", "б-у", "подержанный", "подержанная", "подержанное",
+    # Issue 3 (Whisper transcribes "под-держанный" with double-д) — accept both.
+    "поддержанный", "поддержанная", "поддержанное",
     "старый", "старая", "старое",
     # subject (single-word slot-fill replies to "легковой или грузовой?")
     "легковой", "грузовой", "спецтехника", "оборудование",
@@ -157,7 +190,10 @@ _CURRENCY_CUE_RE = re.compile(
 # пробег" are NEW-car phrases despite containing "пробег".
 _CONDITION_USED_CUE_RE = re.compile(
     r"\b("
-    r"подержан\w+|бывш\w+|"
+    # `поддержан` covers Whisper's double-д transcription (issue 3,
+    # 2026-04-25). The single-д spelling (`подержан`) is the canonical
+    # Russian form and stays as the primary alternative.
+    r"подержан\w+|поддержан\w+|бывш\w+|"
     r"б/у|б-у|бу|бэу|"
     r"пробег\w*|"
     r"не\s+нов\w+|"
@@ -181,7 +217,7 @@ _CONDITION_NEW_NEGATION_RE = re.compile(
 # has_field_signal for condition_new.
 _CONDITION_NEW_CUE_RE = re.compile(
     r"\b("
-    r"нов\w+|подержан\w+|бывш\w+|"
+    r"нов\w+|подержан\w+|поддержан\w+|бывш\w+|"
     r"б/у|б-у|бу|бэу|"
     r"пробег\w*|"
     r"не\s+нов\w+|"
@@ -254,6 +290,17 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
         # (rare; covered by the flat check too).
         if v_str in utterance:
             return True
+        # Bug 19 (live call 45247512 2026-04-25) — age_years word-numeral
+        # path. User says "три года" → classifier emits age_years=3.
+        # Without this, change-value grounding rejects the patch and the
+        # CHANGE_PENDING state never stages, sending "Да" to the post-calc
+        # SMS path. extract_age_years_from_utterance handles ноль..пятнадцать
+        # plus all grammatical case variants and requires a year-unit anchor.
+        if field == "age_years":
+            from .utterance_grounding import extract_age_years_from_utterance
+            extracted = extract_age_years_from_utterance(utterance)
+            if extracted is not None and extracted == _int:
+                return True
         # Fix 34: Russian spelled multipliers. "80 тысяч" → 80000, "3 миллиона"
         # → 3000000. Only applies to cost / prepaid_amount (big numbers).
         # Term / prepaid_pct / age are small enough that callers say the raw
@@ -277,18 +324,41 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
                     re.IGNORECASE,
                 ):
                     return True
-        # Fix 40b: years-to-months conversion for term_months.
-        # User says "на 7 лет" → classifier emits term_months=84.
-        # The digits "84" never appear in the utterance, so require the
-        # whole-year equivalent to match.
+        # Task 7: word-form fallback for cost / prepaid_amount.
+        # Handles fully spelled-out amounts like "двадцать тысяч долларов"
+        # → 20000. parse_ru_number returns None when the utterance contains
+        # only a percent context ("двадцать процентов") and resets on the
+        # percent keyword, so percent-only utterances safely return None.
+        # This branch is reached only when digit-form and Fix-34 multiplier
+        # checks both failed, so it is strictly additive.
+        if field in ("cost", "prepaid_amount"):
+            parsed = parse_ru_number(utterance)
+            if parsed is not None and parsed == _int:
+                return True
+        # Years-to-months grounding for term_months.
+        # User says "на 7 лет" / "три года срок" → classifier emits
+        # term_months=84/36. The literal digits never appear in the
+        # utterance, so check that the year-equivalent is present.
+        #
+        # Bug S (live call 4e522fb5 2026-04-26): replaced earlier
+        # keyword/suffix/word-list regex (which was hardcoded and missed
+        # "три года срок") with delegation to extract_age_years_from_utterance.
+        # That helper already handles digit form, all Russian numeral words
+        # 0..15, and every grammatical case ("три"/"трёх"/"трех"/"тремя"
+        # etc.) — one source of truth.
+        #
+        # Note: this means bare "X лет/года" (e.g. age answer) WILL ground
+        # term_months when classifier mis-emits it. The disambiguation
+        # ("bot is asking age, not term") lives in turn_dispatcher where
+        # conversation state is available — see _dispatch_once age fallback.
+        # A stateless utterance gate cannot distinguish age from term
+        # reliably; trying to do so via keyword regex was the original
+        # source of the suffix/prefix brittleness.
         if field == "term_months":
             if _int > 0 and _int % 12 == 0:
                 _years = _int // 12
-                if re.search(
-                    rf"\b{_years}\s*(?:лет\b|год\w*|года\b)",
-                    utterance,
-                    re.IGNORECASE,
-                ):
+                from .utterance_grounding import extract_age_years_from_utterance
+                if extract_age_years_from_utterance(utterance) == _years:
                     return True
             # Half-year ("полтора года" → 18, "полгода" → 6)
             if _int == 18 and re.search(r"полтора\s*года", utterance, re.IGNORECASE):
@@ -358,10 +428,22 @@ def filter_patches(
     # Drop bot name (or bot name + patronymic) echoed as user name.
     # Classifier sometimes captures "Ксения Николаевна" from formal user
     # address — we reject anything whose first token matches bot_name.
+    #
+    # Bug 20 (live call 45247512 2026-04-25): also reject meta-phrases the
+    # classifier hallucinates from question-shaped utterances like "А как
+    # меня звали?" — Qwen3-4B emitted name="не указано" ("not specified")
+    # which then locked out the real name "Никита" via the stale-name guard.
     _raw_name = out.get("name")
     if isinstance(_raw_name, str):
-        _name_tokens = _raw_name.strip().lower().split()
+        _name_lower = _raw_name.strip().lower()
+        _name_tokens = _name_lower.split()
         if _name_tokens and _name_tokens[0] == bot_name.lower():
+            out.pop("name")
+        elif _name_lower in _NON_NAME_BLACKLIST:
+            print(
+                f"[Profile] non-name patch dropped: '{_raw_name}'",
+                flush=True,
+            )
             out.pop("name")
 
     # Normalize / validate client_type.

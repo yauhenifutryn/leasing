@@ -57,6 +57,28 @@ class ClientProfile:
     original_cost: Optional[float] = None
     original_currency: Optional[str] = None
 
+    # Bare-"Да" → SMS support (live call cdbcf56b 2026-04-26). Set to "sms"
+    # by execute_action's FireCalc handler when the post-calc readback is
+    # spoken (which always ends with "Хотите изменить или отправить по
+    # СМС?"). apply_turn reads this on the next turn: if the user replies
+    # with a bare affirmation and no change_field, the answer is "yes,
+    # send the SMS" — fire FireSMS. Cleared on any other turn that
+    # consumes the offer or supersedes it.
+    last_offer: Optional[str] = None
+
+    # Bug 1 (live call bf7a95a8 2026-04-26): subject was filled silently
+    # ("Я бы себе хотел что-то купить" → readback announced Легковой
+    # автомобиль the user never confirmed). This flag is the structural
+    # gate: only flips True when subject is captured via a path with
+    # explicit utterance evidence (apply_turn step 5 first-time capture
+    # from grounded patches, or change-confirm cycle). When the flag is
+    # False but ``subject`` happens to be set anyway (any future leak),
+    # ``missing_fields()`` treats subject as missing so the clarify gate
+    # asks the user before the readback fires. Defaults True only when
+    # subject was provided at construction (test fixtures, snapshots
+    # rebuilt from disk) — see ``__post_init__``.
+    subject_user_grounded: bool = False
+
     confirmed_at: Optional[float] = None
     last_change_pending: Optional[str] = None
     locked_fields: set[str] = field(default_factory=set)
@@ -81,6 +103,17 @@ class ClientProfile:
         "type_schedule",
     )
 
+    def __post_init__(self) -> None:
+        # Construction-time assumption (bug 1 fix, 2026-04-26): when callers
+        # provide ``subject`` at construction, treat it as already user-
+        # grounded. Test fixtures and snapshot rebuilds rely on this so
+        # they don't all have to flip the flag manually. The runtime
+        # capture path (apply_turn) explicitly flips the flag when subject
+        # lands via grounded patches; new ClientProfile() with no subject
+        # leaves the flag False as intended.
+        if self.subject is not None and not self.subject_user_grounded:
+            self.subject_user_grounded = True
+
     def missing_fields(self) -> set[str]:
         missing: set[str] = set()
         for f_name in self._CORE_FIELDS:
@@ -90,6 +123,13 @@ class ClientProfile:
             missing.add("prepaid")
         if self.condition_new == 0 and self.age_years is None:
             missing.add("age_years")
+        # Bug 1 (live call bf7a95a8 2026-04-26): silent-default subject
+        # must surface as missing so the clarify gate fires before the
+        # readback. The flag is True iff subject was captured from a path
+        # with utterance evidence (apply_turn first-time capture or
+        # change-confirm) or provided at construction.
+        if self.subject is not None and not self.subject_user_grounded:
+            missing.add("subject")
         return missing
 
     def is_complete_for_calc(self) -> bool:
@@ -116,6 +156,50 @@ class ClientProfile:
                 changed[k] = v
         return changed
 
+    def apply_additive_patches(self, patches: dict[str, Any]) -> dict[str, Any]:
+        """Additive-capture variant of apply_patches with prepaid-sibling-clear.
+
+        Use this when applying first-time captures on COLLECTING state (apply_turn
+        step 5) instead of raw setattr, so the prepaid_pct / prepaid_amount
+        slot-invariant from apply_pending_change is preserved.
+
+        Like apply_patches, returns a dict of fields actually changed (for
+        logging / telemetry). Sibling clears do NOT appear in the returned
+        dict — only the caller-provided patches that were applied.
+
+        The returned ``changed`` dict reports only the caller-provided patches
+        that were actually applied. Prepaid sibling clears (when setting
+        prepaid_pct nulls a prior prepaid_amount, or vice versa) are a side
+        effect and are NOT included in the return value — matches the
+        ``apply_pending_change`` reporting convention, so a future callsite
+        doesn't surprise itself with an unexpected extra key.
+        """
+        changed: dict[str, Any] = {}
+        if not patches:
+            return changed
+        _applied_prepaid_pct = False
+        _applied_prepaid_amount = False
+        for k, v in patches.items():
+            if v is None:
+                continue
+            if k in self.locked_fields:
+                continue
+            if not hasattr(self, k):
+                continue
+            old = getattr(self, k)
+            if old != v:
+                setattr(self, k, v)
+                changed[k] = v
+                if k == "prepaid_pct":
+                    _applied_prepaid_pct = True
+                elif k == "prepaid_amount":
+                    _applied_prepaid_amount = True
+        if _applied_prepaid_pct and self.prepaid_amount is not None:
+            self.prepaid_amount = None
+        elif _applied_prepaid_amount and self.prepaid_pct is not None:
+            self.prepaid_pct = None
+        return changed
+
     def apply_pending_change(self) -> bool:
         """Apply pending_change to the profile, clear it. Return True if applied.
 
@@ -127,6 +211,12 @@ class ClientProfile:
         stale value from shadowing in direct-call params build (pct is
         preferred over amount). Mirrors the sticky-patch counterpart-clear
         logic (Fix 40c).
+
+        2026-04-24 (Codex adversarial high #1): locked_fields are now honoured,
+        consistent with apply_patches() and apply_additive_patches(). A change
+        staged for a locked field is silently skipped — the field retains its
+        current value. This matches the contract of the other two apply helpers
+        and prevents a confirmed pending_change from bypassing the lock.
         """
         if not self.pending_change:
             return False
@@ -137,6 +227,16 @@ class ClientProfile:
         if isinstance(_changes, dict) and _changes:
             _applied_any = False
             for field_name, vals in _changes.items():
+                if field_name in self.locked_fields:
+                    # Locked fields are silently skipped — same semantics as
+                    # apply_patches() and apply_additive_patches(). The change
+                    # is not applied; _applied_any stays False for this field.
+                    print(
+                        f"[ClientProfile] apply_pending_change: skipping locked "
+                        f"field={field_name!r}",
+                        flush=True,
+                    )
+                    continue
                 if not hasattr(self, field_name):
                     # Codex adversarial pass 4 (2026-04-20): log loudly but
                     # skip unknown fields. If NO known fields got applied, we
@@ -158,8 +258,8 @@ class ClientProfile:
                     _applied_prepaid_amount = True
             if not _applied_any:
                 print(
-                    f"[ClientProfile] apply_pending_change: no known fields in "
-                    f"{list(_changes.keys())} — leaving pending_change for retry",
+                    f"[ClientProfile] apply_pending_change: no known/unlocked fields "
+                    f"in {list(_changes.keys())} — leaving pending_change for retry",
                     flush=True,
                 )
                 return False
@@ -172,7 +272,7 @@ class ClientProfile:
         # Legacy single-field shape.
         field_name = self.pending_change.get("field")
         new_value = self.pending_change.get("new_value")
-        if field_name and hasattr(self, field_name):
+        if field_name and field_name not in self.locked_fields and hasattr(self, field_name):
             setattr(self, field_name, new_value)
             if field_name == "prepaid_pct" and self.prepaid_amount is not None:
                 self.prepaid_amount = None
@@ -180,6 +280,13 @@ class ClientProfile:
                 self.prepaid_pct = None
             self.pending_change = None
             return True
+        if field_name and field_name in self.locked_fields:
+            print(
+                f"[ClientProfile] apply_pending_change: legacy single-field "
+                f"pending_change skipping locked field={field_name!r}",
+                flush=True,
+            )
+            return False
         # Legacy single-field with unknown attribute — same fail-closed behaviour.
         print(
             f"[ClientProfile] apply_pending_change: legacy single-field "

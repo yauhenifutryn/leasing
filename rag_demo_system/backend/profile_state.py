@@ -1,0 +1,161 @@
+"""Pure functions for turn-level profile state transforms.
+
+No I/O, no async. Every function here is referentially transparent
+(no side effects beyond mutating the `profile` argument when explicitly
+contracted to do so). Imported by `turn_dispatcher.apply_turn` and
+`turn_dispatcher.execute_action`.
+
+Phase 3.A of the apply_turn refactor. Design spec:
+`docs/superpowers/specs/2026-04-21-apply-turn-refactor-design.md`.
+"""
+from __future__ import annotations
+
+from .session import ClientProfile
+from .turn_action import ProfileSnapshot
+
+
+def build_snapshot(profile: ClientProfile) -> ProfileSnapshot:
+    """Project the mutable ClientProfile into an immutable snapshot.
+
+    Snapshot fields are a strict subset of ClientProfile — state-machine
+    bookkeeping (confirmed_at, readback_emitted_at, pending_change,
+    locked_fields, etc.) is deliberately excluded so renderers and LLM
+    prompts cannot couple to them.
+    """
+    return ProfileSnapshot(
+        client_type=profile.client_type,
+        subject=profile.subject,
+        cost=profile.cost,
+        currency=profile.currency,
+        original_cost=profile.original_cost,
+        original_currency=profile.original_currency,
+        condition_new=profile.condition_new,
+        age_years=profile.age_years,
+        prepaid_pct=profile.prepaid_pct,
+        prepaid_amount=profile.prepaid_amount,
+        term_months=profile.term_months,
+        type_schedule=profile.type_schedule,
+        name=profile.name,
+    )
+
+
+def partition_patches(
+    profile: ClientProfile,
+    proposed: dict,
+) -> tuple[dict, dict]:
+    """Partition proposed field patches against the current profile.
+
+    Returns (first_time_patches, delta_patches):
+      - first_time_patches: {field: value} for fields where
+        `profile.<field>` is currently None. These are additive
+        captures; applying them does not require user confirmation
+        (capture-first principle only confirms changes to already-
+        captured data).
+      - delta_patches: {field: {"old": X, "new": Y}} for fields where
+        `profile.<field>` is not None AND differs from the proposed
+        value. These are changes and must flow through
+        EmitChangeConfirm — apply_turn routes them to step 4.
+      - No-op proposals (field already at the proposed value) are
+        dropped silently; they contribute to neither dict.
+
+    Note: a proposed value of None on a currently-captured field IS a
+    delta (used for implied flips like clearing age_years when
+    condition_new flips to 1).
+    """
+    first_time: dict = {}
+    delta: dict = {}
+    for field_name, new_value in proposed.items():
+        current = getattr(profile, field_name, None)
+        if current is None and new_value is not None:
+            first_time[field_name] = new_value
+        elif current != new_value:
+            delta[field_name] = {"old": current, "new": new_value}
+        # else: no-op, drop
+    return first_time, delta
+
+
+# Subjects that force client_type → Юридическое лицо per business rules
+# (leasing of commercial-use vehicles is not available to физлица).
+_COMMERCIAL_SUBJECTS = frozenset({
+    "Грузовой автомобиль",
+    "Спецтехника",
+    "Коммерческий транспорт",
+})
+
+
+def derive_implied_flips(profile: ClientProfile, proposed: dict) -> dict:
+    """Compute cross-field flips forced by proposed patches.
+
+    Rule table (spec §5.1, post-Bug-M revision):
+      - condition_new becomes 1 (new vehicle) AND profile.age_years is
+        not None
+        → implied: age_years = None (new vehicle has no age).
+
+    The commercial-subject → Юридическое лицо rule was REMOVED on
+    2026-04-26 after live call 8741ad68 demonstrated the loop: every
+    redispatch from a CHANGE_PENDING confirm re-stages the same flip
+    even when the user just explicitly confirmed Физическое лицо, so
+    the change-confirm cycle never terminates. Eligibility constraints
+    belong in `_preflight_calc_policy` (turn_dispatcher.py:160-179),
+    which surfaces the truck-vs-физлицо conflict as a `FireOORMessage`
+    *after* the user has unambiguously committed both fields. Two
+    turns instead of an infinite loop. (Codex-rescue 2026-04-26.)
+
+    Returns a dict {field: new_value} of flips to merge into the
+    classifier's proposed patches BEFORE partition_patches runs. The
+    delta entries these produce on captured fields naturally flow
+    through EmitChangeConfirm (step 4) per the user's capture-first
+    confirmation principle.
+    """
+    flips: dict = {}
+
+    new_condition = proposed.get("condition_new", profile.condition_new)
+    if new_condition == 1 and profile.age_years is not None:
+        flips["age_years"] = None
+
+    return flips
+
+
+def build_calc_params(profile: ClientProfile) -> dict:
+    """Shape a ClientProfile into the dict the calculator API expects.
+
+    Mirrors the legacy construction at `rag_demo_system/backend/app.py:
+    2211-2234` EXACTLY to preserve behavior across the refactor:
+      - `term_months` → calc key `term`.
+      - `prepaid_pct` → both `prepaid` and `prepaid_pct` (legacy alias).
+      - `prepaid_amount` (only when `prepaid_pct` is None).
+      - `age_years` → both `age` and `age_years` aliases.
+      - Optional fields (currency, client_type, condition_new,
+        type_schedule, age, prepaid_*) are OMITTED when their source
+        is None. The calculator API treats omitted keys as defaults,
+        so omit-on-None is load-bearing.
+
+    The subject and cost fields are always included — even when None —
+    because the calculator rejects a missing-key payload differently
+    from a None-value payload, and the legacy code path always sets them.
+    """
+    params: dict = {
+        "subject": profile.subject,
+        "cost": profile.cost,
+    }
+
+    if profile.currency is not None:
+        params["currency"] = profile.currency
+    if profile.client_type is not None:
+        params["client_type"] = profile.client_type
+    if profile.condition_new is not None:
+        params["condition_new"] = profile.condition_new
+    if profile.age_years is not None:
+        params["age"] = profile.age_years
+        params["age_years"] = profile.age_years
+    if profile.prepaid_pct is not None:
+        params["prepaid"] = profile.prepaid_pct
+        params["prepaid_pct"] = profile.prepaid_pct
+    elif profile.prepaid_amount is not None:
+        params["prepaid_amount"] = profile.prepaid_amount
+    if profile.term_months is not None:
+        params["term"] = profile.term_months
+    if profile.type_schedule is not None:
+        params["type_schedule"] = profile.type_schedule
+
+    return params

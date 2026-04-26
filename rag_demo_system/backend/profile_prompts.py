@@ -16,11 +16,15 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
         if "client_type" in fields and "subject" in fields:
             return (
                 "Подскажите, пожалуйста, тип клиента: физическое или юридическое лицо, "
-                "и что именно хотите в лизинг: машину, оборудование или что-то ещё?"
+                "и что именно хотите в лизинг: легковой автомобиль, грузовой, "
+                "оборудование или что-то ещё?"
             )
         if "client_type" in fields:
             return "Вы физическое или юридическое лицо?"
-        return "Что планируете брать в лизинг, машину, оборудование, спецтехнику или что-то другое?"
+        return (
+            "Что планируете брать в лизинг: легковой автомобиль, грузовой, "
+            "спецтехнику, оборудование или что-то другое?"
+        )
 
     if fields & {"cost", "currency", "condition_new"}:
         parts = []
@@ -29,7 +33,11 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
         if "currency" in fields:
             parts.append("валюта (BYN или USD)")
         if "condition_new" in fields:
-            parts.append("новый или б/у")
+            # Issue 3 (2026-04-25): client prefers "подержанный" wording over
+            # "б/у". Both spellings still ground via _CONDITION_USED_CUE_RE,
+            # so callers who say "б/у" are still understood; the bot just
+            # phrases the question with the more natural word.
+            parts.append("новый или подержанный")
         return "Уточните, пожалуйста, " + ", ".join(parts) + "."
 
     # Fix 1.13 (2026-04-19) — age_years must be asked before term/prepaid.
@@ -45,7 +53,7 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     # term/prepaid; this priority bump supersedes 1.5's placement.
     if "age_years" in fields:
         return (
-            "Сколько лет вашему транспорту? Для б/у техники это обязательный параметр."
+            "Сколько лет вашему транспорту? Для подержанной техники это обязательный параметр."
         )
 
     if fields & {"term_months", "prepaid", "type_schedule"}:
@@ -182,7 +190,7 @@ def build_readback_text(profile: Any) -> str:
     subj = profile.subject or "предмет лизинга"
     cond = (
         "новый" if profile.condition_new == 1
-        else "б/у" if profile.condition_new == 0
+        else "подержанный" if profile.condition_new == 0
         else "—"
     )
     # Fix 1.11 (2026-04-19) — when condition_new=0, age_years is a required
@@ -270,6 +278,13 @@ def render_calc_result(result: dict[str, Any]) -> str:
     # boundary. Sub-unit precision is preserved in SMS (it goes through
     # calculator.format_sms_body and the client can read exact figures).
     # Percentages render as int when whole, else one decimal place.
+    # Issue #5 (live call cdbcf56b 2026-04-26): "мес." was spoken as
+    # "мес" (clipped). Spell out "месяцев" so TTS pronounces the full
+    # word. No abbreviation-expansion dependency.
+    # Issue #3 (live call cdbcf56b): the FireCalc handler speaks
+    # render_calc_result verbatim and returns — no follow-up offer was
+    # appended, so the caller had to volunteer "СМС" or "линейный"
+    # without prompting. Append the canonical post-calc offer.
     return (
         f"{conv_prefix}"
         f"Аванс {_fmt_pct(params.get('prepaid', 30))}%: "
@@ -278,8 +293,9 @@ def render_calc_result(result: dict[str, Any]) -> str:
         f"Выкупной: {_fmt_money(result.get('buyout_sum'))} {currency}. "
         f"Общая сумма: {_fmt_money(result.get('total'))} {currency}. "
         f"Удорожание: {_fmt_pct(result.get('increase_percent'))}%. "
-        f"Срок: {result.get('num_payments', '?')} мес."
+        f"Срок: {result.get('num_payments', '?')} месяцев."
         f"{defaults_note}"
+        f" Хотите изменить параметры или отправить график платежей по СМС?"
     )
 
 
@@ -336,7 +352,7 @@ _FIELD_RU = {
     "type_schedule": "тип графика",
     "currency": "валюта",
     "cost": "стоимость",
-    "condition_new": "состояние (новый/б/у)",
+    "condition_new": "состояние (новый/подержанный)",
     "subject": "предмет лизинга",
     # Fix 1.12 (2026-04-19) — live call 743c1a0e: change-confirm read out
     # "Меняю age_years на 5" because age_years was missing from this map
@@ -358,8 +374,8 @@ _VALUE_RU: dict[str, dict[Any, str]] = {
         1: "линейный",
     },
     "condition_new": {
-        "0": "б/у",
-        0: "б/у",
+        "0": "подержанный",
+        0: "подержанный",
         "1": "новый",
         1: "новый",
     },

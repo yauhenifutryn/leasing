@@ -32,8 +32,15 @@ def test_no_name_patch_no_skip():
 
 
 def test_long_utterance_no_skip():
-    assert should_skip_rag("Привет, я Вадим, очень рад познакомиться с вами",
-                           {"name": "Вадим"}, {}) is False
+    # Issue 2 (2026-04-25) raised the cap from 5 to 10 tokens to fit
+    # polite Russian openers ("Ксения, добрый день. Меня зовут Сергей.").
+    # This test now uses a >10-token utterance to keep enforcing the
+    # upper bound: a long monologue may carry real intent we shouldn't
+    # silently swallow with an open greeting.
+    assert should_skip_rag(
+        "Привет, я Вадим, очень рад с вами познакомиться и поговорить о лизинге",
+        {"name": "Вадим"}, {},
+    ) is False
 
 
 def test_call_site_guard_skips_greeting_when_name_already_set():
@@ -67,3 +74,82 @@ def test_call_site_guard_allows_skip_on_first_name_turn():
         "Меня зовут Женя.", patches, hints
     )
     assert skip is True
+
+
+# Bug 5 (live call 6dd5880b 2026-04-25) — funnel-aggression after name-only.
+# Classifier emits a non-empty `action` (e.g. "clarify" or "conversation")
+# alongside name=Никита on a bare "Привет, я Никита." Old guard blocked
+# skip-RAG on ANY non-empty hints dict, so the bot dove into clarify funnel
+# instead of emitting the open greeting.
+def test_pure_name_capture_with_action_clarify_still_skips():
+    """Classifier action='clarify' alone (no profile slots) shouldn't block."""
+    assert should_skip_rag(
+        "Привет, я Никита.",
+        {"name": "Никита"},
+        {"action": "clarify"},
+    ) is True
+
+
+def test_pure_name_capture_with_action_conversation_still_skips():
+    assert should_skip_rag(
+        "Здравствуйте, я Сергей.",
+        {"name": "Сергей"},
+        {"action": "conversation"},
+    ) is True
+
+
+def test_name_plus_subject_hint_blocks_skip():
+    """If classifier extracted profile data (subject), user wants calc, not greeting."""
+    assert should_skip_rag(
+        "Я Вадим, хочу легковой.",
+        {"name": "Вадим"},
+        {"action": "calculate", "subject": "Легковой автомобиль"},
+    ) is False
+
+
+def test_name_plus_cost_hint_blocks_skip():
+    assert should_skip_rag(
+        "Я Вадим, сто тысяч.",
+        {"name": "Вадим"},
+        {"action": "calculate", "cost": 100000},
+    ) is False
+
+
+def test_action_only_hint_with_no_name_no_skip():
+    """No name patch -> not a name-capture turn even if hints are non-profile."""
+    assert should_skip_rag(
+        "Здравствуйте.",
+        {},
+        {"action": "conversation"},
+    ) is False
+
+
+# Issue 2 (live call 77cbbccd 2026-04-25): "Ксения, добрый день. Меня зовут
+# Сергей." is 6 tokens — over the previous 5-token cap, so the gate
+# rejected and the LLM dove into the funnel ("тип клиента, что в лизинг").
+# Bump to 10 tokens so a polite greeting + name introduction still skips.
+def test_polite_greeting_with_bot_name_and_intro_still_skips():
+    assert should_skip_rag(
+        "Ксения, добрый день. Меня зовут Сергей.",
+        {"name": "Сергей"},
+        {"action": "conversation"},
+    ) is True
+
+
+def test_courteous_greeting_with_intro_still_skips():
+    assert should_skip_rag(
+        "Здравствуйте, очень рада звонку, меня зовут Анна",
+        {"name": "Анна"},
+        {},
+    ) is True
+
+
+def test_eleven_word_intro_still_blocks_skip():
+    """Above the new 10-token cap — still blocks. Long openers may carry
+    real intent we don't want to miss."""
+    assert should_skip_rag(
+        "Здравствуйте, очень приятно познакомиться с вами, меня зовут "
+        "Анна Сергеевна Ивановна",
+        {"name": "Анна"},
+        {},
+    ) is False

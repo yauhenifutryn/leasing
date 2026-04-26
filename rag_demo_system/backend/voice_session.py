@@ -37,6 +37,12 @@ class VoiceSession:
     last_calc_signature: str = ""
     consecutive_calc_failures: int = 0
 
+    # Monotonic stamp on each VAD-finalized utterance. Spec §7.2 #6 —
+    # apply_turn orchestrator rejects classifier results whose turn_id is
+    # older than this value so out-of-order utterance completions in
+    # RTC/VAD mode cannot overwrite fresh state with stale actions.
+    latest_finalized_turn_id: int = 0
+
     # SIP telephony fields (defaults preserve existing WebSocket/RTC behavior)
     transport: str = "websocket"          # "websocket" | "rtc" | "jambonz"
     client_phone: str | None = None       # from SIP caller ID, None for browser

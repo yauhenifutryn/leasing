@@ -33,13 +33,25 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 
 ## Section 3 — Architecture refactor
 
-- [ ] CP-3.1 — `backend/profile_state.py` with pure functions + unit tests
-- [ ] CP-3.2 — `TurnAction` ADT + `apply_turn` with 100% coverage
-- [ ] CP-3.3 — Orchestrator wired to `apply_turn`
-- [ ] CP-3.4 — Dead code removed; `app.py` down ~800 lines
-- [ ] CP-3.5 — Live regression sweep green
-- [ ] CP-3.6 — Code review resolved
-- [ ] CP-3.7 — Section closed, `refactor-v1` tag pushed, docs updated
+- [x] CP-3.1 — `backend/profile_state.py` with pure functions + unit tests (c0de06d..f7ed575, 2026-04-23). 23 tests, 100% line coverage. build_snapshot + partition_patches + derive_implied_flips + build_calc_params.
+- [x] CP-3.2 — `TurnAction` ADT + `apply_turn` with 100% coverage (1a77245..[task-14-commit], 2026-04-23). 69 tests (29 apply_turn + 17 turn_action + 23 profile_state). 100% line coverage on turn_action.py, profile_state.py, turn_dispatcher.py (162 stmts). All 8 dispatch steps wired with RED→GREEN per step. 580 total tests pass, 8 pre-existing env failures unchanged.
+- [x] CP-3.3 — Orchestrator wired to `apply_turn` (Tasks 16-21, 2026-04-24). `execute_action` handlers (FireCalc + EmitReadback + EmitClarify + EmitChangeConfirm + FireOORMessage + Noop + FireLLMFallback) complete with calc circuit breaker + tool-call history. Four production adapters (`LLMStreamBackend`, `TtsSink`, `CalcAdapter`, `RagFuture`) bridge execute_action to `_stream_voice_response`. `APPLY_TURN_ENABLED` flag gates the new path (default "0" — legacy still live until CP-3.5 passes). 99 Phase 3 tests + 11 adapter tests green on both flag values.
+- [x] CP-3.4 — Dead code removed (a1e53f4, 2026-04-26). `_stream_voice_response` shrank ~2629→850 lines (1779 net deletion). Removed legacy 5-gate block, sticky-patch staging, change-staging extras, `apply_patches` invocation, helpers `_sticky_calc_ready` + `_format_invalid_params_msg`, `APPLY_TURN_ENABLED` env flag, `detect_sms_intent` import. 5 obsolete contract tests deleted. Test baseline 808 passed / 8 pre-existing failures preserved.
+- [x] CP-3.5 — Live regression sweep green. Tag `demo-mvp-flag1-2026-04-26-validated` at 67201ec on `feature/section-3-apply-turn`. Call e180107b on 2026-04-26 cleared every edge case from the Bug Q+S playbook: age-phase ("Два года" → age_years=2), term-phase mixed-field ("Давай три года, 35 процентов и линейный" all captured in one turn), Bug S inside change cycle ("на 7 лет" → срок 84 месяца change-confirm), recalc cycle (linear→annuity), SMS one-shot, RAG owner post-calc. Bugs A-S all closed. Year-form grounding is fully semantic (state-aware, no keyword regex). 324 relevant unit tests pass.
+- [x] CP-3.6 — Codex adversarial review + standard review both clean. 1 HIGH (apply_pending_change return value, `73ccd9a`) + 2 P1/P2 (utterance fallbacks dead, memory_block dropped — both `32b3324`) factual findings auto-fixed with 5 new regression tests. Final test count: 814 passed / 8 pre-existing failures unchanged.
+- [x] CP-3.7 — Section closed, `refactor-v1` tag pushed, README + PROJECT_LOG updated. Live SIP test on call `bf7a95a8` (2026-04-26 12:07) cleared the full happy path + USD→BYN dual disclosure + change-confirm 36→24 months recalc + SMS direct-fire + post-calc RAG (Codex P2 memory_block fix verified — bot retained context across calc). Two open observations from the live call deferred to memory: subject default-to-car (open product question) and clarify-meta-question regression (Section-3.5/4 candidate, ~30 lines).
+
+## Section 3.5 — Calculator funnel API integration
+
+**Spec**: `docs/superpowers/specs/2026-04-24-calculator-funnel-design.md`
+**Prereq**: Section 3 fully closed (CP-3.4..CP-3.7 all `[x]`), `refactor-v1` tag pushed, merged to `feature/voice-pipeline`.
+
+- [ ] CP-3.5.1 — `backend/calc_limits.py` with `subjects` / `currencies` / `ranges` fetchers + 24h process cache + 20+ unit tests green
+- [ ] CP-3.5.2 — `terms` fetcher + `disagreement` logic + conflict-suggestion generation + unit tests green
+- [ ] CP-3.5.3 — `EmitConstraintConflict` TurnAction variant + `CalcLimitsAdapter` + execute_action EmitReadback handler upgraded + `CALCULATOR_FUNNEL_ENABLED` flag gated (default `0`) + all existing tests green on both flag values
+- [ ] CP-3.5.4 — LLM-side rule deletion per spec §7 (COMMERCIAL_SUBJECTS, range constants, _SUBJECT_MAP, _VALID_SUBJECTS/CURRENCIES); `_CLIENT_TYPE_MAP` ИП→Юр and 3:1 USD hack preserved (deferred to post-section)
+- [ ] CP-3.5.5 — Live SIP regression green on `CALCULATOR_FUNNEL_ENABLED=1`: happy path + combo-conflict scenario both pass on `38.80.122.98`
+- [ ] CP-3.5.6 — Flag + legacy branches removed; `calc-funnel-v1` tag pushed; section closed
 
 ## Section 4 — Natural turn-taking
 
@@ -91,5 +103,14 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP-2.3 | 277ea78 | 2026-04-20 | Fix 41b `_VALID_CHANGE_FIELDS` whitelist retired (Literal covers it) |
 | CP-2.4b (codex rev) | 25cd065 | 2026-04-20 | End of 8-pass Codex review loop (13 findings resolved) |
 | structured-classifier-v1 | 25cd065 | 2026-04-20 | Section 2 close; CP-2.5 SIP-validated on session cc7fc318 |
+| CP-3.1 | f7ed575 | 2026-04-23 | profile_state.py pure functions + 23 unit tests |
+| CP-3.2 | (Phase 3.C) | 2026-04-23 | TurnAction ADT + apply_turn dispatch (29 + 17 + 23 = 69 tests) |
+| CP-3.3 | 32d782e | 2026-04-24 | execute_action handlers + 4 production adapters; APPLY_TURN_ENABLED flag |
+| CP-3.5 | 67201ec | 2026-04-26 | Live regression sweep green on call e180107b. Bugs A-S all closed. Tag `demo-mvp-flag1-2026-04-26-validated`. |
+| CP-3.4 | a1e53f4 | 2026-04-26 | Legacy `apply_patches` path deleted (~1779 lines net). 5 obsolete contract tests removed. 808 pass / 8 pre-existing fail. |
+| CP-3.6 (high #1) | 73ccd9a | 2026-04-26 | Codex HIGH: `apply_pending_change()` return value now honoured — locked/unknown payloads re-emit EmitChangeConfirm instead of advancing to FireCalc on stale terms. |
+| CP-3.6 (P1+P2) | 32b3324 | 2026-04-26 | Codex P1: utterance-fallback extractors re-wired into apply_turn pre-compute. Codex P2: `memory_block` threaded through FireLLMFallback prompt via `session.memory_block`. 5 regression tests added. |
+| (provisioner) | f5f54bb | 2026-04-26 | vLLM 0.19 cudagraph accounting fix: `gpu_memory_utilization` tiers bumped ~+0.10 (H100 80GB: 0.60→0.70). Fixes "Available KV cache memory: -0.3 GiB" engine-refused-to-start on fresh VMs. |
+| refactor-v1 | 2a41330 | 2026-04-26 | Section 3 close. Live SIP test on call bf7a95a8 GREEN: full happy path + USD→BYN + change-confirm recalc + SMS + post-calc RAG (Codex P2 fix verified). |
 
 (Append rows as checkpoints complete.)

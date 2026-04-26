@@ -220,6 +220,13 @@ Run the full unified scenario from `project_mvp_complete_2026_04_18.md` live. Ve
 - CP-3.2: `TurnAction` ADT defined. `apply_turn` implemented. 100% unit test coverage on `apply_turn`.
 - CP-3.3: Orchestrator (`_stream_voice_response`) uses `apply_turn`. All existing tests pass.
 - CP-3.4: Dead code removed. Line count of `app.py` down by ~800 lines.
+- CP-3.4b: Hygiene + validator collapse verified — grep-assertion that state-mutation logic lives in one boundary file only:
+  ```bash
+  # After 3.D, these legacy names must appear ONLY inside backend/profile_state.py (and its tests):
+  grep -rln "has_field_signal\|_sticky_patch\|_allow_direct_apply\|_change_staged_this_turn\|_just_confirmed_this_turn" \
+    backend/ --include="*.py" | grep -v profile_state | grep -v test_
+  # Expected output: empty. Any other file listed = residue from the old 3-layer spread; fix before closing CP-3.4b.
+  ```
 - CP-3.5: Live regression sweep — full unified scenario passes end-to-end.
 - CP-3.6: Code review invoked (`superpowers:requesting-code-review`). Issues triaged.
 - CP-3.7: Section closed — commit tagged `refactor-v1`. Docs updated (`README.md` architecture section).

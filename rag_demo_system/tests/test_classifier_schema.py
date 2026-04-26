@@ -86,6 +86,31 @@ def test_subject_grounded_passes():
     assert out.subject == "Легковой автомобиль"
 
 
+def test_subject_generic_mashina_grounds_legkovoi():
+    # Regression (2026-04-24 live call 5375e1bd): bare "машина" / "машину" /
+    # "автомобиль" without a category modifier must ground as
+    # Легковой автомобиль. Otherwise EmitClarify loops forever when the
+    # user mirrors the bot's own word back.
+    for utt in ("Машину брать хочу в лизинг", "машина", "хочу автомобиль"):
+        raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+        out = parse_classifier_output(raw, utterance=utt)
+        assert out.subject == "Легковой автомобиль", f"bare car utterance dropped: {utt!r}"
+
+
+def test_subject_generic_mashina_rejected_when_truck_modifier_present():
+    # Negative: "грузовую машину" must NOT ground Легковой автомобиль.
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="нужна грузовая машина")
+    assert out.subject is None
+
+
+def test_subject_generic_mashina_rejected_when_spec_modifier_present():
+    # Negative: "машина-погрузчик" or similar with spec competition must drop.
+    raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
+    out = parse_classifier_output(raw, utterance="машина и погрузчик")
+    assert out.subject is None
+
+
 def test_type_schedule_ungrounded_nulled():
     # E2: type_schedule="1" emitted on utterance without graph word.
     raw = json.dumps({"intent": "TOOL", "type_schedule": "1"})
@@ -106,10 +131,22 @@ def test_age_years_nulled_when_condition_new():
     assert out.term_months == 36
 
 
-def test_age_years_nulled_when_condition_new_unknown():
+def test_age_years_kept_when_condition_new_unknown():
+    """Bug 17 fix (live call 9ec121bc, 2026-04-25): the classifier emits
+    age_years on the "Сколько лет?" answer turn but does NOT re-emit
+    condition_new (it was captured a turn earlier — small classifier
+    only emits per-turn deltas). Previously the cross-field rule dropped
+    age_years because `None != 0`, leaving the profile age=None even
+    though the user clearly answered. Now the rule only drops on
+    explicit contradiction (condition_new=1 emitted on this same turn).
+    Downstream apply path (app.py utterance-fallback gate + sticky-
+    block) still requires profile.condition_new==0 before adopting the
+    age — so a hallucinated age_years on a NEW-car profile still can't
+    poison state."""
     raw = json.dumps({"intent": "TOOL", "age_years": 3})
     out = parse_classifier_output(raw, utterance="три года")
-    assert out.age_years is None
+    assert out.age_years == 3
+    assert out.condition_new is None
 
 
 def test_age_years_kept_on_used_car():
@@ -335,12 +372,16 @@ def test_subject_truck_passes_on_gruzovoy():
     assert out.subject == "Грузовой автомобиль"
 
 
-def test_subject_car_nulled_on_bare_mashina():
-    # Bare "машина" / "автомобиль" without category adjective is ambiguous —
-    # bot should clarify rather than ground Легковой by default.
+def test_subject_car_grounds_on_bare_mashina():
+    # 2026-04-24 reversal (live call 5375e1bd): bare "машина" / "автомобиль"
+    # with no competing category modifier grounds as Легковой автомобиль.
+    # The earlier "null and clarify" behavior caused an infinite
+    # EmitClarify loop once apply_turn landed, because the bot's own
+    # clarify text used "машину" and the user simply mirrored it back —
+    # grounding kept rejecting. Bare car-word now means car.
     raw = json.dumps({"intent": "TOOL", "subject": "Легковой автомобиль"})
     out = parse_classifier_output(raw, utterance="хочу машину")
-    assert out.subject is None
+    assert out.subject == "Легковой автомобиль"
 
 
 def test_age_years_nulled_when_condition_new_ungrounded():
@@ -595,3 +636,154 @@ def test_currency_garbage_string_still_dropped():
     raw = json.dumps({"intent": "TOOL", "currency": "XYZ"})
     out = parse_classifier_output(raw, utterance="в долларах")
     assert out.currency is None
+
+
+def test_value_grounded_cost_accepts_ru_number_words():
+    # Regression for live call f7e5aa1d (2026-04-24): "оставим двадцать
+    # тысяч долларов" emitted cost=20000 but grounding rejected because
+    # "20000" is not literally in the utterance. Russian number-words
+    # must ground.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 20000, "оставим двадцать тысяч долларов") is True
+    assert value_grounded("cost", 100000, "хочу сто тысяч рублей") is True
+    assert value_grounded("cost", 20000, "ровно двадцать тысяч") is True
+
+
+def test_value_grounded_cost_rejects_unrelated_ru_number():
+    # "двадцать процентов" is a percent, not a cost — must NOT ground
+    # cost=20.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 20, "двадцать процентов аванс") is False
+
+
+def test_value_grounded_cost_rejects_mismatched_magnitude():
+    # "двадцать тысяч" = 20000, must NOT ground cost=99999.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 99999, "двадцать тысяч долларов") is False
+
+
+def test_value_grounded_cost_digit_form_still_works():
+    # Sanity: digit-based grounding still passes (we didn't break it).
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 20000, "20000 долларов") is True
+
+
+def test_value_grounded_cost_mixed_percent_and_cost():
+    # Adversarial case from Task 6 review: an utterance that mixes a
+    # percent value AND a cost value should ground the cost.
+    # NOTE: parse_ru_number's percent-reset is GLOBAL, so this one
+    # asserts on the order. With percent first, the cost survives.
+    from backend.classifier_schema import value_grounded
+    assert value_grounded("cost", 100000, "двадцать процентов и сто тысяч долларов") is True
+
+
+# ---------------------------------------------------------------------------
+# Live regression 5e6f4c48 (2026-04-26): self/other-reference disambiguation
+# for client_type grounding. Ambiguous cues like "компании / организации /
+# фирмы / предприятия / бизнеса" used to silently capture
+# client_type="Юридическое лицо" whenever the user RAG-asked about the bot's
+# company ("Расскажи кто директор вашей компании?"). The leak chained into
+# Bug R's _has_any_core_field gate and looped step 5b on every RAG turn.
+# Strong cues (ИП / юрлицо / физлицо / ООО) keep grounding unconditionally.
+# ---------------------------------------------------------------------------
+
+def test_client_type_yur_dropped_on_other_reference_company():
+    """Live repro 5e6f4c48: 'вашей компании' must not ground юр."""
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(
+        raw,
+        utterance="Расскажи, кто директор вашей компании?",
+    )
+    assert out.client_type is None
+
+
+def test_client_type_yur_dropped_on_other_reference_organization():
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(
+        raw, utterance="расскажите про вашу организацию",
+    )
+    assert out.client_type is None
+
+
+def test_client_type_yur_dropped_on_other_reference_firm():
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="а где у вас фирма?")
+    assert out.client_type is None
+
+
+def test_client_type_yur_dropped_on_other_reference_business():
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="чем занимается ваш бизнес?")
+    assert out.client_type is None
+
+
+def test_client_type_yur_passes_with_self_reference_company():
+    """'я от компании' / 'наша компания' must still ground юр."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="я от компании ABC")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_with_self_reference_our_company():
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="наша компания хочет лизинг")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_strong_cue_unconditional_ip():
+    """Strong cue 'ИП' is self-status by linguistic form — ground even
+    without an explicit self-reference marker."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="ИП")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_strong_cue_unconditional_yur():
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="юрлицо")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_passes_strong_cue_unconditional_ooo():
+    """Existing test parity (line 319): 'мы ООО' grounds even without
+    extra self-reference; ООО is a strong corporate-form cue."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(raw, utterance="мы ООО Ромашка")
+    assert out.client_type == "Юридическое лицо"
+
+
+def test_client_type_yur_other_ref_overrides_self_ref():
+    """Other-reference takes precedence over self-reference when the
+    cue is ambiguous — 'я хочу узнать про вашу компанию' is a question
+    about the bot, not a self-status statement."""
+    raw = json.dumps({"intent": "RAG", "client_type": "Юридическое лицо"})
+    out = parse_classifier_output(
+        raw, utterance="я хочу узнать про вашу компанию",
+    )
+    assert out.client_type is None
+
+
+def test_client_type_fiz_unaffected_by_self_other_logic():
+    """Физическое лицо cues (физлицо/физик/физическ) are linguistically
+    self-referential; the self/other gate must not regress them."""
+    raw = json.dumps({"intent": "TOOL", "client_type": "Физическое лицо"})
+    out = parse_classifier_output(raw, utterance="физическое лицо")
+    assert out.client_type == "Физическое лицо"
+
+
+def test_value_grounded_client_type_yur_drops_other_reference():
+    """The public value_grounded API must agree with the validator;
+    apply_turn's _grounded_proposed_patches uses it on the
+    change_field/change_value path."""
+    from backend.classifier_schema import value_grounded
+    assert value_grounded(
+        "client_type", "Юридическое лицо",
+        "Расскажи, кто директор вашей компании?",
+    ) is False
+
+
+def test_value_grounded_client_type_yur_keeps_self_reference():
+    from backend.classifier_schema import value_grounded
+    assert value_grounded(
+        "client_type", "Юридическое лицо", "я от компании",
+    ) is True

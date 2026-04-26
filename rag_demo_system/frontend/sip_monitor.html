@@ -28,6 +28,16 @@
   .log-entry.barge-in .msg { color: #e74c3c; font-weight: bold; }
   .log-entry.system .msg { color: #999; font-style: italic; }
   .log-entry.dtmf .msg { color: #8e44ad; }
+  .log-entry.final .msg { color: #1e6091; font-weight: bold; background: #eaf3fb; padding: 1px 4px; border-radius: 2px; }
+  .log-entry.final.interrupted .msg { color: #8a4d00; background: #fdf2e0; }
+  .profile-panel { background: #f4f7fa; border: 1px solid #d6dee5; padding: 10px 12px; margin-bottom: 12px; border-radius: 4px; font-size: 12px; display: none; }
+  .profile-panel h4 { font-size: 12px; margin-bottom: 6px; color: #2c3e50; }
+  .profile-panel .pp-state { color: #2980b9; font-weight: bold; margin-bottom: 4px; }
+  .profile-panel .pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 12px; }
+  .profile-panel .pp-row .k { color: #888; }
+  .profile-panel .pp-row .v { color: #1a1a1a; font-weight: bold; }
+  .profile-panel .pp-row.empty .v { color: #ccc; font-weight: normal; }
+  .profile-panel .pp-missing { color: #c0392b; margin-top: 4px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -55,6 +65,12 @@
   </table>
 </div>
 <div class="calls" id="activeCalls"></div>
+<div class="profile-panel" id="profilePanel">
+  <h4>Profile snapshot <span style="color:#888; font-weight:normal;" id="ppCallId"></span></h4>
+  <div class="pp-state" id="ppState"></div>
+  <div class="pp-grid" id="ppGrid"></div>
+  <div class="pp-missing" id="ppMissing"></div>
+</div>
 <div class="log" id="log"></div>
 <script>
 (function() {
@@ -77,10 +93,15 @@
     document.getElementById('filterLabel').textContent = ' — ' + filterUser;
   }
 
-  // Dropdown changes filter without page reload
+  // Dropdown changes filter without page reload. Clear log so the new
+  // filter shows a fresh view (we don't store events, so we can't
+  // retro-filter what's already on screen). Also re-render call badges
+  // so concurrent calls from other users disappear from the active list.
   filterSelect.addEventListener('change', function() {
     filterUser = this.value || null;
     document.getElementById('filterLabel').textContent = filterUser ? ' — ' + filterUser : '';
+    while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
+    updateCallBadges();
   });
 
   function connect() {
@@ -131,10 +152,16 @@
       callToUser[cid] = msg.sip_user;
     }
 
-    // Filter: if ?user=sergey, only show events from Sergey's calls
-    if (filterUser && cid && callToUser[cid] && callToUser[cid] !== filterUser) {
-      if (t === 'sip.call.end') delete callToUser[cid];
-      return;
+    // Filter: if ?user=sergey, only show events from Sergey's calls.
+    // Fail-closed when the call_id -> user mapping is unknown (call
+    // started before this monitor session opened): otherwise events
+    // from concurrent users leak through and logs get mixed.
+    if (filterUser && cid) {
+      var mapped = callToUser[cid];
+      if (!mapped || mapped !== filterUser) {
+        if (t === 'sip.call.end') delete callToUser[cid];
+        return;
+      }
     }
 
     if (t === 'sip.call.start') {
@@ -163,7 +190,57 @@
       addLog('barge-in', cid, '** BARGE-IN **');
     } else if (t === 'sip.dtmf') {
       addLog('dtmf', cid, 'DTMF: ' + msg.digit);
+    } else if (t === 'sip.llm.final') {
+      // Authoritative full bot answer assembled after LLM+TTS completes.
+      // Rendered distinctly so the operator can spot it among streaming
+      // sentence deltas and confirm what the bot actually said in full.
+      var prefix = msg.interrupted ? '✗ FINAL (interrupted): ' : '✓ FINAL: ';
+      addLog('final' + (msg.interrupted ? ' interrupted' : ''), cid, prefix + (msg.text || ''));
+    } else if (t === 'sip.profile.snapshot') {
+      renderProfile(cid, msg);
     }
+  }
+
+  function renderProfile(cid, msg) {
+    var panel = document.getElementById('profilePanel');
+    var grid = document.getElementById('ppGrid');
+    var stateEl = document.getElementById('ppState');
+    var missingEl = document.getElementById('ppMissing');
+    var idEl = document.getElementById('ppCallId');
+    panel.style.display = 'block';
+    idEl.textContent = '[' + cid + ']';
+    stateEl.textContent = 'state = ' + (msg.state || '?');
+    while (grid.firstChild) grid.removeChild(grid.firstChild);
+    var fields = msg.fields || {};
+    var order = ['name', 'subject', 'cost', 'currency', 'client_type', 'condition_new',
+                 'age_years', 'term_months', 'prepaid_pct', 'prepaid_amount', 'type_schedule'];
+    // Bug C — render the BYN projection inline on the cost row when the
+    // backend computed it (Физлицо + USD path). Operator sees both the
+    // user's literal answer and what the calculator will actually use,
+    // matching the readback's dual-disclosure behaviour.
+    var convCost = msg.converted_cost;
+    var convCur = msg.converted_currency;
+    var showConv = (convCost !== null && convCost !== undefined
+                    && (convCost !== fields.cost || convCur !== fields.currency));
+    for (var i = 0; i < order.length; i++) {
+      var k = order[i];
+      var v = fields[k];
+      var row = document.createElement('div');
+      var hasVal = (v !== null && v !== undefined && v !== '');
+      row.className = 'pp-row' + (hasVal ? '' : ' empty');
+      var ks = document.createElement('span'); ks.className = 'k'; ks.textContent = k + ': ';
+      var vs = document.createElement('span'); vs.className = 'v'; vs.textContent = hasVal ? String(v) : '—';
+      row.appendChild(ks); row.appendChild(vs);
+      if (k === 'cost' && hasVal && showConv) {
+        var conv = document.createElement('span');
+        conv.style.cssText = 'color:#8e44ad; margin-left:6px; font-weight:normal;';
+        conv.textContent = '→ ' + convCost + ' ' + (convCur || '');
+        row.appendChild(conv);
+      }
+      grid.appendChild(row);
+    }
+    var missing = msg.missing || [];
+    missingEl.textContent = missing.length ? 'missing: ' + missing.join(', ') : 'all required fields captured';
   }
 
   function addLog(cls, cid, text) {
@@ -197,6 +274,7 @@
     for (var cid in activeCalls) {
       if (!activeCalls.hasOwnProperty(cid)) continue;
       var info = activeCalls[cid];
+      if (filterUser && info.user !== filterUser) continue;
       var badge = document.createElement('span');
       badge.className = 'call-badge';
 
