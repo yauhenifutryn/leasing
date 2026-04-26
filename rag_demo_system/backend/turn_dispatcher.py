@@ -29,6 +29,7 @@ from .turn_action import (
     EmitChangeConfirm,
     FireCalc,
     FireLLMFallback,
+    FireSMS,
     FireOORMessage,
     Noop,
 )
@@ -414,6 +415,16 @@ def _dispatch_once(
             calc_params=build_calc_params(profile),
         )
 
+    # STEP 6b (Bug H, live call 504eace0 2026-04-26): SMS request →
+    # FireSMS. apply_turn previously had no FireSMS in its vocabulary,
+    # so SMS-intent turns dispatched FireLLMFallback and the orchestrator
+    # `return`d at app.py:2048 before reaching the legacy SMS direct-fire
+    # code — SMS could not fire under APPLY_TURN_ENABLED=1. The handler
+    # in execute_action validates session has a successful calc and a
+    # phone number; if not, it speaks a deterministic fallback.
+    if classifier_output.action == "sms":
+        return FireSMS(snapshot=build_snapshot(profile))
+
     # STEP 7: classifier-flagged out-of-range → FireOORMessage with a
     # deterministic text body. Fires BEFORE step 5b so an OOR during
     # a COLLECTING turn doesn't get masked by the clarify branch.
@@ -622,6 +633,95 @@ async def execute_action(
         # Deterministic OOR text — no renderer needed, payload IS the text.
         await tts.say(action.message)
         yield action.message
+        return
+
+    if isinstance(action, FireSMS):
+        # Bug H — send_sms tool dispatch under apply_turn (flag=1).
+        # Validates that there is a successful calc result in session
+        # history and a phone number on file; otherwise speaks a
+        # deterministic fallback rather than firing a no-op tool call.
+        import asyncio as _asyncio_sms
+        from .tools import get_tool as _get_tool
+
+        _calls = (
+            list(getattr(session, "tool_calls_history", []) or [])
+            + list(getattr(session, "tool_calls_this_turn", []) or [])
+        )
+        _last_calc = next(
+            (
+                tc for tc in reversed(_calls)
+                if tc.get("tool") == "calculator"
+                and (tc.get("result") or {}).get("ok")
+            ),
+            None,
+        )
+        _phone = getattr(session, "client_phone", None)
+        if not _last_calc or not _phone:
+            spoken = (
+                "Извините, мне пока нечего отправить. "
+                "Давайте сначала рассчитаем условия."
+            )
+            await tts.say(spoken)
+            yield spoken
+            return
+
+        _calc_tool = _get_tool("calculator")
+        _sms_tool = _get_tool("send_sms")
+        try:
+            _sms_body = _calc_tool.format_sms_body(_last_calc["result"])
+        except Exception:
+            _sms_body = ""
+        if not _sms_tool or not _sms_body:
+            spoken = (
+                "Извините, не удалось подготовить СМС. Пожалуйста, попробуйте позже."
+            )
+            await tts.say(spoken)
+            yield spoken
+            return
+
+        _sms_params = {"phone": _phone, "message": _sms_body}
+        try:
+            await ws.send_json({
+                "type": "tool_call.start",
+                "tool": "send_sms",
+                "params": _sms_params,
+            })
+        except Exception:
+            pass
+        try:
+            _sms_result = await _asyncio_sms.to_thread(
+                _sms_tool.execute, _sms_params, {}
+            )
+            _ok = bool(_sms_result.get("ok", False)) if isinstance(_sms_result, dict) else False
+        except Exception:
+            _ok = False
+            _sms_result = {"ok": False}
+        try:
+            await ws.send_json({
+                "type": "tool_call.done",
+                "tool": "send_sms",
+                "ok": _ok,
+            })
+        except Exception:
+            pass
+        try:
+            session.tool_calls_this_turn.append({
+                "tool": "send_sms",
+                "params": _sms_params,
+                "result": _sms_result if isinstance(_sms_result, dict) else {"ok": _ok},
+            })
+        except Exception:
+            pass
+
+        if _ok:
+            spoken = f"Отправила график платежей по СМС на номер {_phone}."
+        else:
+            spoken = (
+                "Извините, не удалось отправить СМС. "
+                "Попробуйте, пожалуйста, позже или уточните номер."
+            )
+        await tts.say(spoken)
+        yield spoken
         return
 
     if isinstance(action, Noop):

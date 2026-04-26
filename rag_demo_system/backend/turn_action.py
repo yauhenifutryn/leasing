@@ -113,6 +113,25 @@ class FireOORMessage:
 
 
 @dataclass(frozen=True)
+class FireSMS:
+    """Send the last successful calculator result as SMS to the caller.
+
+    Fires when the classifier emits action='sms' (explicit "по смс" /
+    "отправь смс" keywords) on a turn where the session already has a
+    successful calculator result. execute_action's handler looks up
+    the most recent OK calc from session.tool_calls_history, formats
+    the SMS body via calculator.format_sms_body, invokes send_sms
+    with session.client_phone, and speaks a deterministic confirmation.
+
+    Closes the apply_turn vocabulary gap: prior to this action, SMS
+    was unreachable when APPLY_TURN_ENABLED=1 because apply_turn
+    returned FireLLMFallback for SMS-intent turns and the dispatch
+    `return`s before legacy SMS direct-fire code can run.
+    """
+    snapshot: ProfileSnapshot
+
+
+@dataclass(frozen=True)
 class Noop:
     """No emission this turn. Used when a state transition consumed
     the user's confirmation with no follow-up action (e.g.
