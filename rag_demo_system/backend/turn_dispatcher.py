@@ -291,6 +291,28 @@ def _dispatch_once(
 
     # -------- pre-compute: grounded patches + implied flips + partition
     proposed = _grounded_proposed_patches(classifier_output, utterance)
+
+    # Bug Q (live call 730d3aab 2026-04-26): age_years utterance fallback.
+    # The classifier prompt conservatively requires explicit "возраст
+    # техники" context to emit age_years, so a terse "Два года" (answer
+    # to bot's "Сколько лет вашему транспорту?") doesn't get extracted.
+    # Profile stays missing age_years, bot keeps asking the same question.
+    # Mirror the legacy fallback at app.py:1500-1512 — when condition_new=0
+    # AND profile.age_years is None AND classifier didn't emit age_years,
+    # try utterance_grounding's word-form age extractor.
+    if (
+        "age_years" not in proposed
+        and getattr(profile, "age_years", None) is None
+        and getattr(profile, "condition_new", None) == 0
+    ):
+        try:
+            from .utterance_grounding import extract_age_years_from_utterance
+            _fb_age = extract_age_years_from_utterance(utterance or "")
+            if _fb_age is not None:
+                proposed["age_years"] = _fb_age
+        except Exception:  # noqa: BLE001
+            pass
+
     proposed.update(derive_implied_flips(profile, proposed))
     first_time, delta = partition_patches(profile, proposed)
 
@@ -515,10 +537,23 @@ def _dispatch_once(
     # the deterministic "аннуитет или линейный?" prompt. Allow CONFIRMED
     # + incomplete to also enter clarify so the missing-slot ask fires
     # deterministically.
+    # Bug R (live call 730d3aab 2026-04-26): a bare affirmation like
+    # "Давай" classified as intent=CONVERSATION/RAG fails _is_calc_intent
+    # but the user is clearly mid-leasing-flow. When profile has any
+    # core field captured (subject/client_type/cost), treat the user as
+    # being in calc context and emit clarify for the missing slot. This
+    # prevents the LLM-fallback from inventing defaults like "аннуитет"
+    # for type_schedule that the user never specified.
+    _has_any_core_field = any(
+        getattr(profile, f, None) is not None
+        for f in ("client_type", "subject", "cost", "currency",
+                  "condition_new", "term_months", "prepaid_pct",
+                  "prepaid_amount", "type_schedule")
+    )
     if (
         not profile.is_complete_for_calc()
         and profile.state in (ProfileState.COLLECTING, ProfileState.CONFIRMED)
-        and _is_calc_intent(classifier_output)
+        and (_is_calc_intent(classifier_output) or _has_any_core_field)
     ):
         return EmitClarify(
             missing=sorted(profile.missing_fields()),

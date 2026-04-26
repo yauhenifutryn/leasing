@@ -339,11 +339,18 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
         # User says "на 7 лет" → classifier emits term_months=84.
         # The digits "84" never appear in the utterance, so require the
         # whole-year equivalent to match.
+        # Bug Q (live call 730d3aab 2026-04-26): tightened to require an
+        # explicit term-context cue ("на X лет", "срок X лет"). Bare
+        # "X лет/года" alone (response to "сколько лет машине?") was
+        # spuriously grounding term_months and confusing downstream
+        # narration. Real "term-as-years" mentions universally use "на"
+        # ("на семь лет") or "срок" ("срок 5 лет"), so requiring one of
+        # those keeps the legitimate path while filtering age responses.
         if field == "term_months":
             if _int > 0 and _int % 12 == 0:
                 _years = _int // 12
                 if re.search(
-                    rf"\b{_years}\s*(?:лет\b|год\w*|года\b)",
+                    rf"\b(?:на|срок\w*)\s+(?:в\s+)?{_years}\s*(?:лет\b|год\w*|года\b)",
                     utterance,
                     re.IGNORECASE,
                 ):
