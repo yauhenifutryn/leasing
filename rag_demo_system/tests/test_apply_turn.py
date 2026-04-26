@@ -1828,3 +1828,186 @@ def test_silent_client_type_from_other_reference_no_longer_captured():
         f"with no captured fields, RAG turn drifts to LLM — "
         f"got {type(action).__name__}"
     )
+
+
+# ============================================================ Issues 2+3
+# Live call 5fa0bb3d 2026-04-26: post-calc, last_offer="sms" stamped.
+# User says "А, хорошо, а можно всё-таки другой график сделать?"
+# (action=change_param, change_field=type_schedule, change_value
+# could not be grounded — no annuity/linear cue). Two regressions:
+#
+# Issue 2 — last_offer="sms" leaks into the next turn. User's "Да"
+#   matches step 5c (last_offer + is_confirmation + no change_field +
+#   action != change_param) → FireSMS instead of recalc.
+#
+# Issue 3 — falling through to FireLLMFallback hallucinates a
+#   change-confirm ("Меняем тип графика на равные платежи, верно?")
+#   without staging anything, leading the user to confirm a non-
+#   existent change.
+
+
+def test_change_intent_without_value_clears_last_offer_and_clarifies():
+    """Issue 3: bare change-intent emits a deterministic clarify keyed
+    by change_field instead of falling through to LLM fallback."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "А, хорошо, а можно всё-таки другой график сделать?"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "action": "change_param",
+            "change_field": "type_schedule",
+            "is_confirmation": False,
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=2)
+
+    # Issue 3: deterministic clarify, not LLM fallback.
+    assert isinstance(action, EmitClarify), (
+        f"bare change-intent must clarify, got {type(action).__name__}"
+    )
+    assert "type_schedule" in action.missing
+    # Issue 2: last_offer cleared so next "Да" can't fire SMS via 5c.
+    assert p.last_offer is None
+
+
+def test_change_intent_no_field_still_clears_last_offer():
+    """Issue 2 (Fix 2): change_param without change_field still clears
+    last_offer so a follow-up bare-Да doesn't trigger 5c→FireSMS."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "хочу что-то поменять"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "action": "change_param",
+            "is_confirmation": False,
+        },
+        context={"utterance": utt},
+    )
+    apply_turn(p, co, utt, turn_id=2)
+    # last_offer cleared even when no specific field was identified —
+    # the user has signaled intent to change, the SMS offer is stale.
+    assert p.last_offer is None
+
+
+def test_change_field_set_without_action_change_param_clears_last_offer():
+    """Fix 2: change_field is the broader signal — even without
+    action=change_param, presence of change_field clears last_offer."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "линейный"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": False,
+            "change_field": "type_schedule",
+            "change_value": "1",
+        },
+        context={"utterance": utt},
+    )
+    apply_turn(p, co, utt, turn_id=2)
+    assert p.last_offer is None
+
+
+def test_bare_da_after_calc_no_change_mention_still_fires_sms():
+    """Sanity guard: Fix 2 must NOT break the canonical "Да → SMS"
+    path when the user is genuinely confirming the post-calc SMS offer
+    (no change-intent signaled)."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_action import FireSMS
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "Да"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": True,
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=2)
+    assert isinstance(action, FireSMS), (
+        f"bare-Да after SMS offer must fire SMS, got {type(action).__name__}"
+    )
+
+
+def test_change_intent_with_grounded_value_routes_to_change_confirm():
+    """Counterpart to Fix 3 clarify: when change_value DOES ground,
+    step 4 stages EmitChangeConfirm normally (no clarify, no LLM)."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "Поменяй на линейный"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "action": "change_param",
+            "change_field": "type_schedule",
+            "change_value": "1",
+            "is_confirmation": False,
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=2)
+    assert isinstance(action, EmitChangeConfirm)
+    # Step 4 already clears last_offer; this is the same invariant
+    # via a different code path.
+    assert p.last_offer is None
+
+
+def test_change_intent_prepaid_pct_clarify_uses_canonical_label():
+    """Fix 3: clarify message routing — prepaid_pct/prepaid_amount must
+    map to the canonical "prepaid" key so build_clarification_prompt's
+    existing branch fires (otherwise the renderer prints the raw field
+    name to the caller)."""
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "поменяй аванс"
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "action": "change_param",
+            "change_field": "prepaid_pct",
+            "is_confirmation": False,
+        },
+        context={"utterance": utt},
+    )
+    action = apply_turn(p, co, utt, turn_id=2)
+    assert isinstance(action, EmitClarify)
+    assert "prepaid" in action.missing

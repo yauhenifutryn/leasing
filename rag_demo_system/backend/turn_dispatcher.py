@@ -552,6 +552,40 @@ def _dispatch_once(
             snapshot=build_snapshot(profile),
         )
 
+    # Issues 2 + 3 (live call 5fa0bb3d 2026-04-26): the user signaled
+    # change intent (action="change_param" or change_field set) but no
+    # grounded value landed. Two regressions to close:
+    #   (Fix 2) last_offer="sms" must be cleared so a follow-up bare-Да
+    #     can't slot into step 5c → FireSMS. Step 4 already clears
+    #     last_offer when delta exists; this widens the rule to the
+    #     no-grounded-value case.
+    #   (Fix 3) when change_field is set but didn't ground into proposed,
+    #     emit a deterministic clarify keyed by change_field instead of
+    #     falling through to FireLLMFallback. Without this, the LLM
+    #     hallucinates a change-confirm and the user confirms a change
+    #     that was never staged.
+    # prepaid_pct / prepaid_amount route to the canonical "prepaid" key
+    # so build_clarification_prompt's existing branch fires.
+    _change_intent = (
+        classifier_output.action == "change_param"
+        or classifier_output.change_field is not None
+    )
+    if _change_intent:
+        profile.last_offer = None
+    if (
+        classifier_output.action == "change_param"
+        and classifier_output.change_field is not None
+        and classifier_output.change_field not in proposed
+    ):
+        cf = classifier_output.change_field
+        missing_label = (
+            "prepaid" if cf in ("prepaid_pct", "prepaid_amount") else cf
+        )
+        return EmitClarify(
+            missing=[missing_label],
+            snapshot=build_snapshot(profile),
+        )
+
     # STEP 4 (E6 fix): any delta on a captured field → EmitChangeConfirm.
     # Covers explicit change_field pairs AND top-level field flips on
     # captured fields (E7b uniformity) AND implied cross-field flips
