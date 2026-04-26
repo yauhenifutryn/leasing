@@ -32,6 +32,17 @@ _NON_NAME_BLACKLIST: frozenset[str] = frozenset({
     "имя", "имени", "без имени",
     "никто", "никого",
     "n/a", "na", "none", "null", "unknown",
+    # Bug O (live call 42b6e6bf 2026-04-26): caller said "Привет, Ксения,
+    # подскажи..." (addressing the bot). Classifier extracted name="Ксения"
+    # → profile.name=Ксения. Sticky-name-guard then locked "Никита" out on
+    # the later self-introduction turn ("Хорошо, я кстати Никита"). The
+    # bot-role words below are unambiguously NOT client names. The bot's
+    # actual name "Ксения" / "Ксюша" is NOT in this static blacklist
+    # because real clients can have those names — vocative-vs-self-intro
+    # detection lives at apply_turn's name-capture site (turn_dispatcher.py
+    # step ~313) where utterance context is available.
+    "помощница", "помощник", "ассистент",
+    "робот", "бот", "автоответчик",
 })
 
 

@@ -325,7 +325,25 @@ def _dispatch_once(
     # FireLLMFallback prompt anchor.
     sa_name = (getattr(classifier_output, "name", None) or "").strip()
     if sa_name and not (profile.name or "").strip():
-        profile.name = sa_name
+        # Bug O (live call 42b6e6bf 2026-04-26): when the user addresses
+        # the bot ("Привет, Ксения, подскажи..."), the classifier extracts
+        # name="Ксения" — the bot's persona, not the caller. Reject the
+        # bot's name unless the utterance shows an explicit
+        # self-introduction. Real clients named Ксения/Ксюша still work
+        # via "я Ксения" / "меня зовут Ксения" patterns.
+        import re as _re_name
+        _bot_names = ("ксения", "ксюша")
+        if sa_name.lower() in _bot_names:
+            _utt_lower = (utterance or "").lower()
+            _is_self_intro = bool(_re_name.search(
+                r"\b(я|меня\s+зовут|меня\s+звать|зовите\s+меня|это\s+я)"
+                r"\s+(ксения|ксюша)\b",
+                _utt_lower,
+            ))
+            if not _is_self_intro:
+                sa_name = ""
+        if sa_name:
+            profile.name = sa_name
 
     # Mixed-category clarify: when the classifier explicitly signals
     # `action == "clarify"` AND a client_type delta is present AND the
@@ -487,9 +505,19 @@ def _dispatch_once(
     # / CHANGE_PENDING / CONFIRMED since those have their own follow-up
     # paths (the user's response is interpreted as confirm/deny, not as
     # additional field-fill).
+    # Bug P (live call 42b6e6bf 2026-04-26): step 5b previously only fired
+    # on COLLECTING. After a successful change-confirm cycle (e.g. user
+    # changed subject from Грузовой → Легковой), state transitions to
+    # CONFIRMED. If a downstream slot is still missing (e.g. type_schedule
+    # was never captured because subject change reset the implicit
+    # confirmation chain), apply_turn previously fell through to
+    # FireLLMFallback — bot LLM-narrated about params instead of asking
+    # the deterministic "аннуитет или линейный?" prompt. Allow CONFIRMED
+    # + incomplete to also enter clarify so the missing-slot ask fires
+    # deterministically.
     if (
         not profile.is_complete_for_calc()
-        and profile.state == ProfileState.COLLECTING
+        and profile.state in (ProfileState.COLLECTING, ProfileState.CONFIRMED)
         and _is_calc_intent(classifier_output)
     ):
         return EmitClarify(
