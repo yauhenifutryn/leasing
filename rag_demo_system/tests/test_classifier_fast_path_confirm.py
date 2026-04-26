@@ -19,16 +19,20 @@ def test_fast_confirm_block_present():
     assert "ProfileState.CHANGE_PENDING" in src, "state gate missing"
 
 
-def test_fast_confirm_sets_correct_flags():
+def test_fast_confirm_synthesises_classifier_output():
     src = _APP_PY.read_text(encoding="utf-8")
-    # In the _fast_confirm block, both flags must be set:
-    #   _sa_is_confirm = True
-    #   needs_tool = False
-    # and _skip must include _fast_confirm so classifier is bypassed.
+    # In the _fast_confirm block apply_turn is the sole consumer, so the
+    # block must synthesise a ClassifierOutput with is_confirmation=True
+    # and `_skip` must include `_fast_confirm` so the classifier call is
+    # bypassed entirely.
     idx = src.index("if _fast_confirm:")
     block = src[idx : idx + 600]
-    assert "needs_tool = False" in block, "fast-path must set needs_tool False"
-    assert "_sa_is_confirm = True" in block, "fast-path must set _sa_is_confirm True"
+    assert "ClassifierOutput.model_validate" in block, (
+        "fast-path must synthesise a ClassifierOutput for apply_turn"
+    )
+    assert '"is_confirmation": True' in block, (
+        "fast-path synthesised output must carry is_confirmation=True"
+    )
 
     # The skip flag must include _fast_confirm.
     skip_idx = src.index("_skip = (", idx)

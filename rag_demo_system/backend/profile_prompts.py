@@ -281,11 +281,10 @@ def render_calc_result(result: dict[str, Any]) -> str:
     # Issue #5 (live call cdbcf56b 2026-04-26): "мес." was spoken as
     # "мес" (clipped). Spell out "месяцев" so TTS pronounces the full
     # word. No abbreviation-expansion dependency.
-    # Issue #3 (live call cdbcf56b): under APPLY_TURN_ENABLED=1 the
-    # FireCalc handler speaks render_calc_result verbatim and returns —
-    # no follow-up offer was appended, so the caller had to volunteer
-    # "СМС" or "линейный" without prompting. Append the canonical
-    # post-calc offer (mirrors the legacy LLM prompt at app.py:2956).
+    # Issue #3 (live call cdbcf56b): the FireCalc handler speaks
+    # render_calc_result verbatim and returns — no follow-up offer was
+    # appended, so the caller had to volunteer "СМС" or "линейный"
+    # without prompting. Append the canonical post-calc offer.
     return (
         f"{conv_prefix}"
         f"Аванс {_fmt_pct(params.get('prepaid', 30))}%: "

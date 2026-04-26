@@ -530,12 +530,10 @@ def _dispatch_once(
         )
 
     # STEP 6b (Bug H, live call 504eace0 2026-04-26): SMS request →
-    # FireSMS. apply_turn previously had no FireSMS in its vocabulary,
-    # so SMS-intent turns dispatched FireLLMFallback and the orchestrator
-    # `return`d at app.py:2048 before reaching the legacy SMS direct-fire
-    # code — SMS could not fire under APPLY_TURN_ENABLED=1. The handler
-    # in execute_action validates session has a successful calc and a
-    # phone number; if not, it speaks a deterministic fallback.
+    # FireSMS. Prior to this action, apply_turn dispatched FireLLMFallback
+    # for SMS-intent turns and SMS never fired. The handler in
+    # execute_action validates session has a successful calc and a phone
+    # number; if not, it speaks a deterministic fallback.
     if classifier_output.action == "sms":
         return FireSMS(snapshot=build_snapshot(profile))
 

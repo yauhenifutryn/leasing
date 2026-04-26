@@ -1,14 +1,9 @@
-"""Parity harness for APPLY_TURN_ENABLED=1 path.
+"""Scripted-turn harness for the apply_turn / execute_action dispatch.
 
 Drives scripted turn sequences through the apply_turn / execute_action
 pipeline with every external I/O stubbed (LLM tokens fixed, TTS
 captured, calc result fixed, RAG fragment fixed). Asserts the
 externally-observable sequence (TTS text + tool events) per turn.
-
-The legacy path side of the parity check is added in Task 10 once a
-callable wrapper around app.py's 5-gate block is extracted. For now
-this harness ensures the apply_turn path produces consistent,
-deterministic behavior for the MVP happy-path scenario.
 """
 from __future__ import annotations
 

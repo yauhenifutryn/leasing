@@ -123,10 +123,9 @@ class FireSMS:
     the SMS body via calculator.format_sms_body, invokes send_sms
     with session.client_phone, and speaks a deterministic confirmation.
 
-    Closes the apply_turn vocabulary gap: prior to this action, SMS
-    was unreachable when APPLY_TURN_ENABLED=1 because apply_turn
-    returned FireLLMFallback for SMS-intent turns and the dispatch
-    `return`s before legacy SMS direct-fire code can run.
+    Closes the apply_turn vocabulary gap: prior to this action, SMS-
+    intent turns dispatched FireLLMFallback and never reached the
+    SMS sender.
     """
     snapshot: ProfileSnapshot
 
