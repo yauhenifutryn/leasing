@@ -111,6 +111,6 @@ Update this file atomically as work progresses. Include commit SHA next to compl
 | CP-3.6 (high #1) | 73ccd9a | 2026-04-26 | Codex HIGH: `apply_pending_change()` return value now honoured — locked/unknown payloads re-emit EmitChangeConfirm instead of advancing to FireCalc on stale terms. |
 | CP-3.6 (P1+P2) | 32b3324 | 2026-04-26 | Codex P1: utterance-fallback extractors re-wired into apply_turn pre-compute. Codex P2: `memory_block` threaded through FireLLMFallback prompt via `session.memory_block`. 5 regression tests added. |
 | (provisioner) | f5f54bb | 2026-04-26 | vLLM 0.19 cudagraph accounting fix: `gpu_memory_utilization` tiers bumped ~+0.10 (H100 80GB: 0.60→0.70). Fixes "Available KV cache memory: -0.3 GiB" engine-refused-to-start on fresh VMs. |
-| refactor-v1 | (set after this commit) | 2026-04-26 | Section 3 close. Live SIP test on call bf7a95a8 GREEN: full happy path + USD→BYN + change-confirm recalc + SMS + post-calc RAG (Codex P2 fix verified). |
+| refactor-v1 | 2a41330 | 2026-04-26 | Section 3 close. Live SIP test on call bf7a95a8 GREEN: full happy path + USD→BYN + change-confirm recalc + SMS + post-calc RAG (Codex P2 fix verified). |
 
 (Append rows as checkpoints complete.)
