@@ -1351,3 +1351,105 @@ def test_year_form_term_phase_drops_misattributed_age() -> None:
     apply_turn(p, co, "на пять лет", turn_id=1)
     assert p.term_months == 60
     assert p.age_years is None  # condition_new=1 disqualifies age
+
+
+# ---------------------------------------------------------------------------
+# Codex CP-3.6 P1: utterance fallback for slots the classifier dropped.
+# ---------------------------------------------------------------------------
+
+def test_utterance_fallback_subject_when_classifier_omits():
+    """Codex CP-3.6 P1: classifier returns intent=RAG with no subject on
+    a calc-prep utterance ('Я думаю взять себе машину'); the utterance-
+    fallback regex must still seed profile.subject so the next turn's
+    capture flow does not re-ask.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    co = ClassifierOutput.model_validate(
+        {"intent": "RAG", "is_confirmation": False},
+        context={"utterance": "Я думаю взять себе машину"},
+    )
+    apply_turn(p, co, "Я думаю взять себе машину", turn_id=1)
+    assert p.subject == "Легковой автомобиль", (
+        f"utterance-fallback subject must seed profile, got {p.subject!r}"
+    )
+
+
+def test_utterance_fallback_skipped_when_profile_field_already_set():
+    """Sticky guarantee: the fallback never overrides an existing value.
+    User says 'хочу машину' but profile.subject is already 'Грузовой' —
+    keep the truck.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(subject="Грузовой автомобиль", state=ProfileState.COLLECTING)
+    co = ClassifierOutput.model_validate(
+        {"intent": "RAG", "is_confirmation": False},
+        context={"utterance": "хочу машину"},
+    )
+    apply_turn(p, co, "хочу машину", turn_id=1)
+    assert p.subject == "Грузовой автомобиль"
+
+
+def test_utterance_fallback_skipped_when_classifier_proposes_field():
+    """If the classifier already proposed subject, the fallback must
+    not double-write a different value.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(state=ProfileState.COLLECTING)
+    co = ClassifierOutput.model_validate(
+        {
+            "intent": "TOOL",
+            "is_confirmation": False,
+            "subject": "Спецтехника",
+        },
+        context={"utterance": "хочу машину под спецтехнику"},
+    )
+    apply_turn(p, co, "хочу машину под спецтехнику", turn_id=1)
+    assert p.subject == "Спецтехника"
+
+
+# ---------------------------------------------------------------------------
+# Codex CP-3.6 P2: memory_block threading into FireLLMFallback prompt.
+# ---------------------------------------------------------------------------
+
+def test_build_fallback_messages_includes_memory_block():
+    """The LLM fallback prompt must prepend the orchestrator-provided
+    memory_block when present so the model sees prior dialogue context.
+    """
+    from backend.turn_dispatcher import _build_fallback_messages
+
+    msgs = _build_fallback_messages(
+        utterance="а где у вас офис?",
+        rag_context=None,
+        snapshot=None,
+        memory_block="Контекст диалога:\nКлиент: привет\nБот: здравствуйте",
+    )
+    content = msgs[0]["content"]
+    assert "Контекст диалога" in content, (
+        "memory_block must be present in fallback prompt"
+    )
+    assert "Сообщение клиента: а где у вас офис?" in content
+    assert content.index("Контекст диалога") < content.index("Сообщение клиента"), (
+        "memory_block must precede the current utterance"
+    )
+
+
+def test_build_fallback_messages_omits_memory_block_when_absent():
+    """memory_block is optional; absence must not introduce empty noise."""
+    from backend.turn_dispatcher import _build_fallback_messages
+
+    msgs = _build_fallback_messages(
+        utterance="привет",
+        rag_context=None,
+        snapshot=None,
+    )
+    assert msgs[0]["content"] == "Сообщение клиента: привет"

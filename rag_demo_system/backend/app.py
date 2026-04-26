@@ -1224,6 +1224,13 @@ async def _stream_voice_response(
     )
     _rag_future_adapter = RagFuture(_rag_task)
 
+    # Codex CP-3.6 P2: stamp the recent-dialogue memory block on the
+    # session so execute_action's FireLLMFallback handler can prepend
+    # it to the LLM prompt — keeps prior-turn context for follow-up
+    # RAG / conversation turns. Mirrors the legacy RAG path's prompt
+    # construction.
+    session.memory_block = memory_block
+
     _action = apply_turn(
         session.client_profile, _sa_output, message or "",
         turn_id=turn_id,

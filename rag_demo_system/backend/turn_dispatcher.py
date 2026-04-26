@@ -81,6 +81,54 @@ def _grounded_proposed_patches(
     return proposed
 
 
+def _apply_utterance_fallbacks(
+    profile: ClientProfile,
+    proposed: dict[str, Any],
+    utterance: str,
+) -> None:
+    """Belt-and-suspenders: when the small classifier omits a slot the
+    user clearly named, run a deterministic utterance regex pass to
+    fill the gap. Fires only when (a) the classifier did not propose
+    the field, and (b) the profile field is currently empty — so a
+    legitimate explicit-change turn cannot be overridden.
+
+    Recovers Codex CP-3.6 P1: e.g. classifier returns intent=RAG on
+    "Я думаю взять себе машину" and skips slot extraction; the regex
+    fallback still seeds profile.subject = "Легковой автомобиль".
+
+    Year-form fields (age_years, term_months) are intentionally
+    excluded — the dedicated phase-aware year-form disambiguation in
+    the caller is the sole writer for those slots.
+    """
+    from . import utterance_grounding as ug
+
+    _FALLBACKS: tuple[tuple[str, Any], ...] = (
+        ("subject", ug.extract_subject_from_utterance),
+        ("client_type", ug.extract_client_type_from_utterance),
+        ("condition_new", ug.extract_condition_new_from_utterance),
+        ("currency", ug.extract_currency_from_utterance),
+        ("prepaid_pct", ug.extract_prepaid_pct_from_utterance),
+        ("type_schedule", ug.extract_type_schedule_from_utterance),
+    )
+    for field_name, extractor in _FALLBACKS:
+        if field_name in proposed:
+            continue
+        if getattr(profile, field_name, None) is not None:
+            continue
+        try:
+            value = extractor(utterance or "")
+        except Exception:  # noqa: BLE001
+            value = None
+        if value is None or value == "":
+            continue
+        # currency fallback is suppressed when the same utterance carries
+        # a cost — the classifier's combined cost+currency capture is
+        # authoritative on those turns and the regex must not second-guess.
+        if field_name == "currency" and "cost" in proposed:
+            continue
+        proposed[field_name] = value
+
+
 def _project_snapshot(
     profile: ClientProfile,
     patches: dict[str, Any],
@@ -310,6 +358,10 @@ def _dispatch_once(
 
     # -------- pre-compute: grounded patches + implied flips + partition
     proposed = _grounded_proposed_patches(classifier_output, utterance)
+    # Codex CP-3.6 P1: if the small classifier dropped a slot the user
+    # clearly named, the deterministic regex fallback fills the gap so
+    # downstream first_time / clarify routing sees the captured field.
+    _apply_utterance_fallbacks(profile, proposed, utterance)
 
     # Year-form disambiguation (Bugs Q + S, 2026-04-26).
     # Russian "X лет/года/год" carries either age-of-vehicle ("Сколько
@@ -901,6 +953,10 @@ async def execute_action(
                 rag_context = await rag_future.result()
             except Exception:
                 rag_context = None
+        # Codex CP-3.6 P2: orchestrator stamps `session.memory_block`
+        # before dispatch so follow-up RAG / conversation turns retain
+        # prior dialogue context. Tolerate absence (unit tests).
+        _memory_block = getattr(session, "memory_block", None) if session is not None else None
         async for chunk in _stream_llm_to_tts(
             utterance=action.user_utterance,
             rag_context=rag_context or action.rag_context,
@@ -908,6 +964,7 @@ async def execute_action(
             backend=backend,
             tts=tts,
             session=session,
+            memory_block=_memory_block,
         ):
             yield chunk
         return
@@ -1063,10 +1120,13 @@ def _build_fallback_messages(
     utterance: str,
     rag_context: Optional[str],
     snapshot: Optional[ProfileSnapshot],
+    memory_block: Optional[str] = None,
 ) -> list[dict]:
     """Assemble the chat messages for the FireLLMFallback stream.
 
     Injects:
+      - `memory_block` (Codex CP-3.6 P2) as recent dialogue context so
+        follow-up RAG / conversation turns retain prior-turn anchors.
       - `snapshot` as anti-hallucination anchor (E7). LLM sees captured
         fields and is instructed not to re-ask them.
       - `rag_context` as KB grounding block.
@@ -1074,6 +1134,9 @@ def _build_fallback_messages(
     `backend.stream(system_prompt=...)` kwarg; this function deliberately
     avoids hardcoding the system prompt path so tests run without it.
     """
+    memory_prefix = ""
+    if memory_block:
+        memory_prefix = str(memory_block) + "\n\n"
     anchor_block = ""
     if snapshot is not None:
         lines = _snapshot_anchor_lines(snapshot)
@@ -1089,7 +1152,9 @@ def _build_fallback_messages(
             "Адреса, числа, ставки бери ТОЛЬКО отсюда):\n\n"
             + str(rag_context) + "\n\n"
         )
-    user_content = f"{anchor_block}{kb_block}Сообщение клиента: {utterance}"
+    user_content = (
+        f"{memory_prefix}{anchor_block}{kb_block}Сообщение клиента: {utterance}"
+    )
     return [{"role": "user", "content": user_content}]
 
 
@@ -1101,6 +1166,7 @@ async def _stream_llm_to_tts(
     backend,
     tts,
     session,
+    memory_block: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """LLM stream → SentenceDetector → phrase-level TTS.
 
@@ -1123,7 +1189,9 @@ async def _stream_llm_to_tts(
     from .sentence_detector import SentenceDetector
     from .text_utils import clean_answer
 
-    messages = _build_fallback_messages(utterance, rag_context, snapshot)
+    messages = _build_fallback_messages(
+        utterance, rag_context, snapshot, memory_block=memory_block,
+    )
     detector = SentenceDetector()
     _fallback = (
         "Извините, сейчас технические неполадки. Попробуйте, пожалуйста, "
