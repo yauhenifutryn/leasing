@@ -261,7 +261,26 @@ def _dispatch_once(
         # pending_change, so the USD→BYN stash logic below can inspect them.
         if not changes and "field" in profile.pending_change:
             changes = {profile.pending_change["field"]: {}}
-        profile.apply_pending_change()
+        # Codex adversarial 2026-04-26 (CP-3.6 high #1): honour the boolean
+        # return. apply_pending_change() returns False when every field in
+        # the staged payload is locked or unknown, and preserves
+        # pending_change for retry. Advancing to CONFIRMED on a False
+        # return would tell the user "applied" while the calculator runs
+        # on the previous, unmodified terms. Re-emit the change-confirm
+        # prompt instead so the state stays in CHANGE_PENDING and the
+        # user is asked again.
+        applied_ok = profile.apply_pending_change()
+        if not applied_ok:
+            print(
+                f"[apply_turn] CHANGE_PENDING confirm rejected: "
+                f"apply_pending_change returned False (locked/unknown fields). "
+                f"Re-emitting change-confirm.",
+                flush=True,
+            )
+            return EmitChangeConfirm(
+                changes=(profile.pending_change or {}).get("changes", {}) or {},
+                snapshot=build_snapshot(profile),
+            )
         # Clear USD→BYN disclosure stash when the user actively switched
         # currency (or cost) away from a prior USD capture. Without this
         # the next calc re-emits "Стоимость 80000 долларов..." even

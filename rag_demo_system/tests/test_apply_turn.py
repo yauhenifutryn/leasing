@@ -993,6 +993,7 @@ def test_step1_apply_pending_change_clears_prepaid_sibling():
 def test_step1_apply_pending_change_respects_locked_fields():
     from backend.session import ClientProfile, ProfileState
     from backend.turn_dispatcher import apply_turn
+    from backend.turn_action import EmitChangeConfirm
     from backend.classifier_schema import ClassifierOutput
 
     p = ClientProfile(
@@ -1013,9 +1014,62 @@ def test_step1_apply_pending_change_respects_locked_fields():
         context={"utterance": "да"},
     )
 
-    apply_turn(p, co, "да", turn_id=1)
+    action = apply_turn(p, co, "да", turn_id=1)
 
+    # Codex CP-3.6 high #1: when apply_pending_change returns False (locked-
+    # only payload), apply_turn must re-emit EmitChangeConfirm — NOT advance
+    # to CONFIRMED with stale data and NOT fire the calculator.
     assert p.cost == 10000.0, "locked field was mutated"
+    assert isinstance(action, EmitChangeConfirm), (
+        f"locked-only pending_change must re-prompt change-confirm, got {type(action).__name__}"
+    )
+    assert p.state == ProfileState.CHANGE_PENDING, (
+        f"profile must stay CHANGE_PENDING on failed apply, got {p.state}"
+    )
+    assert p.pending_change is not None, (
+        "pending_change must be preserved for retry on locked-only payload"
+    )
+
+
+def test_step1_apply_pending_change_rejects_all_unknown_fields():
+    """Codex CP-3.6 high #1: pending_change containing only unknown field
+    names (e.g. 'prepaid' instead of 'prepaid_pct') must NOT advance the
+    profile to CONFIRMED or fire the calculator. apply_pending_change()
+    returns False in this case and preserves pending_change for retry.
+    """
+    from backend.session import ClientProfile, ProfileState
+    from backend.turn_dispatcher import apply_turn
+    from backend.turn_action import EmitChangeConfirm
+    from backend.classifier_schema import ClassifierOutput
+
+    p = ClientProfile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=10000.0,
+        currency="BYN",
+        condition_new=1,
+        term_months=24,
+        prepaid_pct=20.0,
+        type_schedule="0",
+        state=ProfileState.CHANGE_PENDING,
+        # 'prepaid' is not a real ClientProfile attribute — only
+        # prepaid_pct / prepaid_amount are. Simulates classifier drift
+        # that staged a malformed payload via a prior CHANGE_PENDING turn.
+        pending_change={"changes": {"prepaid": {"old": 20.0, "new": 30.0}}},
+    )
+    co = ClassifierOutput.model_validate(
+        {"intent": "CONVERSATION", "is_confirmation": True},
+        context={"utterance": "да"},
+    )
+
+    action = apply_turn(p, co, "да", turn_id=1)
+
+    assert p.prepaid_pct == 20.0, "unrelated profile field must not change"
+    assert isinstance(action, EmitChangeConfirm), (
+        f"unknown-field pending_change must re-prompt change-confirm, got {type(action).__name__}"
+    )
+    assert p.state == ProfileState.CHANGE_PENDING
+    assert p.pending_change is not None
 
 
 def test_step5_first_time_prepaid_amount_clears_pct_sibling():
