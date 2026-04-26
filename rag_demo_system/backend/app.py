@@ -4155,6 +4155,21 @@ async def _jambonz_send_tts(
     if not text:
         return
     print(f"[Jambonz:{session_id[:8]}] TTS synthesizing: {text[:40]}...", flush=True)
+    # Issue (live call ec87a8e1 2026-04-26): Whisper hallucinated "Микро
+    # Лизинг" on residual audio at 02:52:42, slipped through echo_filter
+    # because the consent + intro text spoken via this helper was never
+    # appended to chat_session.transcript — echo_filter only sees the
+    # last 4 transcript turns, so company name / "Ксения" / "голосовая
+    # помощница" said at greeting time were invisible to the filter.
+    # Append the spoken text to transcript here so the existing
+    # is_echo() substring path catches future hallucinations of these
+    # phrases.
+    try:
+        _chat_sess = state.get(session_id)
+        if _chat_sess is not None:
+            _chat_sess.transcript.append({"role": "assistant", "text": text})
+    except Exception:  # noqa: BLE001
+        pass
     try:
         await _speak_tts(text, ws, session_id, session, transport="bytes")
     except Exception as exc:  # noqa: BLE001
