@@ -4,7 +4,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.profile_hygiene import filter_patches
+from backend.profile_hygiene import filter_patches, has_field_signal
 
 
 def test_drops_patches_from_noise_short_utterance():
@@ -208,6 +208,43 @@ def test_numeric_term_with_unit_passes():
     patches = {"term_months": 36}
     result = filter_patches(patches, "36 месяцев")
     assert result.get("term_months") == 36
+
+
+# Bug S (live call 4e522fb5 2026-04-26): years-as-term grounding.
+# Both word-order ("три года срок" / "срок три года") and word-numeral
+# ("на пять лет") forms must ground term_months. These exercise
+# has_field_signal directly (the orchestrator's grounding gate);
+# filter_patches doesn't run grounding for term_months.
+
+def test_term_years_word_form_suffix_срок_grounds():
+    # Live regression: "Ну давай где-то три года срок и аванс 38 процентов."
+    assert has_field_signal(
+        "term_months", 36,
+        "ну давай где-то три года срок и аванс 38 процентов",
+    ) is True
+
+
+def test_term_years_word_form_prefix_на_grounds():
+    assert has_field_signal("term_months", 60, "на пять лет") is True
+
+
+def test_term_years_digit_form_suffix_срок_grounds():
+    assert has_field_signal("term_months", 24, "2 года срок") is True
+
+
+def test_term_years_digit_form_prefix_срок_grounds():
+    # Existing prefix path stays green.
+    assert has_field_signal("term_months", 84, "срок 7 лет") is True
+
+
+def test_term_bare_word_years_without_cue_dropped():
+    # Bug Q regression guard: bare "Два года" (age answer) must NOT
+    # ground term_months even if the classifier mistakenly emits it.
+    assert has_field_signal("term_months", 24, "два года") is False
+
+
+def test_term_bare_digit_years_without_cue_dropped():
+    assert has_field_signal("term_months", 24, "2 года") is False
 
 
 def test_numeric_prepaid_percent_passes():

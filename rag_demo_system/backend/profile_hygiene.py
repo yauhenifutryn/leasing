@@ -346,15 +346,38 @@ def has_field_signal(field: str, value: Any, utterance: str) -> bool:
         # narration. Real "term-as-years" mentions universally use "на"
         # ("на семь лет") or "срок" ("срок 5 лет"), so requiring one of
         # those keeps the legitimate path while filtering age responses.
+        # Bug S (live call 4e522fb5 2026-04-26): also accept suffix
+        # order "X лет/года срок" ("три года срок и аванс 38%"). Real
+        # callers say it both ways; only bare "X лет" without "срок/на"
+        # is the age-confusable form we want to filter.
         if field == "term_months":
             if _int > 0 and _int % 12 == 0:
                 _years = _int // 12
-                if re.search(
-                    rf"\b(?:на|срок\w*)\s+(?:в\s+)?{_years}\s*(?:лет\b|год\w*|года\b)",
-                    utterance,
-                    re.IGNORECASE,
+                _pre = rf"\b(?:на|срок\w*)\s+(?:в\s+)?{_years}\s*(?:лет\b|год\w*|года\b)"
+                _post = rf"\b{_years}\s*(?:лет|год\w*|года)\b\s*срок\w*"
+                if re.search(_pre, utterance, re.IGNORECASE) or re.search(
+                    _post, utterance, re.IGNORECASE
                 ):
                     return True
+                # Word-form: "три года срок", "на пять лет" etc.
+                # Leasing range 12-84 months = 1-7 years.
+                _ru_year_words = {
+                    1: r"(?:один|одного|одна)",
+                    2: r"(?:два|две|двух)",
+                    3: r"(?:три|тр[её]х)",
+                    4: r"(?:четыре|четыр[её]х)",
+                    5: r"пят[ьи]",
+                    6: r"шест[ьи]",
+                    7: r"сем[ьи]",
+                }
+                _word = _ru_year_words.get(_years)
+                if _word:
+                    _w_pre = rf"\b(?:на|срок\w*)\s+(?:в\s+)?{_word}\s+(?:лет|год\w*|года)\b"
+                    _w_post = rf"\b{_word}\s+(?:лет|год\w*|года)\b\s*срок\w*"
+                    if re.search(_w_pre, utterance, re.IGNORECASE) or re.search(
+                        _w_post, utterance, re.IGNORECASE
+                    ):
+                        return True
             # Half-year ("полтора года" → 18, "полгода" → 6)
             if _int == 18 and re.search(r"полтора\s*года", utterance, re.IGNORECASE):
                 return True
