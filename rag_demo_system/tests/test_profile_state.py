@@ -120,28 +120,33 @@ def test_partition_patches_none_new_value_on_captured_field_is_delta() -> None:
 
 # --- derive_implied_flips ---
 
-def test_implied_flip_truck_forces_yur_litso() -> None:
+def test_no_implied_flip_truck_for_phys_lico() -> None:
+    """Bug M (2026-04-26): the truck→Юр auto-flip caused an infinite loop
+    when user re-asserted Физ on a CHANGE_PENDING confirm. The rule was
+    removed; the conflict surfaces via _preflight_calc_policy at readback
+    time as a FireOORMessage instead.
+    """
     profile = ClientProfile(
         client_type="Физическое лицо",
         subject="Легковой автомобиль",
     )
     flips = derive_implied_flips(profile, {"subject": "Грузовой автомобиль"})
-    assert flips == {"client_type": "Юридическое лицо"}
+    assert flips == {}
 
 
-def test_implied_flip_spectech_forces_yur_litso() -> None:
+def test_no_implied_flip_spectech_for_phys_lico() -> None:
     profile = ClientProfile(
         client_type="Физическое лицо",
         subject="Легковой автомобиль",
     )
     flips = derive_implied_flips(profile, {"subject": "Спецтехника"})
-    assert flips == {"client_type": "Юридическое лицо"}
+    assert flips == {}
 
 
-def test_implied_flip_commercial_transport_forces_yur_litso() -> None:
+def test_no_implied_flip_commercial_transport_for_phys_lico() -> None:
     profile = ClientProfile(client_type="Физическое лицо")
     flips = derive_implied_flips(profile, {"subject": "Коммерческий транспорт"})
-    assert flips == {"client_type": "Юридическое лицо"}
+    assert flips == {}
 
 
 def test_no_flip_when_client_type_already_yur() -> None:
@@ -191,8 +196,8 @@ def test_condition_new_1_without_age_years_is_noop() -> None:
 
 
 def test_implied_flips_combined_subject_and_condition() -> None:
-    # Edge case: user says "Грузовой новый" — subject flip + condition flip
-    # in one turn. Both implied flips must appear.
+    # Edge case: user says "Грузовой новый" — only the condition→age_years
+    # wipe still fires (subject→client_type flip was removed in Bug M).
     profile = ClientProfile(
         client_type="Физическое лицо",
         subject="Легковой автомобиль",
@@ -203,7 +208,7 @@ def test_implied_flips_combined_subject_and_condition() -> None:
         profile,
         {"subject": "Грузовой автомобиль", "condition_new": 1},
     )
-    assert flips == {"client_type": "Юридическое лицо", "age_years": None}
+    assert flips == {"age_years": None}
 
 
 # --- build_calc_params ---

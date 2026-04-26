@@ -86,13 +86,20 @@ _COMMERCIAL_SUBJECTS = frozenset({
 def derive_implied_flips(profile: ClientProfile, proposed: dict) -> dict:
     """Compute cross-field flips forced by proposed patches.
 
-    Rule table (spec §5.1):
-      - subject ∈ commercial_subjects AND profile.client_type ==
-        Физическое лицо AND classifier did NOT already flip client_type
-        → implied: client_type = Юридическое лицо.
+    Rule table (spec §5.1, post-Bug-M revision):
       - condition_new becomes 1 (new vehicle) AND profile.age_years is
         not None
         → implied: age_years = None (new vehicle has no age).
+
+    The commercial-subject → Юридическое лицо rule was REMOVED on
+    2026-04-26 after live call 8741ad68 demonstrated the loop: every
+    redispatch from a CHANGE_PENDING confirm re-stages the same flip
+    even when the user just explicitly confirmed Физическое лицо, so
+    the change-confirm cycle never terminates. Eligibility constraints
+    belong in `_preflight_calc_policy` (turn_dispatcher.py:160-179),
+    which surfaces the truck-vs-физлицо conflict as a `FireOORMessage`
+    *after* the user has unambiguously committed both fields. Two
+    turns instead of an infinite loop. (Codex-rescue 2026-04-26.)
 
     Returns a dict {field: new_value} of flips to merge into the
     classifier's proposed patches BEFORE partition_patches runs. The
@@ -101,14 +108,6 @@ def derive_implied_flips(profile: ClientProfile, proposed: dict) -> dict:
     confirmation principle.
     """
     flips: dict = {}
-
-    new_subject = proposed.get("subject", profile.subject)
-    if (
-        new_subject in _COMMERCIAL_SUBJECTS
-        and profile.client_type == "Физическое лицо"
-        and proposed.get("client_type") != "Юридическое лицо"
-    ):
-        flips["client_type"] = "Юридическое лицо"
 
     new_condition = proposed.get("condition_new", profile.condition_new)
     if new_condition == 1 and profile.age_years is not None:

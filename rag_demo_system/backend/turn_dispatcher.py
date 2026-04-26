@@ -171,12 +171,17 @@ def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
     # (2) Reject non-individual subjects for Физ лицо. Spec §6 E8 — only
     #     "Легковой автомобиль" / "Прочий транспорт" are lease-eligible
     #     for individuals; everything else is a ЮЛ-only line of business.
+    # Bug M (live call 8741ad68 2026-04-26): the prior message was purely
+    # informational ("X недоступен для физлиц") and left the user to
+    # figure out the next step alone. Make it actionable: list the two
+    # concrete branches ("выбрать легковой / сменить статус на юрлицо")
+    # so the next user utterance maps cleanly to a single field change.
     subject_lower = (profile.subject or "").lower().strip()
     if is_phys and subject_lower and subject_lower not in _PHYS_ALLOWED_SUBJECTS:
         return FireOORMessage(message=(
-            f"Для физических лиц доступен лизинг только легковых автомобилей "
-            f"и прочего транспорта. {profile.subject} доступен для "
-            f"юридических лиц и ИП."
+            f"{profile.subject} для физических лиц не финансируется. "
+            f"Хотите выбрать легковой автомобиль, или сменить статус "
+            f"на юридическое лицо?"
         ))
 
     # (3) USD → BYN conversion for Физ лицо.
@@ -389,10 +394,20 @@ def _dispatch_once(
     # f7e5aa1d 2026-04-24: "стоимость 10000 RUB" in readback).
     # Side effect: USD→BYN conversion mutates profile.cost/currency so
     # the readback (happy path) speaks BYN with USD disclosure prefix.
+    # Bug L (live call 2635bb30 2026-04-26 + codex-rescue): the original
+    # `not is_confirmation` gate skipped readback even when the user was
+    # supplying brand-new slots in the same breath as an affirmation
+    # ("36 мес, 38%, аннуитет, пожалуйста"). Result: state stayed
+    # COLLECTING, fell through to FireLLMFallback, the LLM narrated a
+    # fake readback question, and the deterministic readback only fired
+    # one or two turns later. Refined gate: skip readback only when this
+    # is a BARE confirmation (no new slots captured this turn). When
+    # first_time is non-empty, the user can't be confirming a readback
+    # they haven't seen — emit it.
     if (
         profile.is_complete_for_calc()
         and profile.state == ProfileState.COLLECTING
-        and not classifier_output.is_confirmation
+        and not (classifier_output.is_confirmation and not first_time)
     ):
         policy_action = _preflight_calc_policy(profile)
         if policy_action is not None:

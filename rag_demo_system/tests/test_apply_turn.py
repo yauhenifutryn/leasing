@@ -275,7 +275,12 @@ def test_e7_snapshot_anchor_invariant_holds_for_any_snapshot_carrying_action() -
 # step 4 folds the flip into the delta set uniformly.
 
 
-def test_e7b_subject_flip_forcing_client_type_emits_paired_confirm() -> None:
+def test_e7b_subject_flip_to_truck_only_changes_subject_not_client_type() -> None:
+    """Bug M (2026-04-26): subject→Грузовой no longer auto-flips client_type
+    to Юр. The change-confirm only mentions the field the user actually
+    changed. The truck+физ conflict is caught at readback/preflight time
+    as a FireOORMessage with two actionable branches (см. apply_turn step
+    5a + _preflight_calc_policy)."""
     profile = make_complete_profile(
         subject="Легковой автомобиль",
         client_type="Физическое лицо",
@@ -291,10 +296,8 @@ def test_e7b_subject_flip_forcing_client_type_emits_paired_confirm() -> None:
     action = apply_turn(profile, classifier, utterance=utterance)
     assert isinstance(action, EmitChangeConfirm)
     assert "subject" in action.changes
-    assert "client_type" in action.changes
+    assert "client_type" not in action.changes  # no auto-flip
     assert action.changes["subject"]["new"] == "Грузовой автомобиль"
-    assert action.changes["client_type"]["old"] == "Физическое лицо"
-    assert action.changes["client_type"]["new"] == "Юридическое лицо"
     assert profile.state == ProfileState.CHANGE_PENDING
     # Profile fields NOT mutated yet — confirmation gates the change.
     assert profile.subject == "Легковой автомобиль"
