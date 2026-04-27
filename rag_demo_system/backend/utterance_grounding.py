@@ -100,7 +100,12 @@ _GENERIC_CAR_RE = re.compile(r"\b(машин\w*|автомобил\w*|авто)\
 # stray numerals from term answers ("60 месяцев", "84") never grab a
 # spurious age.
 _AGE_YEARS_RE = re.compile(
-    r"\b(\d{1,2})\s*(?:лет|года|год|годов|г\.?)\b",
+    # Forward form: "5 лет" / "3 года" / "1 год".
+    # Inverted form (Polish E 2026-04-27, live call 56c0e2f9): "лет на 5"
+    # — STT often surfaces this word order when the user thinks aloud
+    # ("на, например, лет на 5"). Both forms match the same numeric.
+    r"\b(?:(\d{1,2})\s*(?:лет|года|год|годов|г\.?)|"
+    r"(?:лет|года|год|годов)\s+на\s+(\d{1,2}))\b",
     re.IGNORECASE,
 )
 
@@ -165,8 +170,10 @@ def extract_age_years_from_utterance(utterance: str) -> Optional[int]:
         return None
     m = _AGE_YEARS_RE.search(utterance)
     if m:
+        # Group 1 = forward form ("5 лет"); group 2 = inverted ("лет на 5").
+        digits = m.group(1) or m.group(2)
         try:
-            n = int(m.group(1))
+            n = int(digits)
         except (TypeError, ValueError):
             return None
         if n < 0 or n > 50:

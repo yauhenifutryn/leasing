@@ -160,6 +160,20 @@ def test_age_above_50_rejected() -> None:
     assert extract_age_years_from_utterance("100 лет") is None
 
 
+def test_inverted_form_let_na_n() -> None:
+    """Polish E (live call 56c0e2f9 2026-04-27): user thinks aloud
+    "на, например, лет на 5". The forward-form regex misses because the
+    digit comes AFTER the year-unit word. This case feeds the dispatcher's
+    term_months grounding (`has_field_signal` calls extract_age_years_*
+    when term_months % 12 == 0). Without this fix, classifier emits
+    term_months=60, regex fails, dispatcher drops the patch, bot loops
+    on "Подскажите срок"."""
+    assert extract_age_years_from_utterance("лет на 5") == 5
+    assert extract_age_years_from_utterance("на, например, лет на 5,") == 5
+    assert extract_age_years_from_utterance("года на 7") == 7
+    assert extract_age_years_from_utterance("год на 1") == 1
+
+
 def test_no_year_unit_returns_none() -> None:
     """Bare digits without лет/года must NOT be grounded — could be cost."""
     assert extract_age_years_from_utterance("100 тысяч") is None

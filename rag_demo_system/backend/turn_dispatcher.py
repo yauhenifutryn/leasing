@@ -68,6 +68,20 @@ def _grounded_proposed_patches(
         value = getattr(classifier_output, field_name, None)
         if value is None:
             continue
+        # Polish C 2026-04-27: type_schedule is the only enum field where
+        # users describe BEHAVIOR ("равные платежи", "уменьшающиеся")
+        # rather than NAMING the schedule. Verbatim cue grounding fights
+        # the classifier prompt's semantic instructions. Trust the
+        # classifier on intent=TOOL — same shape as the change-pair fix
+        # below and the schema-layer fix in classifier_schema.py. Pydantic
+        # Literal["0", "1"] still enforces enum validity. Other enum
+        # fields keep verbatim grounding because users name them directly.
+        if (
+            field_name == "type_schedule"
+            and classifier_output.intent == "TOOL"
+        ):
+            proposed[field_name] = value
+            continue
         if value_grounded(field_name, value, utterance):
             proposed[field_name] = value
 
