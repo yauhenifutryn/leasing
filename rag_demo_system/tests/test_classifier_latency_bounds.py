@@ -32,10 +32,11 @@ def test_classifier_max_tokens_bound():
     marker = "Ты SessionAgent голосового бота"
     assert marker in src
     idx = src.index(marker)
-    # Look for the max_tokens line within ~8000 chars of the system prompt
-    # (the SessionAgent prompt itself is ~4500 chars; add headroom for the
+    # Look for the max_tokens line within ~10000 chars of the system prompt
+    # (the SessionAgent prompt is ~5500 chars after the 2026-04-27 mid-collection
+    # RAG-drift priority block was added; add headroom for the
     # call_openai_compatible args block that follows).
-    block = src[idx : idx + 8000]
+    block = src[idx : idx + 10000]
     # max_tokens must stay <=180 to keep latency bounded. 160 is the current
     # safe value (full JSON ~140 tokens + 20 headroom).
     import re as _re
