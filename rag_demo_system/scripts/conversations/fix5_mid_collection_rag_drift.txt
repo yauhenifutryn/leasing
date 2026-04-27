@@ -1,0 +1,20 @@
+# Fix 5 — semantic intent priority for mid-collection RAG drift
+#
+# Context: bot collecting params, user drifts to a RAG question
+# ("кто владелец / кто директор / какой адрес"). Classifier was
+# previously biased toward intent=TOOL on these turns due to sticky
+# calc-context and apply_turn re-emitted the clarify. Polish 5 added
+# an explicit priority rule to the SessionAgent prompt.
+#
+# Expected behavior (Polish 5 commit 2a1d192):
+#   - Turn 4 ("А кто владелец компании?"): ACTION=FireLLMFallback
+#     on the FIRST attempt. Profile fields preserved.
+#   - Turn 5 ("Понял, спасибо. Давай продолжим."): bot resumes from
+#     the missing slot via EmitClarify (condition_new still missing).
+
+Привет, я Евгений.
+Хочу рассчитать машину за 100 тысяч долларов.
+Я физическое лицо.
+А кто владелец компании?
+Понял, спасибо. Давай продолжим.
+Подержанный, два года.

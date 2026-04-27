@@ -1,0 +1,29 @@
+# Full happy-path smoke — calc + change + SMS + post-SMS RAG
+#
+# Exercises the full Section 3 + polish lineage in one conversation:
+# RAG, calc collection, readback confirm, calc fire, recalc cycle,
+# SMS, post-SMS RAG (Fix 4 — no calc re-fire on "Спасибо.").
+#
+# Expected progression:
+#   - Turn 1: name + RAG → FireLLMFallback
+#   - Turn 2-7: collecting calc params → EmitClarify chain
+#   - Turn 8: complete → EmitReadback
+#   - Turn 9: confirm → FireCalc
+#   - Turn 10: change schedule → EmitChangeConfirm
+#   - Turn 11: confirm change → FireCalc (recalc)
+#   - Turn 12: send SMS → FireSMS
+#   - Turn 13 (Fix 4 probe): "Спасибо. Кто владелец?" → FireLLMFallback,
+#     NOT a calc re-fire.
+
+Привет, меня зовут Никита. Какой у вас адрес в Минске?
+Хочу рассчитать машину 100 тысяч долларов.
+Физическое лицо.
+Подержанный, два года.
+Срок три года.
+Аванс 30 процентов.
+Линейный график.
+Верно.
+Поменяй на аннуитетный.
+Да.
+Отправь СМС.
+Спасибо. А кто владелец компании?

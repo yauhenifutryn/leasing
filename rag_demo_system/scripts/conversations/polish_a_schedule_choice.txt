@@ -1,0 +1,22 @@
+# Polish A — semantic prior-utterance reasoning for schedule choice
+#
+# Context: bot has been collecting calc params, all fields filled except
+# type_schedule. Bot asks the schedule clarify, user asks for a comparison,
+# bot explains both options. User then references the comparison via
+# "тот, что дешевле" — classifier should resolve to type_schedule="1"
+# (linear) using the bot's prior explanation as context.
+#
+# Expected behavior with Polish A (commit on top of 393052a):
+#   - Turn 5 ("А какое лучше? В чём их разница?"): drift to LLM.
+#   - Turn 6 ("Давай тот, что дешевле."): ACTION=EmitChangeConfirm
+#     with changes={type_schedule: "1"}. NOT EmitClarify retry.
+#
+# Pre-Polish-A behavior: turn 6 hit the unfilled-field clarify and looped.
+
+Привет, я Никита.
+Хочу рассчитать лизинг на машину 100 тысяч долларов, физическое лицо.
+Поддержанный, два года.
+Срок 36 месяцев, аванс 30 процентов.
+А какое лучше? В чём их разница?
+Давай тот, что дешевле.
+Да.
