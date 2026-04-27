@@ -856,6 +856,40 @@ def _dispatch_once(
             snapshot=build_snapshot(profile),
         )
 
+    # Issue 3a (live call d5174335 2026-04-27): fail-closed safety net.
+    # If profile is calc-complete AND user is confirming AND we entered
+    # this turn from a pre-calc state, the user is ALWAYS waiting for a
+    # calc result — not for the LLM to chat. Falling through to
+    # FireLLMFallback let the LLM fabricate calc numbers
+    # ("аванс составит 30 тысяч долларов, ежемесячный платеж 4167")
+    # without ever invoking the calculator tool.
+    # If we landed here despite all prior step gates, the safer action
+    # is FireCalc — worst case it produces the same result twice; best
+    # case it covers the race / barge-in / state-mutation gap that put
+    # us in the catch-all. Layered with the LLM prompt anti-fabrication
+    # clause shipped in the same wave.
+    # Pre-calc states only — sticky CONFIRMED is excluded because Fix 4
+    # (call 2ab41112) explicitly catches the "post-calc thank-you-plus-
+    # question" pattern there ("Спасибо. Кто владелец?") and routes to
+    # RAG / FireLLMFallback, NOT a calc re-fire. The safety net is for
+    # the readback→confirm and change-pending→confirm flows where the
+    # user is actively trying to get a calc result and a barge-in /
+    # state race would otherwise drop them into FireLLMFallback.
+    if (
+        profile.is_complete_for_calc()
+        and classifier_output.is_confirmation
+        and pre_turn_state in (
+            ProfileState.READBACK_PENDING,
+            ProfileState.CHANGE_PENDING,
+        )
+        and classifier_output.intent != "RAG"
+    ):
+        profile.state = ProfileState.CONFIRMED
+        return FireCalc(
+            calc_params=build_calc_params(profile),
+            snapshot=build_snapshot(profile),
+        )
+
     # STEP 8 (catch-all): freeform question, state-pending deny without
     # correction, or any non-structural turn → FireLLMFallback. Snapshot
     # included when any field is captured so LLM prompt has E7 anchor.

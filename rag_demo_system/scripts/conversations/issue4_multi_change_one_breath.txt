@@ -1,0 +1,25 @@
+# Issue 4 — multi-parameter change captures BOTH fields
+#
+# Live call d5174335 (2026-04-27): user said "поменяем аванс на 0% и
+# срок 84 месяца" — classifier picked term_months=84 via change_field/
+# change_value pair and dropped prepaid_pct=0. Bot only acknowledged
+# one change.
+#
+# After Issue 4 fix: classifier prompt now teaches multi-change emission
+# via TOP-LEVEL field values (term_months=84, prepaid_pct=0) WITHOUT
+# using change_field/change_value pair (which is for single changes).
+# Dispatcher's partition_patches → delta naturally handles N>=2 changes
+# via top-level patches.
+#
+# Expected behavior:
+#   - Turn 6 multi-change → RAW shows term_months=84, prepaid_pct=0,
+#     change_field=null. ACTION = EmitChangeConfirm with TWO changes
+#     in the changes dict.
+#   - Turn 7 ("Да.") → FireCalc with new term=84, prepaid=0.
+
+USER: Привет, я Сергей.
+USER: Хочу машину BMW, новую, 40 тысяч долларов, физическое лицо.
+USER: Срок 36 месяцев, аванс 20 процентов, аннуитет.
+USER: Да.
+USER: А поменяй срок на 60 и аванс на 30 процентов.
+USER: Да.

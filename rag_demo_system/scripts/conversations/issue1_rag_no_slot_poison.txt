@@ -1,0 +1,26 @@
+# Issue 1 — RAG turns must not poison profile slots
+#
+# Live call d5174335 (2026-04-27): user asked "адреса офисов" → classifier
+# extracted subject="Недвижимость" from word "офис" → schema accepted
+# (verbatim cue match) → profile poisoned. Subsequent BMW turn was
+# misrouted as a CHANGE confirm rather than first-fill.
+#
+# After Issue 1 fix: when intent=RAG, schema-layer drops ALL leasing
+# slots (subject, cost, currency, client_type, etc.) regardless of
+# verbatim cue match. RAG turns are company questions, not parameter
+# capture turns.
+#
+# Expected behavior:
+#   - Turn 2 (RAG question about offices) → classifier returns intent=RAG.
+#     Schema drops subject if classifier extracted Недвижимость.
+#     BOT line below replaces stub for context.
+#   - Turn 3 (BMW + cost + client type, intent=TOOL) → first-fill, no
+#     "change subject" framing. Profile fills cleanly. Bot proceeds to
+#     ask for missing fields (срок, аванс, график).
+
+USER: Привет, я Сергей.
+USER: А подскажите адреса офисов где к вам можно прийти?
+BOT: У нас офисы в Минске, Гомеле, Бресте, Витебске, Гродно и Могилеве. В каком городе вам удобнее?
+USER: Машина BMW, физическое лицо, новая, 40 тысяч долларов.
+USER: Срок 36 месяцев, аванс 30 процентов, аннуитет.
+USER: Да.

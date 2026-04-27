@@ -1,0 +1,24 @@
+# Issue 5 — SMS must NOT fire on "Да." after a change-confirm
+#
+# Live call d5174335 (2026-04-27): calc OK → bot offered SMS
+# (last_offer="sms") → user "вернёмся к равным" → bot EmitChangeConfirm
+# (Bug J fix should clear last_offer=None) → user "Да." → SMS fired
+# instead of FireCalc with new params.
+#
+# Expected behavior post-investigation:
+#   - Turn 6 (calc) → FireCalc → bot speaks result, offers SMS.
+#   - Turn 7 (change request) → EmitChangeConfirm. last_offer cleared.
+#   - Turn 8 ("Да.") → step 1 applies change → redispatch → step 6
+#     FireCalc with NEW type_schedule. NOT SMS.
+#
+# If simulator reproduces SMS-instead-of-calc here, the bug is in
+# state-machine logic. If simulator routes to FireCalc correctly,
+# then the live regression is barge-in-specific (state mutation lost
+# under concurrent message dispatch) — different fix needed.
+
+USER: Привет, я Сергей.
+USER: Хочу машину BMW, новую, 40 тысяч долларов, физическое лицо.
+USER: Срок 36 месяцев, аванс 30 процентов, аннуитет.
+USER: Да.
+USER: Отлично, а вернёмся к линейному графику, тот что дешевле.
+USER: Да.

@@ -550,6 +550,35 @@ class ClassifierOutput(BaseModel):
         ctx = info.context if isinstance(info.context, dict) else {}
         utterance = ctx.get("utterance", "") if ctx else ""
 
+        # --- Step 0: RAG turns must not poison the profile ---
+        # Issue 1 (live call d5174335 2026-04-27): user asked "адреса
+        # офисов", classifier extracted subject=Недвижимость from the
+        # word "офис", schema-layer verbatim grounding accepted, profile
+        # got poisoned. The user's later BMW request was treated as a
+        # CHANGE rather than first-fill.
+        # Universal fix: when intent=RAG, drop ALL leasing-parameter
+        # slots. RAG turns ask questions ABOUT the company; they are
+        # never legitimate parameter capture turns. `name` survives
+        # because users can introduce themselves on any kind of turn
+        # ("Привет, я Сергей. Расскажите про вашу компанию"). Stop /
+        # confirmation flags also survive — they are turn-shape
+        # semantics, not slot fills.
+        if self.intent == "RAG":
+            for _field in (
+                "subject", "client_type", "currency", "type_schedule",
+                "condition_new", "cost", "term_months", "prepaid_pct",
+                "prepaid_amount", "age_years",
+                "change_field", "change_value",
+            ):
+                _val = getattr(self, _field, None)
+                if _val is not None:
+                    drops.append(f"{_field}={_val!r} (intent=RAG)")
+                    setattr(self, _field, None)
+            # Skip the rest of grounding — already nulled the slots.
+            if drops:
+                object.__setattr__(self, "_grounding_drops", drops)
+            return self
+
         # --- Step 1: value-aware cue grounding ---
         if self.subject is not None:
             if not _subject_value_grounded(self.subject, utterance or ""):

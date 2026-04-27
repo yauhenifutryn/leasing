@@ -111,6 +111,60 @@ def test_subject_generic_mashina_rejected_when_spec_modifier_present():
     assert out.subject is None
 
 
+def test_intent_rag_drops_all_leasing_slots():
+    # Issue 1 (live call d5174335 2026-04-27): user asked "адреса офисов",
+    # classifier extracted subject="Недвижимость" from word "офис",
+    # schema-layer verbatim grounding accepted, profile got poisoned.
+    # Universal fix: intent=RAG drops all slot fills regardless of cue
+    # match. RAG turns are company questions, not parameter capture.
+    raw = json.dumps({
+        "intent": "RAG",
+        "subject": "Недвижимость",
+        "currency": "USD",
+        "client_type": "Юридическое лицо",
+        "type_schedule": "0",
+        "condition_new": 1,
+        "cost": 50000,
+        "term_months": 36,
+        "prepaid_pct": 30,
+        "age_years": 2,
+        "name": "Сергей",
+        "change_field": "term_months",
+        "change_value": 48,
+    })
+    out = parse_classifier_output(raw, utterance="расскажите адреса офисов и кто директор")
+    assert out.subject is None
+    assert out.currency is None
+    assert out.client_type is None
+    assert out.type_schedule is None
+    assert out.condition_new is None
+    assert out.cost is None
+    assert out.term_months is None
+    assert out.prepaid_pct is None
+    assert out.age_years is None
+    assert out.change_field is None
+    assert out.change_value is None
+    # name and intent itself survive — name capture is turn-shape-agnostic.
+    assert out.intent == "RAG"
+    assert out.name == "Сергей"
+
+
+def test_intent_tool_keeps_grounded_slots():
+    # Belt-and-suspenders pair: with intent=TOOL and grounded values,
+    # nothing gets dropped by the new RAG-guard. Sanity check that
+    # the guard is intent-gated, not blanket.
+    raw = json.dumps({
+        "intent": "TOOL", "subject": "Легковой автомобиль", "cost": 40000,
+        "currency": "USD", "client_type": "Физическое лицо", "condition_new": 1,
+    })
+    out = parse_classifier_output(raw, utterance="хочу новую машину BMW за 40 тысяч долларов как физлицо")
+    assert out.subject == "Легковой автомобиль"
+    assert out.currency == "USD"
+    assert out.client_type == "Физическое лицо"
+    assert out.condition_new == 1
+    assert out.cost == 40000
+
+
 def test_type_schedule_ungrounded_kept_on_intent_tool():
     # Polish C 2026-04-27: with intent=TOOL the schema trusts the classifier's
     # type_schedule output even when the utterance has no direct cue. Users
