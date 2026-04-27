@@ -74,10 +74,36 @@ def _grounded_proposed_patches(
     # Explicit change_field / change_value pair. Treated identically to
     # a top-level field for routing purposes — partition_patches decides
     # whether it's a first-time capture or a delta.
+    #
+    # Polish A (live call eb3d0a3d 2026-04-27): the verbatim-utterance
+    # grounding check that used to gate this assignment dropped legitimate
+    # cross-turn-reasoning cases. Example: bot explained "линейный график
+    # обычно дешевле, аннуитет ровнее"; user replied "Давай тот, что
+    # дешевле." Classifier correctly resolved to change_field=type_schedule,
+    # change_value="1" using its own prior turn — but value_grounded
+    # returned False because "1"/"линей" isn't in the user verbatim, so
+    # the pair was dropped and the dispatcher fell through to
+    # FireLLMFallback (LLM then asked for type_schedule again).
+    #
+    # Universal fix: trust the (change_field, change_value) pair when the
+    # classifier marked this turn as intent=TOOL — the structural signal
+    # that the user is performing a tool/parameter action. Hallucination
+    # guard remains for intent=CONVERSATION / intent=RAG: bare "ну хорошо"
+    # with a phantom change_value still requires verbatim grounding so
+    # phantom pairs from non-action turns get dropped (test
+    # test_e6_ungrounded_change_value_drops_silently).
+    #
+    # Additional safety nets that apply in all cases:
+    #   - classifier_schema step 3 (canonicalize_change_value) already
+    #     enforces enum membership and type correctness; uncanonical
+    #     values null both fields before reaching this function.
+    #   - EmitChangeConfirm is a confirmation step, not a write — the user
+    #     gets to reject before profile mutation.
     cf = classifier_output.change_field
     cv = classifier_output.change_value
-    if cf and cv is not None and value_grounded(cf, cv, utterance):
-        proposed[cf] = cv
+    if cf and cv is not None:
+        if classifier_output.intent == "TOOL" or value_grounded(cf, cv, utterance):
+            proposed[cf] = cv
 
     return proposed
 

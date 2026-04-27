@@ -187,6 +187,57 @@ def test_e6_ungrounded_change_value_drops_silently() -> None:
     assert profile.state == ProfileState.CONFIRMED
 
 
+def test_polish_a_intent_tool_pair_accepted_without_verbatim_grounding() -> None:
+    # Polish A (live call eb3d0a3d 2026-04-27): bot just explained the
+    # schedule comparison ("линейный обычно дешевле, аннуитет ровнее"),
+    # user replied "Давай тот, что дешевле." Classifier reasoned across
+    # the prior bot turn and emitted intent=TOOL with a (change_field,
+    # change_value) pair resolving to type_schedule="1". The value isn't
+    # verbatim in the user utterance — the old grounding gate dropped
+    # the pair and the dispatcher fell through to FireLLMFallback.
+    # New behavior: intent=TOOL bypasses verbatim grounding for the
+    # structurally-paired change_field/change_value signal.
+    profile = make_complete_profile(type_schedule="0")
+    profile.state = ProfileState.CONFIRMED
+    utterance = "Давай тот, что дешевле."
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="TOOL",
+        change_field="type_schedule",
+        change_value="1",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert isinstance(action, EmitChangeConfirm)
+    assert "type_schedule" in action.changes
+    assert action.changes["type_schedule"]["old"] == "0"
+    assert action.changes["type_schedule"]["new"] == "1"
+    # No mutation yet — change goes through confirm.
+    assert profile.type_schedule == "0"
+
+
+def test_polish_a_intent_conversation_pair_still_requires_grounding() -> None:
+    # Belt-and-suspenders: when intent != TOOL, the verbatim grounding
+    # gate stays in place so phantom (change_field, change_value) pairs
+    # from non-action turns still get dropped. This is the same
+    # protection covered by test_e6_ungrounded_change_value_drops_silently
+    # but spelled out for type_schedule to confirm the gate is selective
+    # on intent rather than on change_field identity.
+    profile = make_complete_profile(type_schedule="0")
+    profile.state = ProfileState.CONFIRMED
+    utterance = "ну хорошо"
+    classifier = make_classifier(
+        utterance=utterance,
+        intent="CONVERSATION",
+        change_field="type_schedule",
+        change_value="1",
+        is_confirmation=False,
+    )
+    action = apply_turn(profile, classifier, utterance=utterance)
+    assert not isinstance(action, EmitChangeConfirm)
+    assert profile.type_schedule == "0"
+
+
 def test_e6_top_level_subject_delta_also_routes_to_change_confirm() -> None:
     # Classifier fires top-level `subject` (not change_field pair) with a
     # grounded value that differs from profile.subject. This is the E7b
