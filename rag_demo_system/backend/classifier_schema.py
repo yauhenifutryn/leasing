@@ -230,8 +230,25 @@ def _currency_cue_match(value: str, utterance: str) -> bool:
 
 
 _TYPE_SCHEDULE_VALUE_CUES: dict[str, re.Pattern[str]] = {
-    "0": re.compile(r"\bаннуитет\w*", re.IGNORECASE),
-    "1": re.compile(r"\bлинейн\w+|\bдифференциров\w+|\bубыва\w+|\bравн\w+", re.IGNORECASE),
+    # "0" = аннуитет (equal monthly payments). Direct word OR semantic
+    # synonyms describing payment behavior (Polish C 2026-04-27): user
+    # often says "равные / одинаковые / фиксированные платежи" instead
+    # of naming the schedule type. Note: "равн\w+" was previously
+    # mis-listed under "1" (linear) — moved here because semantically
+    # "равные платежи" = annuitet, not linear.
+    "0": re.compile(
+        r"\bаннуитет\w*|\bравн[оыа]\w*|\bодинаков\w+|\bфиксиров\w+|"
+        r"\bстабильн\w+|\bпостоянн\w+",
+        re.IGNORECASE,
+    ),
+    # "1" = линейный / дифференцированный (decreasing payments, principal
+    # paid faster). Direct words OR semantic synonyms ("уменьшающиеся /
+    # убывающие / падающие платежи", "первый платёж больше").
+    "1": re.compile(
+        r"\bлинейн\w+|\bдифференциров\w+|\bубыва\w+|\bуменьш\w+|"
+        r"\bпадающ\w+|\bпервый\s+(?:платеж|платёж|больше)",
+        re.IGNORECASE,
+    ),
 }
 
 
