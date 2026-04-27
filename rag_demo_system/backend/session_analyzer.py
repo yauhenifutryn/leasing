@@ -116,12 +116,21 @@ def save_transcript(
     state_dir: Path,
     transport: str = "browser",
     phone: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> Path:
-    """Save individual session transcript as a separate JSON file."""
+    """Save individual session transcript as a separate JSON file.
+
+    `tool_calls` is the cumulative list of tool invocations made during the
+    session (calculator, SMS, etc.). Each entry is a dict with at least
+    `tool`, `params`, `result` keys. Saved alongside the transcript so the
+    exported JSON captures the same information the live SIP monitor
+    shows ("Tool: calculator(...)" / "Tool done: calculator (OK)" lines)
+    rather than only the spoken turns.
+    """
     transcripts_dir = state_dir / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
     out_path = transcripts_dir / f"{session_id}.json"
-    record = {
+    record: dict[str, Any] = {
         "session_id": session_id,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "transport": transport,
@@ -129,5 +138,8 @@ def save_transcript(
         "turn_count": len(transcript),
         "transcript": transcript,
     }
+    if tool_calls is not None:
+        record["tool_calls"] = tool_calls
+        record["tool_call_count"] = len(tool_calls)
     out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_path

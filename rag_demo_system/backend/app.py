@@ -2604,9 +2604,28 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                 chat_session = state.get(session_id)
                 if chat_session and chat_session.transcript:
                     from .session_analyzer import save_transcript
-                    save_transcript(session_id, chat_session.transcript, _state_dir,
-                                    transport="jambonz", phone=session.client_phone or "")
-                    print(f"[Jambonz:{session_id[:8]}] Transcript saved ({len(chat_session.transcript)} turns)", flush=True)
+                    # Include tool_calls (calculator + SMS invocations) so the
+                    # saved transcript carries the same history the live SIP
+                    # monitor shows. tool_calls_this_turn may still hold the
+                    # current turn's call if the WS dropped mid-turn.
+                    _tool_calls = (
+                        list(getattr(session, "tool_calls_history", []) or [])
+                        + list(getattr(session, "tool_calls_this_turn", []) or [])
+                    )
+                    save_transcript(
+                        session_id,
+                        chat_session.transcript,
+                        _state_dir,
+                        transport="jambonz",
+                        phone=session.client_phone or "",
+                        tool_calls=_tool_calls,
+                    )
+                    print(
+                        f"[Jambonz:{session_id[:8]}] Transcript saved "
+                        f"({len(chat_session.transcript)} turns, "
+                        f"{len(_tool_calls)} tool calls)",
+                        flush=True,
+                    )
                 if chat_session and len(chat_session.transcript) >= 4:
                     from .session_analyzer import analyze_session, save_report
                     from .llm import call_openai_compatible
