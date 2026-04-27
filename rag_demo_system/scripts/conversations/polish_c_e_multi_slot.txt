@@ -1,0 +1,25 @@
+# Polish C + E — multi-slot turn with inverted year form + semantic schedule
+#
+# Polish C: "чтобы платежи были равными" → type_schedule="0" (annuitet)
+# Polish E: "лет на 5" (inverted form) → term_months=60
+#
+# Live call 56c0e2f9 (2026-04-27): the user said "Я вот не знаю, может
+# быть рассмотреть лизинг с нулевым авансом на, например, лет на 5,
+# и чтобы платежи были равными." Classifier extracted only prepaid_pct=0
+# and missed both term and type_schedule. After this fix, all three
+# slots should land in one classifier call.
+#
+# Expected behavior post-fix:
+#   - Turn 5 ("лет на 5 ... равные платежи ... нулевой аванс") →
+#     classifier RAW shows term_months=60, prepaid_pct=0,
+#     type_schedule="0". Profile completes; readback fires.
+#   - Turn 6 ("Да.") → FireCalc.
+#
+# Pre-fix behavior: turn 5 captured only prepaid; bot looped on
+# "Подскажите срок", and even after "На 5 лет" the readback still
+# defaulted to "график линейный" (wrong — user wanted annuitet).
+
+USER: Привет, я Сергей.
+USER: Хочу машину BMW, новую, 40 тысяч долларов, физическое лицо.
+USER: Я вот не знаю, может быть рассмотреть лизинг с нулевым авансом на, например, лет на 5, и чтобы платежи были равными.
+USER: Да.

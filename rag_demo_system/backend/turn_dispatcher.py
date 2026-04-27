@@ -1161,7 +1161,8 @@ async def execute_action(
 # failure (spec §7.2 #4). Kept as a module constant so tests can
 # substring-match without hardcoding the phrasing in two places.
 _CALC_CIRCUIT_OOR = (
-    "Извините, не могу посчитать, давайте перепроверим параметры."
+    "Извините, не могу посчитать с этими параметрами. "
+    "Хотите изменить срок, аванс или стоимость?"
 )
 
 # Threshold for circuit-open. Matches legacy semantics: on the third
@@ -1239,17 +1240,24 @@ def _infer_usd_byn_rate(snapshot: ProfileSnapshot) -> float:
 
 def _format_calc_error(result) -> str:
     """Build a user-facing error phrase from a calc result with ok=False.
-    Calculator's `error` field already holds a Russian OOR message
-    when the API rejects the params; passthrough. Otherwise use a
-    generic fallback so the user doesn't hear "?" placeholders."""
+
+    Polish D-lite (live call 56c0e2f9 2026-04-27): the calculator's
+    `error` text used to passthrough verbatim (e.g. "По заданным
+    параметрам условия лизинга не найдены."), ending in a period with
+    no follow-up. The bot then went silent and the user had to invoke
+    the bot again. Universal fix: every calc-fail spoken line ends with
+    a concrete question so the user always has an obvious next move.
+    Structured per-constraint guidance (which param actually broke the
+    request) is deferred to Section 3.5 (Calculator Funnel API
+    Integration); this is just the silence guard.
+    """
+    follow_up = "Хотите изменить срок, аванс или стоимость?"
     if isinstance(result, dict):
         err = result.get("error")
         if err:
-            return str(err)
-    return (
-        "К сожалению, не удалось рассчитать по этим параметрам. "
-        "Попробуем уточнить — стоимость, срок или аванс?"
-    )
+            base = str(err).strip().rstrip(".!?")
+            return f"{base}. {follow_up}"
+    return f"Не удалось рассчитать по этим параметрам. {follow_up}"
 
 
 def _append_tool_call(session, params, result) -> None:

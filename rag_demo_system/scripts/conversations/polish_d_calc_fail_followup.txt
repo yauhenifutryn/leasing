@@ -1,0 +1,19 @@
+# Polish D-lite — calc-fail follow-up question (no silence)
+#
+# Live call 56c0e2f9 (2026-04-27): with prepaid=0% + term=60mo + new car,
+# the production calc API returned ok=False / "По заданным параметрам
+# условия лизинга не найдены." The bot spoke that line verbatim with no
+# follow-up question, leaving the user in apparent silence.
+#
+# After Polish D-lite: every calc-fail spoken line ends with
+# "Хотите изменить срок, аванс или стоимость?" so the user always
+# has a concrete next move.
+#
+# This simulator exercises the dispatcher routing only. The actual
+# calc API call is stubbed (FireCalc shows params, no real call).
+# Use the live audio playbook to verify the bot's spoken text.
+
+USER: Привет, меня Сергей.
+USER: Хочу машину BMW, 40 тысяч долларов, новую, физическое лицо.
+USER: Срок 60 месяцев, аванс 0 процентов, аннуитет.
+USER: Да.
