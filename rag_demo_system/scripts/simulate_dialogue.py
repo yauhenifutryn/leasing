@@ -12,8 +12,15 @@ TurnAction, rendered bot text, and the running profile snapshot.
 Usage
 -----
     cd rag_demo_system
-    python scripts/simulate_dialogue.py CONVERSATIONS_FILE
-    python scripts/simulate_dialogue.py CONVERSATIONS_FILE --base-url http://VM_IP:8788/v1
+    # MUST use the project venv — pydantic and other backend deps live there:
+    .venv/bin/python scripts/simulate_dialogue.py CONVERSATIONS_FILE
+    .venv/bin/python scripts/simulate_dialogue.py CONVERSATIONS_FILE \
+        --base-url http://VM_IP:8788/v1
+
+(System `python3` will fail with `ModuleNotFoundError: No module named 'pydantic'`.)
+
+Or use the wrapper alongside this file:
+    bash scripts/simulate.sh CONVERSATIONS_FILE
 
 CONVERSATIONS_FILE: one user utterance per line. Lines starting with '#' or
 empty lines are skipped.
