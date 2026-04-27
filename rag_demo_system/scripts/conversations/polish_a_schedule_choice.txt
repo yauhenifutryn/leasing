@@ -9,9 +9,11 @@
 # using the bot's prior turn-5 explanation as context.
 #
 # Lines starting with USER: are user utterances.
-# Lines starting with BOT: are canned bot replies that override the
-# simulator's stub when the next user turn follows a FireLLMFallback /
-# FireCalc / FireSMS action.
+# Lines starting with BOT: are canned bot replies that immediately
+# replace the most recent assistant entry in the transcript — i.e.
+# they overwrite the stub the simulator wrote for FireLLMFallback /
+# FireCalc / FireSMS on the preceding user turn. The NEXT user turn's
+# classifier then sees this canned text as production-shaped context.
 #
 # Expected behavior with Polish A (commit bf113e6):
 #   - Turn 5 ("А какое лучше? В чём их разница?") → ACTION=FireLLMFallback.

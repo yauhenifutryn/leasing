@@ -264,18 +264,19 @@ def simulate(
     model: str,
 ) -> None:
     """Run the simulation. `script` is a list of (kind, text) where kind is
-    'user' (input utterance) or 'bot' (canned override of the bot's reply
-    that gets injected into the transcript context for the NEXT turn).
+    'user' (input utterance) or 'bot' (canned text that REPLACES the most
+    recent assistant entry in the transcript — i.e. what the bot would have
+    said in production after the preceding user turn).
 
-    The 'bot' kind is the workaround for the FireLLMFallback / FireCalc
-    actions that the simulator can't actually invoke. In production those
-    paths produce real text; in the simulator we substitute a canned line
-    so the next turn's classifier sees production-shaped context.
+    The 'bot' kind exists because FireLLMFallback / FireCalc / FireSMS
+    actions can't actually be invoked here. The simulator writes a stub
+    transcript entry for them; a 'bot:' line after such an action overwrites
+    that stub with production-shaped text so the NEXT classifier call sees
+    realistic context.
     """
     profile = ClientProfile(state=ProfileState.COLLECTING)
     transcript: list[dict[str, str]] = []
     session_id = str(uuid.uuid4())[:8]
-    pending_bot_override: str | None = None
     print(f"=== Simulation session {session_id} ===")
     print(f"  Classifier: {model} @ {base_url}")
     print()
@@ -283,15 +284,26 @@ def simulate(
     user_turn_idx = 0
     for kind, text in script:
         if kind == "bot":
-            # Defer until the NEXT user turn — at the end of that turn we
-            # write this text into the transcript instead of the rendered
-            # action stub. Multiple consecutive bot lines concatenate.
-            if pending_bot_override is None:
-                pending_bot_override = text
-            else:
-                pending_bot_override = f"{pending_bot_override} {text}"
-            print(f"  [bot-override queued]: {text}")
-            print()
+            # Replace the most recent assistant entry in the transcript with
+            # the canned text. This is what the next user turn's classifier
+            # will see as the bot's prior utterance.
+            replaced = False
+            for i in range(len(transcript) - 1, -1, -1):
+                if transcript[i].get("role") == "assistant":
+                    prev = transcript[i].get("text", "")
+                    transcript[i]["text"] = text
+                    print(f"  [bot-override applied to turn {user_turn_idx}]")
+                    print(f"    was: {prev}")
+                    print(f"    now: {text}")
+                    print()
+                    replaced = True
+                    break
+            if not replaced:
+                # No prior assistant turn (BOT: appears before any USER:).
+                # Append it directly so the first user turn sees it.
+                transcript.append({"role": "assistant", "text": text})
+                print(f"  [bot-override prepended (no prior assistant turn)]: {text}")
+                print()
             continue
 
         # kind == 'user'
@@ -314,24 +326,7 @@ def simulate(
         print()
 
         transcript.append({"role": "user", "text": text})
-        # If a 'bot:' line was queued before this turn was meant to follow
-        # an LLM/calc/sms reply, write that canned text to the transcript
-        # instead of the action stub. Otherwise use the rendered action.
-        if pending_bot_override is not None and isinstance(action, (FireLLMFallback, FireCalc, FireSMS)):
-            transcript.append({"role": "assistant", "text": pending_bot_override})
-            pending_bot_override = None
-        else:
-            transcript.append({"role": "assistant", "text": rendered})
-            # If a bot override was queued but the action wasn't stub-class,
-            # the override is stale — drop it with a warning.
-            if pending_bot_override is not None:
-                print(
-                    f"  [warn] pending bot override dropped — preceded a "
-                    f"{type(action).__name__} action that produced concrete "
-                    f"text already.",
-                    file=sys.stderr,
-                )
-                pending_bot_override = None
+        transcript.append({"role": "assistant", "text": rendered})
 
 
 def _read_conversation_file(path: Path) -> list[tuple[str, str]]:
