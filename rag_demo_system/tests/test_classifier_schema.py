@@ -111,9 +111,23 @@ def test_subject_generic_mashina_rejected_when_spec_modifier_present():
     assert out.subject is None
 
 
-def test_type_schedule_ungrounded_nulled():
-    # E2: type_schedule="1" emitted on utterance without graph word.
+def test_type_schedule_ungrounded_kept_on_intent_tool():
+    # Polish C 2026-04-27: with intent=TOOL the schema trusts the classifier's
+    # type_schedule output even when the utterance has no direct cue. Users
+    # describe payment behavior semantically ("равные платежи", "лет на 5,
+    # чтобы платежи были равными"), and the classifier reasons across the
+    # bot's prior turn — verbatim cue-grounding fights the prompt and is
+    # the wrong tool for semantic concepts. Hallucination guard remaining:
+    # Pydantic Literal["0", "1"] enforces enum membership.
     raw = json.dumps({"intent": "TOOL", "type_schedule": "1"})
+    out = parse_classifier_output(raw, utterance="120 000 долларов новую")
+    assert out.type_schedule == "1"
+
+
+def test_type_schedule_ungrounded_dropped_on_intent_conversation():
+    # Belt-and-suspenders: when intent != TOOL, the verbatim cue gate stays
+    # in place so phantom emissions from CONVERSATION/RAG turns get nulled.
+    raw = json.dumps({"intent": "CONVERSATION", "type_schedule": "1"})
     out = parse_classifier_output(raw, utterance="120 000 долларов новую")
     assert out.type_schedule is None
 
@@ -194,10 +208,15 @@ def test_malformed_json_returns_empty():
     }
 
 
-def test_empty_utterance_nulls_grounded_enums():
+def test_empty_utterance_nulls_directly_named_enums():
     # Codex adversarial pass 3, 2026-04-20: empty utterance = no evidence.
     # Grounded enum fields must be nulled rather than preserved (production
     # risk: blank/degraded ASR turns leaking stale classifier state).
+    # Polish C 2026-04-27: type_schedule was removed from this assertion
+    # because it now trusts the classifier on intent=TOOL (semantic
+    # reasoning across bot context). The other four fields (subject,
+    # currency, client_type, condition_new) remain verbatim-grounded
+    # because users name them directly.
     raw = json.dumps({
         "intent": "TOOL", "subject": "Легковой автомобиль", "currency": "USD",
         "client_type": "Физическое лицо", "type_schedule": "0", "condition_new": 1,
@@ -206,7 +225,6 @@ def test_empty_utterance_nulls_grounded_enums():
     assert out.subject is None
     assert out.currency is None
     assert out.client_type is None
-    assert out.type_schedule is None
     assert out.condition_new is None
     # Non-grounded fields still pass.
     assert out.intent == "TOOL"
@@ -322,8 +340,24 @@ def test_client_type_yur_passes_on_ooo():
     assert out.client_type == "Юридическое лицо"
 
 
-def test_type_schedule_linear_nulled_when_utterance_says_annuitet():
+def test_type_schedule_linear_kept_when_utterance_says_annuitet_on_intent_tool():
+    # Polish C 2026-04-27: trust the classifier on intent=TOOL even when
+    # the utterance directly contradicts. Reason: contradiction here is a
+    # classifier ERROR (the prompt is unambiguous about "аннуитет" → "0"),
+    # not a hallucination the schema should silently fix. Catching it at
+    # the schema layer hid the bug; preserving the classifier's output
+    # surfaces the issue at the next level (readback) where the user can
+    # immediately correct it ("не-не-не, я хотел annuitet"). Better
+    # protection lives in classifier-prompt regression tests, not the
+    # schema gate.
     raw = json.dumps({"intent": "TOOL", "type_schedule": "1"})
+    out = parse_classifier_output(raw, utterance="давай аннуитетный график")
+    assert out.type_schedule == "1"
+
+
+def test_type_schedule_linear_dropped_when_utterance_says_annuitet_on_intent_conversation():
+    # Belt-and-suspenders: intent != TOOL still gets verbatim grounding.
+    raw = json.dumps({"intent": "CONVERSATION", "type_schedule": "1"})
     out = parse_classifier_output(raw, utterance="давай аннуитетный график")
     assert out.type_schedule is None
 

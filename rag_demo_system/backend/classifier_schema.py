@@ -564,7 +564,20 @@ class ClassifierOutput(BaseModel):
         ):
             drops.append(f"currency={self.currency!r}")
             self.currency = None
-        if self.type_schedule is not None:
+        # type_schedule grounding (Polish C 2026-04-27): unlike currency /
+        # subject / client_type which users name DIRECTLY ("в долларах",
+        # "BMW", "физлицо"), type_schedule is a SEMANTIC concept — users
+        # describe payment behavior ("равные платежи", "уменьшающиеся",
+        # "тело гасится быстрее") rather than naming "аннуитет" or
+        # "линейный". Verbatim regex grounding is the wrong tool for that.
+        # The classifier prompt (app.py) explicitly instructs Qwen on the
+        # full set of semantic synonyms; trust the classifier's reasoning
+        # when intent=TOOL signals an actionable parameter turn.
+        # Hallucination guards remaining:
+        #   - Pydantic Literal["0", "1"] enforces enum membership (line 470).
+        #   - When intent != TOOL, the verbatim cue check still applies, so
+        #     phantom emissions from CONVERSATION/RAG turns get nulled.
+        if self.type_schedule is not None and self.intent != "TOOL":
             cue_re = _TYPE_SCHEDULE_VALUE_CUES.get(self.type_schedule)
             if cue_re is None or not (utterance and cue_re.search(utterance)):
                 drops.append(f"type_schedule={self.type_schedule!r}")
