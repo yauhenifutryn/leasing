@@ -259,49 +259,101 @@ def _build_user_prompt(transcript: list[dict[str, str]], message: str) -> str:
 
 def simulate(
     *,
-    utterances: list[str],
+    script: list[tuple[str, str]],
     base_url: str,
     model: str,
 ) -> None:
+    """Run the simulation. `script` is a list of (kind, text) where kind is
+    'user' (input utterance) or 'bot' (canned override of the bot's reply
+    that gets injected into the transcript context for the NEXT turn).
+
+    The 'bot' kind is the workaround for the FireLLMFallback / FireCalc
+    actions that the simulator can't actually invoke. In production those
+    paths produce real text; in the simulator we substitute a canned line
+    so the next turn's classifier sees production-shaped context.
+    """
     profile = ClientProfile(state=ProfileState.COLLECTING)
     transcript: list[dict[str, str]] = []
     session_id = str(uuid.uuid4())[:8]
+    pending_bot_override: str | None = None
     print(f"=== Simulation session {session_id} ===")
     print(f"  Classifier: {model} @ {base_url}")
     print()
 
-    for turn_idx, utterance in enumerate(utterances, start=1):
-        print(f"--- turn {turn_idx} ---")
-        print(f"USER:    {utterance}")
+    user_turn_idx = 0
+    for kind, text in script:
+        if kind == "bot":
+            # Defer until the NEXT user turn — at the end of that turn we
+            # write this text into the transcript instead of the rendered
+            # action stub. Multiple consecutive bot lines concatenate.
+            if pending_bot_override is None:
+                pending_bot_override = text
+            else:
+                pending_bot_override = f"{pending_bot_override} {text}"
+            print(f"  [bot-override queued]: {text}")
+            print()
+            continue
 
-        user_prompt = _build_user_prompt(transcript, utterance)
+        # kind == 'user'
+        user_turn_idx += 1
+        print(f"--- turn {user_turn_idx} ---")
+        print(f"USER:    {text}")
+
+        user_prompt = _build_user_prompt(transcript, text)
         raw = _call_classifier(
             base_url=base_url, model=model, user_prompt=user_prompt
         )
         print(f"RAW:     {json.dumps(raw, ensure_ascii=False)}")
 
-        co = parse_classifier_output(json.dumps(raw), utterance=utterance)
-        action = apply_turn(profile, co, utterance, turn_id=turn_idx)
+        co = parse_classifier_output(json.dumps(raw), utterance=text)
+        action = apply_turn(profile, co, text, turn_id=user_turn_idx)
         print(f"ACTION:  {type(action).__name__}")
         rendered = _render_action(action, profile)
         print(f"BOT:     {rendered}")
         print(f"PROFILE: {_render_profile(profile)}")
         print()
 
-        transcript.append({"role": "user", "text": utterance})
-        # Append a stub assistant text so the next turn's classifier sees
-        # the bot's most recent reply (Polish A's prior-utterance reasoning
-        # uses this).
-        transcript.append({"role": "assistant", "text": rendered})
+        transcript.append({"role": "user", "text": text})
+        # If a 'bot:' line was queued before this turn was meant to follow
+        # an LLM/calc/sms reply, write that canned text to the transcript
+        # instead of the action stub. Otherwise use the rendered action.
+        if pending_bot_override is not None and isinstance(action, (FireLLMFallback, FireCalc, FireSMS)):
+            transcript.append({"role": "assistant", "text": pending_bot_override})
+            pending_bot_override = None
+        else:
+            transcript.append({"role": "assistant", "text": rendered})
+            # If a bot override was queued but the action wasn't stub-class,
+            # the override is stale — drop it with a warning.
+            if pending_bot_override is not None:
+                print(
+                    f"  [warn] pending bot override dropped — preceded a "
+                    f"{type(action).__name__} action that produced concrete "
+                    f"text already.",
+                    file=sys.stderr,
+                )
+                pending_bot_override = None
 
 
-def _read_conversation_file(path: Path) -> list[str]:
-    out = []
+def _read_conversation_file(path: Path) -> list[tuple[str, str]]:
+    """Parse a conversation script.
+
+    Lines starting with '#' or empty are skipped.
+    Lines starting with 'BOT:' (case-insensitive) are canned bot
+    replies that override the next stub action's transcript text.
+    All other lines (with or without 'USER:' prefix) are user utterances.
+    """
+    out: list[tuple[str, str]] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        out.append(line)
+        lower = line.lower()
+        if lower.startswith("bot:"):
+            out.append(("bot", line[4:].strip()))
+        elif lower.startswith("user:"):
+            out.append(("user", line[5:].strip()))
+        else:
+            out.append(("user", line))
     return out
 
 
@@ -316,13 +368,13 @@ def main() -> int:
         print(f"file not found: {args.conversation_file}", file=sys.stderr)
         return 1
 
-    utterances = _read_conversation_file(args.conversation_file)
-    if not utterances:
-        print("conversation file has no utterances", file=sys.stderr)
+    script = _read_conversation_file(args.conversation_file)
+    if not any(kind == "user" for kind, _ in script):
+        print("conversation file has no user utterances", file=sys.stderr)
         return 1
 
     simulate(
-        utterances=utterances,
+        script=script,
         base_url=args.base_url,
         model=args.model,
     )

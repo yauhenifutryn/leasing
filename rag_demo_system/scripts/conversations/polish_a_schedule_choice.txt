@@ -1,22 +1,32 @@
 # Polish A — semantic prior-utterance reasoning for schedule choice
 #
 # Context: bot has been collecting calc params, all fields filled except
-# type_schedule. Bot asks the schedule clarify, user asks for a comparison,
-# bot explains both options. User then references the comparison via
-# "тот, что дешевле" — classifier should resolve to type_schedule="1"
-# (linear) using the bot's prior explanation as context.
+# type_schedule. User asks for a comparison; bot would explain both options
+# (in production the LLM generates this text — the simulator stubs it,
+# so we use a `BOT:` line below to inject what the production LLM would
+# actually say). User then references the comparison via "тот, что
+# дешевле" — classifier should resolve to type_schedule="1" (linear)
+# using the bot's prior turn-5 explanation as context.
 #
-# Expected behavior with Polish A (commit on top of 393052a):
-#   - Turn 5 ("А какое лучше? В чём их разница?"): drift to LLM.
-#   - Turn 6 ("Давай тот, что дешевле."): ACTION=EmitChangeConfirm
-#     with changes={type_schedule: "1"}. NOT EmitClarify retry.
+# Lines starting with USER: are user utterances.
+# Lines starting with BOT: are canned bot replies that override the
+# simulator's stub when the next user turn follows a FireLLMFallback /
+# FireCalc / FireSMS action.
 #
-# Pre-Polish-A behavior: turn 6 hit the unfilled-field clarify and looped.
+# Expected behavior with Polish A (commit bf113e6):
+#   - Turn 5 ("А какое лучше? В чём их разница?") → ACTION=FireLLMFallback.
+#     The simulator stub gets replaced by the BOT: line below in transcript.
+#   - Turn 6 ("Давай тот, что дешевле.") → classifier RAW shows
+#     change_field="type_schedule", change_value="1". ACTION=EmitChangeConfirm.
+#
+# Pre-Polish-A behavior (before bf113e6): turn 6 hit the unfilled-field
+# clarify and looped.
 
-Привет, я Никита.
-Хочу рассчитать лизинг на машину 100 тысяч долларов, физическое лицо.
-Поддержанный, два года.
-Срок 36 месяцев, аванс 30 процентов.
-А какое лучше? В чём их разница?
-Давай тот, что дешевле.
-Да.
+USER: Привет, я Никита.
+USER: Хочу рассчитать лизинг на машину 100 тысяч долларов, физическое лицо.
+USER: Поддержанный, два года.
+USER: Срок 36 месяцев, аванс 30 процентов.
+USER: А какое лучше? В чём их разница?
+BOT: Линейный график обычно дает меньшую общую переплату, так как тело долга гасится быстрее. Аннуитет проще для планирования бюджета, потому что платежи каждый месяц одинаковые. Какой вам ближе?
+USER: Давай тот, что дешевле.
+USER: Да.
