@@ -67,7 +67,10 @@ _SUBJECT_VALUE_CUES: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "Недвижимость": re.compile(
-        r"\b(недвижимост\w*|квартир\w+|дом\b|здани\w+|помещени\w+|склад\w*|офис\w*)",
+        # Issue 1 (live call d5174335 2026-04-27): "офис\w*" removed —
+        # "адреса офисов" was poisoning subject. Real-estate-leasing
+        # customers use "недвижимость", "помещение", "склад".
+        r"\b(недвижимост\w*|квартир\w+|дом\b|здани\w+|помещени\w+|склад\w*)",
         re.IGNORECASE,
     ),
     "Прочий транспорт": re.compile(
@@ -91,7 +94,10 @@ _SUBJECT_COMPETING_RE = re.compile(
     r"спецтехник\w*|погрузчик\w*|экскаватор\w*|бульдозер\w*|кран\w*|каток\w*|"
     r"трактор\w*|комбайн\w*|"
     r"оборудовани\w*|станк\w+|установк\w+|"
-    r"недвижимост\w*|квартир\w+|здани\w+|помещени\w+|склад\w*|офис\w*|"
+    # Issue 1 (live call d5174335 2026-04-27): "офис\w*" removed from
+    # the competing-cue regex too — keeps the bare-"машина" → Легковой
+    # fallback working when the user mentions an office address.
+    r"недвижимост\w*|квартир\w+|здани\w+|помещени\w+|склад\w*|"
     r"автобус\w*|прицеп\w*|мотоцикл\w*|скутер\w*"
     r")",
     re.IGNORECASE,

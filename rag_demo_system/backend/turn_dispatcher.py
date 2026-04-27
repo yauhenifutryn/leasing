@@ -464,6 +464,10 @@ def _dispatch_once(
     # Codex CP-3.6 P1: if the small classifier dropped a slot the user
     # clearly named, the deterministic regex fallback fills the gap so
     # downstream first_time / clarify routing sees the captured field.
+    # Kept on all intents — it is a safety net for the "classifier
+    # mis-labeled an obvious TOOL utterance as RAG" failure mode
+    # (e.g. "Я думаю взять себе машину" → classifier=RAG, fallback
+    # correctly recovers subject=Легковой автомобиль).
     _apply_utterance_fallbacks(profile, proposed, utterance)
 
     # Year-form disambiguation (Bugs Q + S, 2026-04-26).
@@ -728,11 +732,22 @@ def _dispatch_once(
     # True with no change_field. Without this branch the same input would
     # match STEP 6 below (CONFIRMED + is_confirmation + complete) and
     # re-fire FireCalc with identical params instead of sending SMS.
+    # Issue 5 (live call d5174335 2026-04-27): SMS fired on "Да." that
+    # was actually confirming a change-confirm, not the prior post-calc
+    # SMS offer. Bug J's last_offer=None clear (in step 1 + step 4) is
+    # the primary defense, but a barge-in-induced state corruption made
+    # last_offer stay "sms" through the change-confirm turn. Defensive
+    # gate: SMS only fires when this turn entered with state CONFIRMED
+    # (clean post-calc), NOT CHANGE_PENDING (just-applied change). Ensures
+    # SMS can never piggyback off a change-confirm "Да." regardless of
+    # what last_offer was. Pure post-calc SMS-confirm flow keeps working
+    # because pre_turn_state is CONFIRMED there.
     if (
         getattr(profile, "last_offer", None) == "sms"
         and classifier_output.is_confirmation
         and not classifier_output.change_field
         and classifier_output.action != "change_param"
+        and pre_turn_state == ProfileState.CONFIRMED
     ):
         profile.last_offer = None
         return FireSMS(snapshot=build_snapshot(profile))

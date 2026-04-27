@@ -53,9 +53,13 @@ _SPECIFIC_SUBJECT_CUES: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "Недвижимость",
+        # Issue 1 (live call d5174335 2026-04-27): "офис\w*" was removed.
+        # Users asking about company office addresses ("адреса офисов",
+        # "где офис", "приехать в офис") were having profile.subject
+        # poisoned to Недвижимость. Real-estate-leasing customers say
+        # "помещение", "склад", "недвижимость" — never bare "офис".
         re.compile(
-            r"\b(недвижимост\w*|квартир\w+|здани\w+|помещени\w+|"
-            r"склад\w*|офис\w*)",
+            r"\b(недвижимост\w*|квартир\w+|здани\w+|помещени\w+|склад\w*)",
             re.IGNORECASE,
         ),
     ),
