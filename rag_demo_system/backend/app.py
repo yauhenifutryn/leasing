@@ -1220,6 +1220,14 @@ async def _stream_voice_response(
                 # may be hitting the 120-token ceiling on long multi-
                 # field captures and truncating before the last field.
                 # 160 buys safety margin for long Russian field values.
+                stop=["\n\n", "Комментарий", "Пояснение", "Примечание"],
+                # Cheap latency lever 2026-04-29: short-circuit if Qwen
+                # rambles past the closing JSON brace. Single-line JSON
+                # output never contains "\n\n", so this only fires on
+                # the failure mode where the model adds explanation
+                # text after the JSON despite the prompt's "только JSON"
+                # rule. Saves nothing on the happy path (model emits
+                # EOS naturally after `}`), but trims the worst tail.
             )
             _raw = classify_resp.text.strip()
             # CP-2.2: route raw classifier text through ClassifierOutput.
