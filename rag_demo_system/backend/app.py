@@ -1181,7 +1181,7 @@ async def _stream_voice_response(
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=160,
+                max_tokens=80,
                 timeout_sec=4,
             )
             _raw = classify_resp.text.strip()
