@@ -22,7 +22,6 @@ def call_openai_compatible(
     temperature: float,
     max_tokens: int,
     timeout_sec: int,
-    response_format: dict[str, Any] | None = None,
 ) -> LLMResponse:
     if not base_url:
         raise ValueError("RAG_LLM_BASE_URL is not set")
@@ -41,8 +40,6 @@ def call_openai_compatible(
         # that wastes tokens on reasoning before the actual answer.
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    if response_format is not None:
-        payload["response_format"] = response_format
     resp = requests.post(url, json=payload, timeout=timeout_sec)
     resp.raise_for_status()
     data = resp.json()
