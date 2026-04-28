@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import base64
 import os
-from xml.sax.saxutils import escape as xml_escape
 
+import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -50,12 +50,22 @@ class SileroTTSSynthesizer:
             "put_accent": True,
             "put_yo": True,
         }
-        if rate_pct != 100:
-            ssml = f'<speak><prosody rate="{rate_pct}%">{xml_escape(text)}</prosody></speak>'
-            audio = self._model.apply_tts(ssml_text=ssml, **common_kwargs)
-        else:
-            audio = self._model.apply_tts(text=text, **common_kwargs)
-        pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
+        # Silero v5_4_ru's SSML <prosody rate> is parsed but silently ignored
+        # (verified live 2026-04-28: 100% and 120% produced byte-for-byte
+        # identical audio). Naive numpy.interp resample (1cbbee7+9caf11b)
+        # speeds up but raises pitch ~2 semitones — caused "weird voice"
+        # complaint 2026-04-29. Replace with librosa phase-vocoder
+        # time-stretch which preserves pitch.
+        audio = self._model.apply_tts(text=text, **common_kwargs)
+        audio_np = audio.detach().cpu().numpy().astype(np.float32)
+        if rate_pct != 100 and len(audio_np) > 1:
+            # Lazy import: librosa is ~50MB and only loads when speedup is
+            # enabled. First call adds ~150ms cold-start; subsequent calls
+            # add ~10-30ms per phrase for the time-stretch itself.
+            import librosa
+            rate = rate_pct / 100.0
+            audio_np = librosa.effects.time_stretch(audio_np, rate=rate)
+        pcm16 = (audio_np * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
         return pcm16, self._sample_rate
 
 
@@ -72,6 +82,7 @@ def create_app(synthesizer: SileroTTSSynthesizer) -> FastAPI:
             "provider": "silero_tts",
             "speaker": synthesizer._speaker,
             "voice_source": voice_source,
+            "rate_pct": int(os.getenv("SILERO_TTS_RATE_PCT") or "100"),
         }
 
     @app.post("/speak")
