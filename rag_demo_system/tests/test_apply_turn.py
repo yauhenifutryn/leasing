@@ -1499,7 +1499,9 @@ def test_build_fallback_messages_includes_memory_block():
 
 
 def test_build_fallback_messages_omits_memory_block_when_absent():
-    """memory_block is optional; absence must not introduce empty noise."""
+    """memory_block is optional; absence must not introduce empty noise.
+    The role-guard block IS unconditional (anti-hallucination contract),
+    so we assert structure rather than exact equality."""
     from backend.turn_dispatcher import _build_fallback_messages
 
     msgs = _build_fallback_messages(
@@ -1507,7 +1509,76 @@ def test_build_fallback_messages_omits_memory_block_when_absent():
         rag_context=None,
         snapshot=None,
     )
-    assert msgs[0]["content"] == "Сообщение клиента: привет"
+    content = msgs[0]["content"]
+    assert "Сообщение клиента: привет" in content
+    # No memory or KB blocks injected.
+    assert "Контекст диалога" not in content
+    assert "Фрагменты из базы знаний" not in content
+    assert "НЕ переспрашивай" not in content  # no snapshot anchor
+
+
+def test_build_fallback_messages_role_guard_blocks_change_confirm_hallucination():
+    """Anti-hallucination role guard (live call 8cb0bfaf 2026-04-28):
+    the LLM hallucinated 'Меняем стоимость и график. Подтвердите?' when
+    classifier dropped a multi-field change. State machine never staged
+    the change; user said 'Да' on next turn → silent data loss.
+
+    Architectural truth: change-confirm wording is ALWAYS produced by
+    build_change_confirm_text via EmitChangeConfirm. The LLM is NEVER the
+    source. The role-guard prompt must explicitly forbid the LLM from
+    writing change-confirm phrases so it cannot fabricate one even when
+    the classifier silently drops fields."""
+    from backend.turn_dispatcher import _build_fallback_messages
+
+    msgs = _build_fallback_messages(
+        utterance="давай поменяем стоимость и график",
+        rag_context=None,
+        snapshot=None,
+    )
+    content = msgs[0]["content"]
+    # Must explicitly forbid change-confirm wording.
+    assert "Меняю" in content and "всё верно" in content, (
+        "role guard must name the forbidden change-confirm shape"
+    )
+    assert "Подтверждаю изменение" in content or "Подтвердите параметры" in content
+    # Must instruct the model to clarify when uncertain.
+    assert "переспроси" in content or "уточни" in content
+
+
+def test_build_fallback_messages_role_guard_present_with_snapshot_and_kb():
+    """Role guard is unconditional — applies whether or not snapshot or
+    KB context is present. Verifies ordering: memory → anchor → role
+    guard → KB → utterance, so the LLM sees the contract before the
+    knowledge it should answer from."""
+    from backend.turn_dispatcher import _build_fallback_messages
+    from backend.turn_action import ProfileSnapshot
+
+    snap = ProfileSnapshot(
+        client_type="Физическое лицо", subject="Легковой автомобиль",
+        cost=300000.0, currency="BYN", original_cost=None,
+        original_currency=None, condition_new=0, age_years=2,
+        prepaid_pct=30.0, prepaid_amount=None, term_months=36,
+        type_schedule="0", name="Никита",
+    )
+    msgs = _build_fallback_messages(
+        utterance="а в чём разница графиков?",
+        rag_context="[Fragment 1]\nАннуитетный график — равные платежи.",
+        snapshot=snap,
+        memory_block="Контекст диалога:\nКлиент: подскажи",
+    )
+    content = msgs[0]["content"]
+    # All four blocks present.
+    assert "Контекст диалога" in content
+    assert "НЕ переспрашивай" in content  # snapshot anchor
+    assert "НЕ пиши формулировки" in content  # role guard
+    assert "Фрагменты из базы знаний" in content
+    # Ordering check.
+    pos_memory = content.index("Контекст диалога")
+    pos_anchor = content.index("НЕ переспрашивай")
+    pos_guard = content.index("НЕ пиши формулировки")
+    pos_kb = content.index("Фрагменты из базы знаний")
+    pos_utt = content.index("Сообщение клиента")
+    assert pos_memory < pos_anchor < pos_guard < pos_kb < pos_utt
 
 
 # ---------------------------------------------------------------------------
