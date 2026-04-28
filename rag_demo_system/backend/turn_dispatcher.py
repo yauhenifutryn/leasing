@@ -1409,6 +1409,29 @@ def _build_fallback_messages(
                 "Уже уточнено у клиента (НЕ переспрашивай эти поля):\n"
                 + "\n".join(lines) + "\n\n"
             )
+    # Anti-hallucination role guard (live call 8cb0bfaf 2026-04-28):
+    # the LLM fallback hallucinated "Меняем стоимость на 110k и график
+    # на аннуитетный. Подтвердите?" when the classifier dropped the
+    # multi-field change. State machine never staged the change, but
+    # the user heard a confirm-prompt and said "Да" on the next turn —
+    # silent data loss when the calc fired with old values.
+    #
+    # Architectural truth: change-confirm wording is ALWAYS produced by
+    # backend.profile_prompts.build_change_confirm_text via the
+    # EmitChangeConfirm action. The LLM is NEVER the source of change-
+    # confirm sentences. This block tells the LLM that contract so it
+    # cannot accidentally fabricate one. If the LLM thinks the user
+    # asked for a change but doesn't understand what, the right move
+    # is to ask, not to make up a confirmation.
+    role_guard = (
+        "ВАЖНО — твоя роль: НЕ пиши формулировки вида «Меняю X на Y, "
+        "всё верно?», «Подтверждаю изменение», «Подтвердите параметры». "
+        "Подтверждение изменений и итоговый readback — работа отдельной "
+        "системы, а не твоя. Если клиент попросил изменение и ты не "
+        "уверен какое именно поле и какое значение — переспроси "
+        "конкретно («что именно меняем — срок, аванс, или стоимость?»). "
+        "Лучше уточнить, чем выдумать подтверждение.\n\n"
+    )
     kb_block = ""
     if rag_context:
         kb_block = (
@@ -1417,7 +1440,8 @@ def _build_fallback_messages(
             + str(rag_context) + "\n\n"
         )
     user_content = (
-        f"{memory_prefix}{anchor_block}{kb_block}Сообщение клиента: {utterance}"
+        f"{memory_prefix}{anchor_block}{role_guard}{kb_block}"
+        f"Сообщение клиента: {utterance}"
     )
     return [{"role": "user", "content": user_content}]
 
