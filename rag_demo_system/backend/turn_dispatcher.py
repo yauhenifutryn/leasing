@@ -1054,29 +1054,12 @@ async def execute_action(
     real WebSocket / voice_session / LLM backend / TTS sink / calc
     client / speculative-RAG future instances.
     """
-    # Track the dispatched action class on the profile so apply_turn's
-    # step 1 + step 2 can gate apply_pending_change / readback advance on
-    # "user just heard the deterministic prompt".
-    #
-    # Codex adversarial review 2026-04-28: stamp non-deterministic
-    # actions IMMEDIATELY (their flag value is "FireLLMFallback" /
-    # "EmitClarify" / "FireCalc" / "FireOORMessage" / "FireSMS" / "Noop"
-    # — all of which DENY the gate, so over-stamping them is safe even
-    # if downstream emission fails).
-    #
-    # The two deterministic-confirm types — EmitChangeConfirm and
-    # EmitReadback — are stamped LATER, AFTER tts.say succeeds in their
-    # respective branches. Stamping these at function entry would let a
-    # failed/interrupted TTS quietly authorize a "Да" the user never
-    # heard a confirm for, reintroducing the silent-data-loss class the
-    # gates were added to prevent.
-    _DEFER_STAMP = (EmitChangeConfirm, EmitReadback)
+    # Track the dispatched action class on the profile so apply_turn step 1
+    # can gate apply_pending_change on "user just heard the deterministic
+    # change-confirm wording" — closes silent-data-loss when LLM fallback
+    # speaks during a CHANGE_PENDING window (call 1e2a4d66 2026-04-28).
     try:
-        if (
-            session is not None
-            and getattr(session, "client_profile", None) is not None
-            and not isinstance(action, _DEFER_STAMP)
-        ):
+        if session is not None and getattr(session, "client_profile", None) is not None:
             session.client_profile.last_emitted_action = type(action).__name__
     except Exception:  # noqa: BLE001
         pass
@@ -1158,16 +1141,6 @@ async def execute_action(
         from .profile_prompts import build_readback_text
         spoken = build_readback_text(action.snapshot)
         await tts.say(spoken)
-        # Stamp last_emitted_action ONLY after tts.say returns — the
-        # step 2 gate trusts this flag as proof the user actually heard
-        # the deterministic readback. Setting it before would let a
-        # failed/interrupted TTS authorize a confirmation the user never
-        # heard. Codex adversarial review 2026-04-28.
-        try:
-            if session is not None and getattr(session, "client_profile", None) is not None:
-                session.client_profile.last_emitted_action = "EmitReadback"
-        except Exception:  # noqa: BLE001
-            pass
         yield spoken
         return
 
@@ -1189,16 +1162,6 @@ async def execute_action(
         from .profile_prompts import build_change_confirm_text
         spoken = build_change_confirm_text({"changes": action.changes})
         await tts.say(spoken)
-        # Stamp last_emitted_action ONLY after tts.say returns — the
-        # step 1 gate trusts this flag as proof the user actually heard
-        # the deterministic change-confirm. Setting it before would let
-        # a failed/interrupted TTS authorize "Да" on a prompt the user
-        # never heard. Codex adversarial review 2026-04-28.
-        try:
-            if session is not None and getattr(session, "client_profile", None) is not None:
-                session.client_profile.last_emitted_action = "EmitChangeConfirm"
-        except Exception:  # noqa: BLE001
-            pass
         yield spoken
         return
 
