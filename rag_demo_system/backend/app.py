@@ -22,6 +22,19 @@ from .text_utils import clean_answer, clean_voice_output, contains_stop_word, it
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
 from .classifier_schema import ClassifierOutput, parse_classifier_output
+
+# Pydantic-derived JSON Schema for vLLM's response_format=json_schema.
+# Constrains the classifier's output token-by-token to the same shape
+# the parser already validates — eliminates the field-drop class of
+# bugs and reduces output tokens (no quoted empty-string nulls).
+# Single source of truth: the ClassifierOutput model itself.
+_CLASSIFIER_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "ClassifierOutput",
+        "schema": ClassifierOutput.model_json_schema(),
+    },
+}
 from .rag_skip import should_skip_rag
 from .profile_prompts import (
     build_change_confirm_text,
@@ -1194,6 +1207,7 @@ async def _stream_voice_response(
                 temperature=0.0,
                 max_tokens=120,
                 timeout_sec=4,
+                response_format=_CLASSIFIER_RESPONSE_FORMAT,
             )
             _raw = classify_resp.text.strip()
             # CP-2.2: route raw classifier text through ClassifierOutput.
@@ -1770,6 +1784,21 @@ async def voice_ws(websocket: WebSocket) -> None:
             temperature=0.0,
             max_tokens=80,
             timeout_sec=5,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "FirstUtterance",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["name", "question", "both"]},
+                            "name": {"type": ["string", "null"]},
+                            "question": {"type": ["string", "null"]},
+                        },
+                        "required": ["type"],
+                    },
+                },
+            },
         )
         _parsed = None
         _text = _classify_resp.text.strip()
