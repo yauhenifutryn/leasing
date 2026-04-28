@@ -1263,7 +1263,20 @@ async def _stream_voice_response(
                 temperature=0.0,
                 max_tokens=120,
                 timeout_sec=4,
-                response_format=_CLASSIFIER_RESPONSE_FORMAT,
+                # response_format=_CLASSIFIER_RESPONSE_FORMAT removed
+                # 2026-04-29: live call c3b3bed6 showed the 4B classifier
+                # dropping fields under schema enforcement (e.g. "Я уже
+                # сказал, 36 месяцев" returned `is_confirmation:true`
+                # only, no term_months). Same regression class as the
+                # earlier json_object attempt (commit e14f6ce, reverted
+                # at 76e35f9 with note "degraded extraction"). Schema
+                # constraint biases this small model toward minimal
+                # output. parse_classifier_output is forgiving on
+                # free-form JSON, so we don't need the schema for
+                # downstream safety. Kept the cache + downgrade
+                # infrastructure (backend/llm.py) and the warmup call
+                # in case a future bigger model benefits from FSM hot
+                # start.
             )
             _raw = classify_resp.text.strip()
             # CP-2.2: route raw classifier text through ClassifierOutput.
