@@ -1158,13 +1158,23 @@ async def execute_action(
         from .profile_prompts import build_readback_text
         spoken = build_readback_text(action.snapshot)
         await tts.say(spoken)
-        # Stamp last_emitted_action ONLY after tts.say returns — the
-        # step 2 gate trusts this flag as proof the user actually heard
-        # the deterministic readback. Setting it before would let a
-        # failed/interrupted TTS authorize a confirmation the user never
-        # heard. Codex adversarial review 2026-04-28.
+        # Stamp last_emitted_action ONLY when tts.say completed cleanly —
+        # the step 2 gate trusts this flag as proof the user actually
+        # heard the deterministic readback. If session.interrupted is
+        # True, the user barged in mid-emission and did NOT finish hearing
+        # the readback (especially the trailing "Всё верно?"). Stamping
+        # in that case would let the next "Да" pass step 2's gate and
+        # fire calc on stale profile values, silently losing the user's
+        # most recent change. Codex adversarial review 2026-04-29 (live
+        # call f4133ba5: barge-in mid-readback at 38% → next "Да" fired
+        # calc at 37% because the stamp ran post-interrupt and step 2
+        # treated the interrupted readback as authorized).
         try:
-            if session is not None and getattr(session, "client_profile", None) is not None:
+            if (
+                session is not None
+                and getattr(session, "client_profile", None) is not None
+                and not getattr(session, "interrupted", False)
+            ):
                 session.client_profile.last_emitted_action = "EmitReadback"
         except Exception:  # noqa: BLE001
             pass
@@ -1189,13 +1199,20 @@ async def execute_action(
         from .profile_prompts import build_change_confirm_text
         spoken = build_change_confirm_text({"changes": action.changes})
         await tts.say(spoken)
-        # Stamp last_emitted_action ONLY after tts.say returns — the
-        # step 1 gate trusts this flag as proof the user actually heard
-        # the deterministic change-confirm. Setting it before would let
-        # a failed/interrupted TTS authorize "Да" on a prompt the user
-        # never heard. Codex adversarial review 2026-04-28.
+        # Stamp last_emitted_action ONLY when tts.say completed cleanly.
+        # Same rationale as EmitReadback above — barge-in mid-emission
+        # means the user did not finish hearing what they would be
+        # authorizing, so the step 1 gate must NOT see the stamp.
+        # Live call f4133ba5 2026-04-29 (Codex adversarial): user barged
+        # in during change-confirm + recitation, said "Да", calc fired
+        # at the OLD prepaid value because the post-interrupt stamp
+        # falsely authorized the gate.
         try:
-            if session is not None and getattr(session, "client_profile", None) is not None:
+            if (
+                session is not None
+                and getattr(session, "client_profile", None) is not None
+                and not getattr(session, "interrupted", False)
+            ):
                 session.client_profile.last_emitted_action = "EmitChangeConfirm"
         except Exception:  # noqa: BLE001
             pass
