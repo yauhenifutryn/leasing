@@ -14,15 +14,27 @@ class LLMResponse:
     raw: dict[str, Any]
 
 
-# Process-level capability flag. Once any backend rejects response_format
-# with 4xx, future calls in this process skip the param entirely. Avoids
-# paying a 4xx round-trip on every classifier turn after the first failure
-# AND keeps the bot routing correctly even if the deployed vLLM is rebuilt
-# with a binary that no longer supports response_format=json_schema.
-# Codex adversarial review 2026-04-28: without this, every classifier call
-# would 4xx and exception-fallback to neutral CONVERSATION intent, silently
-# breaking calculator / SMS / change-param routing.
-_response_format_supported: bool = True
+# Per-backend capability cache. Keyed by (normalized_base_url, model). A
+# 4xx mentioning response_format on one endpoint+model only suppresses the
+# param for THAT backend — does NOT cross-contaminate other endpoints that
+# still support json_schema. Codex adversarial review 2026-04-28: a single
+# process-global flag would let one weak/older endpoint silently disable
+# schema enforcement on the production classifier vLLM that supports it.
+_response_format_supported: dict[tuple[str, str], bool] = {}
+
+
+def _rf_cache_key(base_url: str, model: str) -> tuple[str, str]:
+    return (base_url.rstrip("/"), model)
+
+
+def _rf_supported(base_url: str, model: str) -> bool:
+    """Capability lookup. Default True (try the param) until proven False
+    by a 4xx response that named response_format."""
+    return _response_format_supported.get(_rf_cache_key(base_url, model), True)
+
+
+def _rf_mark_unsupported(base_url: str, model: str) -> None:
+    _response_format_supported[_rf_cache_key(base_url, model)] = False
 
 
 def call_openai_compatible(
@@ -35,7 +47,6 @@ def call_openai_compatible(
     timeout_sec: int,
     response_format: dict[str, Any] | None = None,
 ) -> LLMResponse:
-    global _response_format_supported
     if not base_url:
         raise ValueError("RAG_LLM_BASE_URL is not set")
     if not model:
@@ -59,7 +70,7 @@ def call_openai_compatible(
             p["response_format"] = response_format
         return p
 
-    use_rf = response_format is not None and _response_format_supported
+    use_rf = response_format is not None and _rf_supported(base_url, model)
     resp = requests.post(url, json=_build_payload(use_rf), timeout=timeout_sec)
 
     if (
@@ -67,16 +78,18 @@ def call_openai_compatible(
         and resp.status_code in (400, 422)
         and "response_format" in (resp.text or "")
     ):
-        # Backend rejected response_format. Latch off for this process and
-        # retry once without it. Log loudly so operators see the downgrade.
+        # Backend rejected response_format for THIS specific (base_url, model).
+        # Mark unsupported for that key only — other endpoints/models keep
+        # trying. Retry once without the param; log loudly.
         print(
-            f"[LLM] CAPABILITY-DOWNGRADE: backend at {url} rejected "
-            f"response_format ({resp.status_code}); retrying without it. "
-            f"Future calls in this process will skip response_format. "
+            f"[LLM] CAPABILITY-DOWNGRADE: backend {base_url} model={model} "
+            f"rejected response_format ({resp.status_code}); retrying "
+            f"without it. Future calls to THIS backend+model will skip "
+            f"response_format. Other backends unaffected. "
             f"Body excerpt: {(resp.text or '')[:200]!r}",
             flush=True,
         )
-        _response_format_supported = False
+        _rf_mark_unsupported(base_url, model)
         resp = requests.post(url, json=_build_payload(False), timeout=timeout_sec)
 
     resp.raise_for_status()
