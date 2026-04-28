@@ -436,6 +436,9 @@ def test_change_pending_confirm_applies_change_and_fires_calc() -> None:
     profile = make_complete_profile(term_months=36)
     profile.state = ProfileState.CHANGE_PENDING
     profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 60}}}
+    # In production execute_action sets this when EmitChangeConfirm dispatches.
+    # Tests bootstrap CHANGE_PENDING directly so we set it explicitly here.
+    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да, верно")
     # Re-dispatch lands in step 6 FireCalc because profile is complete
@@ -458,6 +461,7 @@ def test_change_pending_confirm_applies_multi_field_changes() -> None:
             "client_type": {"old": "Физическое лицо", "new": "Юридическое лицо"},
         }
     }
+    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="да")
     assert profile.subject == "Грузовой автомобиль"
@@ -466,6 +470,72 @@ def test_change_pending_confirm_applies_multi_field_changes() -> None:
     assert profile.pending_change is None
     # Calc fires on the re-dispatch pass (profile complete + CONFIRMED).
     assert isinstance(action, FireCalc)
+
+
+def test_change_pending_confirm_re_emits_when_last_action_was_llm_fallback() -> None:
+    """Anti-data-loss gate (live call 1e2a4d66 2026-04-28). When state is
+    CHANGE_PENDING with pending_change but the user's most recent bot turn
+    was a FireLLMFallback (or anything other than EmitChangeConfirm), the
+    "Да" must NOT auto-apply — the user is confirming something they
+    haven't actually heard staged. The dispatcher must re-emit the
+    deterministic change-confirm so the user hears what is actually
+    staged before applying.
+
+    Scenario from the live call:
+      T1: bot emits "Меняю стоимость на 115k и срок на 49, всё верно?"
+          → state=CHANGE_PENDING, pending_change={cost, term},
+          last_emitted_action="EmitChangeConfirm"
+      T1.5: BARGE-IN
+      T2: user says "ещё аванс 37"; classifier drops the extraction;
+          dispatcher returns FireLLMFallback (LLM clarifies semantically);
+          last_emitted_action="FireLLMFallback"
+          (state and pending_change unchanged)
+      T3: user says "Да" — without this gate, step 1 would apply
+          pending_change blindly and calc would fire with whatever was
+          staged, not what the user actually heard the bot propose.
+
+    Expected: re-emit EmitChangeConfirm with current pending_change so
+    the user gets a deterministic re-readback before any apply.
+    """
+    profile = make_complete_profile(term_months=36)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 60}}}
+    profile.last_emitted_action = "FireLLMFallback"  # NOT EmitChangeConfirm
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+
+    # Must NOT have applied the change.
+    assert profile.term_months == 36, "stale data must not be applied"
+    assert profile.state == ProfileState.CHANGE_PENDING
+    assert profile.pending_change is not None
+    # Must have re-emitted the deterministic change-confirm with current
+    # pending_change so the user hears what is staged.
+    from backend.turn_action import EmitChangeConfirm
+    assert isinstance(action, EmitChangeConfirm)
+    assert action.changes == {"term_months": {"old": 36, "new": 60}}
+
+
+def test_change_pending_confirm_re_emits_when_last_action_was_clarify() -> None:
+    """Same gate covers EmitClarify as the prior action — the user just
+    answered a clarification question, not a change-confirm. Their "Да"
+    cannot stand for a confirmation of staged changes they didn't hear."""
+    profile = make_complete_profile(term_months=36, prepaid_pct=20.0)
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {"changes": {
+        "term_months": {"old": 36, "new": 60},
+        "prepaid_pct": {"old": 20.0, "new": 30.0},
+    }}
+    profile.last_emitted_action = "EmitClarify"
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+
+    assert profile.term_months == 36
+    assert profile.prepaid_pct == 20.0
+    assert profile.state == ProfileState.CHANGE_PENDING
+    from backend.turn_action import EmitChangeConfirm
+    assert isinstance(action, EmitChangeConfirm)
+    assert "term_months" in action.changes
+    assert "prepaid_pct" in action.changes
 
 
 def test_change_pending_deny_does_not_apply_and_stays_in_change_pending() -> None:
@@ -724,6 +794,7 @@ def test_change_pending_legacy_single_field_shape_applies_on_confirm() -> None:
     profile = make_complete_profile(term_months=36)
     profile.state = ProfileState.CHANGE_PENDING
     profile.pending_change = {"field": "term_months", "new_value": 48}
+    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="да")
     assert profile.term_months == 48
@@ -937,6 +1008,7 @@ def test_step1_currency_change_from_usd_to_byn_clears_original_stash() -> None:
     profile.pending_change = {"changes": {
         "currency": {"old": "USD", "new": "BYN"},
     }}
+    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     # After applying, profile.original_* should be cleared.
@@ -1032,6 +1104,7 @@ def test_step1_apply_pending_change_clears_prepaid_sibling():
         type_schedule="0",
         state=ProfileState.CHANGE_PENDING,
         pending_change={"changes": {"prepaid_amount": {"old": None, "new": 5000.0}}},
+        last_emitted_action="EmitChangeConfirm",
     )
     co = ClassifierOutput.model_validate(
         {"intent": "CONVERSATION", "is_confirmation": True},

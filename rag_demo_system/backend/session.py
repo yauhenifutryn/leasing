@@ -92,6 +92,18 @@ class ClientProfile:
     # params ("легковой за 80 тысяч" = subject + cost). A single-field payload
     # is still accepted for backward compatibility with older call sites.
     pending_change: Optional[dict[str, Any]] = None
+    # Class name of the LAST TurnAction that was actually dispatched to the
+    # user (set by execute_action on every emission). Read by apply_turn
+    # step 1 to gate apply_pending_change: a "Да" confirmation is only
+    # honored if the user JUST heard the deterministic EmitChangeConfirm
+    # wording. If their last turn was a FireLLMFallback / EmitClarify /
+    # FireCalc / etc. the dispatcher re-emits the change-confirm so the
+    # user can confirm what is actually staged, not whatever the LLM
+    # narrated. Closes silent-data-loss in call 1e2a4d66 (2026-04-28):
+    # pending_change={cost:345k,term:49} stayed live through a barge-in
+    # and an LLM clarification turn, then "Да" applied — but calc fired
+    # with original values, not the staged change.
+    last_emitted_action: str = ""
 
     _CORE_FIELDS = (
         "client_type",

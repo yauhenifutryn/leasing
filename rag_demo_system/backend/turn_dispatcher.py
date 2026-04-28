@@ -407,6 +407,26 @@ def _dispatch_once(
         and classifier_output.is_confirmation
         and profile.pending_change
     ):
+        # Anti-data-loss gate (live call 1e2a4d66 2026-04-28): only honor
+        # the confirmation if the user's most recent bot turn was the
+        # deterministic EmitChangeConfirm wording (built by
+        # build_change_confirm_text). If the last turn was anything else —
+        # FireLLMFallback, EmitClarify, FireCalc, EmitReadback — the user
+        # is confirming something they didn't actually hear staged.
+        # Re-emit the change-confirm so they hear what is actually staged
+        # before applying. No data loss, user stays in control.
+        if profile.last_emitted_action != "EmitChangeConfirm":
+            print(
+                f"[apply_turn] CHANGE_PENDING confirm received but last "
+                f"emitted action was {profile.last_emitted_action!r}, not "
+                f"EmitChangeConfirm. Re-emitting deterministic confirm so "
+                f"the user hears the actual staged changes before applying.",
+                flush=True,
+            )
+            return EmitChangeConfirm(
+                changes=(profile.pending_change or {}).get("changes", {}) or {},
+                snapshot=build_snapshot(profile),
+            )
         changes = profile.pending_change.get("changes", {}) or {}
         # Snapshot the change keys BEFORE apply_pending_change clears
         # pending_change, so the USD→BYN stash logic below can inspect them.
@@ -997,6 +1017,16 @@ async def execute_action(
     real WebSocket / voice_session / LLM backend / TTS sink / calc
     client / speculative-RAG future instances.
     """
+    # Track the dispatched action class on the profile so apply_turn step 1
+    # can gate apply_pending_change on "user just heard the deterministic
+    # change-confirm wording" — closes silent-data-loss when LLM fallback
+    # speaks during a CHANGE_PENDING window (call 1e2a4d66 2026-04-28).
+    try:
+        if session is not None and getattr(session, "client_profile", None) is not None:
+            session.client_profile.last_emitted_action = type(action).__name__
+    except Exception:  # noqa: BLE001
+        pass
+
     if isinstance(action, FireCalc):
         # Spec §7.2 invariants #3, #4, #7:
         #   - LLM bypassed: renderer drives the spoken text verbatim.
