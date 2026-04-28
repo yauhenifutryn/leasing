@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+from xml.sax.saxutils import escape as xml_escape
 
 import torch
 from fastapi import FastAPI, HTTPException
@@ -39,22 +40,21 @@ class SileroTTSSynthesizer:
             print(f"[silero_tts] Loaded custom voice from {speaker_pt}")
 
     def synthesize(self, text: str) -> tuple[bytes, int]:
-        if self._speaker_embedding is not None:
-            audio = self._model.apply_tts(
-                text=text,
-                speaker=self._speaker_embedding,
-                sample_rate=self._sample_rate,
-                put_accent=True,
-                put_yo=True,
-            )
+        rate_pct = int(os.getenv("SILERO_TTS_RATE_PCT") or "100")
+        speaker_arg = (
+            self._speaker_embedding if self._speaker_embedding is not None else self._speaker
+        )
+        common_kwargs = {
+            "speaker": speaker_arg,
+            "sample_rate": self._sample_rate,
+            "put_accent": True,
+            "put_yo": True,
+        }
+        if rate_pct != 100:
+            ssml = f'<speak><prosody rate="{rate_pct}%">{xml_escape(text)}</prosody></speak>'
+            audio = self._model.apply_tts(ssml_text=ssml, **common_kwargs)
         else:
-            audio = self._model.apply_tts(
-                text=text,
-                speaker=self._speaker,
-                sample_rate=self._sample_rate,
-                put_accent=True,
-                put_yo=True,
-            )
+            audio = self._model.apply_tts(text=text, **common_kwargs)
         pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
         return pcm16, self._sample_rate
 
