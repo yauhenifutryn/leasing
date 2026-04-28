@@ -417,6 +417,34 @@ async def _warmup() -> None:
     except Exception:  # noqa: BLE001
         pass
 
+    # Pre-compile the json_schema FSM in the classifier vLLM (port 8788)
+    # so the first user call doesn't pay the 1-3 second outlines-backend
+    # schema-compile penalty. vLLM caches the compiled FSM after the first
+    # request with a given schema; one warmup call here makes every real
+    # user call hit the warm-cache path. Live-call evidence 2026-04-28:
+    # first turn after a quiet stretch took ~7s VAD-to-bot; second turn
+    # ~3s. Warming the schema closes that gap.
+    try:
+        from .llm import call_openai_compatible
+        _sa_base_url = settings.llm.session_agent_base_url or settings.llm.fast_base_url or settings.llm.base_url
+        _sa_model = settings.llm.session_agent_model or settings.llm.fast_model or settings.llm.model
+        if _sa_base_url and _sa_model:
+            await asyncio.to_thread(
+                call_openai_compatible,
+                base_url=_sa_base_url,
+                model=_sa_model,
+                system_prompt="warmup",
+                user_prompt="ok",
+                temperature=0.0,
+                max_tokens=10,
+                timeout_sec=15,
+                response_format=_CLASSIFIER_RESPONSE_FORMAT,
+            )
+            print("[startup] classifier json_schema FSM warmed", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        # Warmup failures are non-fatal — first user call will pay the cost.
+        print(f"[startup] classifier warmup skipped: {exc}", flush=True)
+
     if settings.jambonz.enabled:
         print("[Jambonz] Enabled. Waiting for calls on /ws/jambonz", flush=True)
 
