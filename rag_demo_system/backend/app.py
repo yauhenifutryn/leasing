@@ -947,7 +947,19 @@ async def _stream_voice_response(
         "ок", "хорошо", "конечно", "точно", "именно", "всё верно",
         "все верно", "давайте", "давай",
     })
+    # Symmetric counterpart to _CONFIRM_WORDS. Only used in pending states
+    # (READBACK_PENDING / CHANGE_PENDING) where a one-word negative reply
+    # has unambiguous meaning: "the user rejected the proposal". Strict
+    # whole-utterance match (no substring) and a tight length cap keep
+    # this safe — multi-word denials like "нет, давай аванс 30%" carry a
+    # new value and must go through the classifier so the value lands.
+    # Conservative scope per 2026-04-28 user request.
+    _DENY_WORDS = frozenset({
+        "нет", "не", "не надо", "не нужно", "отмена",
+        "неверно", "неправильно", "ошибка",
+    })
     _fast_confirm = False
+    _fast_deny = False
     _current_state = None
     try:
         _current_state = session.client_profile.state
@@ -957,6 +969,8 @@ async def _stream_voice_response(
             # utterances that merely contain "да" as filler.
             if len(message.split()) <= 3 and _msg_stripped in _CONFIRM_WORDS:
                 _fast_confirm = True
+            elif len(message.split()) <= 2 and _msg_stripped in _DENY_WORDS:
+                _fast_deny = True
     except Exception:  # noqa: BLE001
         pass
 
@@ -969,6 +983,20 @@ async def _stream_voice_response(
         )
         print(
             f"[Classifier] FAST-PATH: confirm in state={_current_state.value if _current_state else '?'} msg='{_msg_stripped}' session={session_id[:8]}",
+            flush=True,
+        )
+    elif _fast_deny:
+        # Dispatcher routes is_confirmation=False through normal channels:
+        # in CHANGE_PENDING this falls to FireLLMFallback so the bot can
+        # respond conversationally ("Хорошо, не меняем. Что хотите?")
+        # without paying the classifier round-trip first. State stays
+        # CHANGE_PENDING so the next utterance can correct or restart.
+        _sa_output = ClassifierOutput.model_validate(
+            {"intent": "CONVERSATION", "is_confirmation": False},
+            context={"utterance": message or ""},
+        )
+        print(
+            f"[Classifier] FAST-PATH: deny in state={_current_state.value if _current_state else '?'} msg='{_msg_stripped}' session={session_id[:8]}",
             flush=True,
         )
 
