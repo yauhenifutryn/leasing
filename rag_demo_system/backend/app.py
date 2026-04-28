@@ -1181,8 +1181,9 @@ async def _stream_voice_response(
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=80,
+                max_tokens=120,
                 timeout_sec=4,
+                response_format={"type": "json_object"},
             )
             _raw = classify_resp.text.strip()
             # CP-2.2: route raw classifier text through ClassifierOutput.
@@ -1759,6 +1760,7 @@ async def voice_ws(websocket: WebSocket) -> None:
             temperature=0.0,
             max_tokens=80,
             timeout_sec=5,
+            response_format={"type": "json_object"},
         )
         _parsed = None
         _text = _classify_resp.text.strip()
