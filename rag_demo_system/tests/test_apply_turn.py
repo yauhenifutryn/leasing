@@ -515,6 +515,50 @@ def test_change_pending_confirm_re_emits_when_last_action_was_llm_fallback() -> 
     assert action.changes == {"term_months": {"old": 36, "new": 60}}
 
 
+def test_readback_pending_confirm_re_emits_when_last_action_was_llm_fallback() -> None:
+    """Step 2 mirror of the step 1 anti-data-loss gate (live call 897ce2bf
+    2026-04-28). Scenario:
+      T1: deterministic EmitReadback fires → state=READBACK_PENDING,
+          last_emitted_action="EmitReadback".
+      T1.5: BARGE-IN.
+      T2: user says 'аванс 37%' but classifier drops the extraction →
+          delta empty → step 4 doesn't fire → FireLLMFallback runs →
+          last_emitted_action="FireLLMFallback". State + profile
+          unchanged.
+      T3: user says "Да". Without the gate, step 2 would advance to
+          CONFIRMED and step 6 would fire calc with the OLD profile
+          values. User believed they were confirming a recalc with the
+          new prepaid value but the prepaid value was never staged.
+
+    Expected: re-emit EmitReadback so the user hears what's actually in
+    the profile before calc fires."""
+    profile = make_complete_profile(prepaid_pct=30.0)
+    profile.state = ProfileState.READBACK_PENDING
+    profile.last_emitted_action = "FireLLMFallback"  # NOT EmitReadback
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+
+    # State must NOT have advanced to CONFIRMED.
+    assert profile.state == ProfileState.READBACK_PENDING
+    # Calc must NOT have fired.
+    from backend.turn_action import EmitReadback
+    assert isinstance(action, EmitReadback)
+    assert not isinstance(action, FireCalc)
+
+
+def test_readback_pending_confirm_with_empty_last_action_still_applies() -> None:
+    """Test-fixture / fresh-session default: empty last_emitted_action
+    must NOT trip the gate. Backwards-compat for test bootstrap that
+    sets state directly without simulating a prior dispatch."""
+    profile = make_complete_profile()
+    profile.state = ProfileState.READBACK_PENDING
+    # last_emitted_action defaults to "" — should bypass gate.
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="да")
+    assert profile.state == ProfileState.CONFIRMED
+    assert isinstance(action, FireCalc)
+
+
 def test_change_pending_confirm_re_emits_when_last_action_was_clarify() -> None:
     """Same gate covers EmitClarify as the prior action — the user just
     answered a clarification question, not a change-confirm. Their "Да"

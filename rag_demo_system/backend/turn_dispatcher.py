@@ -415,7 +415,13 @@ def _dispatch_once(
         # is confirming something they didn't actually hear staged.
         # Re-emit the change-confirm so they hear what is actually staged
         # before applying. No data loss, user stays in control.
-        if profile.last_emitted_action != "EmitChangeConfirm":
+        # Empty string is the test-fixture / fresh-session default: in
+        # production, state can only become CHANGE_PENDING via step 4
+        # which routes through execute_action and sets the flag. Skipping
+        # when "" lets test fixtures bootstrap state without paying the
+        # gate (unreachable production state).
+        _last_action = profile.last_emitted_action or ""
+        if _last_action and _last_action != "EmitChangeConfirm":
             print(
                 f"[apply_turn] CHANGE_PENDING confirm received but last "
                 f"emitted action was {profile.last_emitted_action!r}, not "
@@ -473,6 +479,37 @@ def _dispatch_once(
     # STEP 2: READBACK_PENDING + is_confirmation → CONFIRMED. No
     # return — we fall through to step 6 in the same iteration so
     # calc fires immediately after confirmation.
+    #
+    # Anti-data-loss gate (live call 897ce2bf 2026-04-28, second
+    # occurrence after step 1's gate landed in 10a5c52): the same
+    # pattern bites step 2 — user barges in mid-readback, says
+    # something the classifier drops ("аванс 37%"), LLM narrates
+    # "это отличный вариант, давайте я пересчитаю", user says "Да".
+    # Without a gate here, step 2 would advance to CONFIRMED and step
+    # 6 would fire calc with the OLD profile values (no change
+    # actually applied). The user heard the LLM offer to recalculate;
+    # they did NOT hear a deterministic readback that included the new
+    # value. Re-emit the deterministic readback so the user confirms
+    # what is actually in the profile, not what the LLM offered.
+    # Empty string is the test-fixture / fresh-session default: in
+    # production, state can only become READBACK_PENDING via step 5a
+    # which routes through execute_action and sets the flag. Skipping
+    # when "" lets test fixtures bootstrap state without paying the gate.
+    _last_action_rb = profile.last_emitted_action or ""
+    if (
+        profile.state == ProfileState.READBACK_PENDING
+        and classifier_output.is_confirmation
+        and _last_action_rb
+        and _last_action_rb != "EmitReadback"
+    ):
+        print(
+            f"[apply_turn] READBACK_PENDING confirm received but last "
+            f"emitted action was {profile.last_emitted_action!r}, not "
+            f"EmitReadback. Re-emitting deterministic readback so the "
+            f"user hears the actual profile values before calc fires.",
+            flush=True,
+        )
+        return EmitReadback(snapshot=build_snapshot(profile))
     if (
         profile.state == ProfileState.READBACK_PENDING
         and classifier_output.is_confirmation
