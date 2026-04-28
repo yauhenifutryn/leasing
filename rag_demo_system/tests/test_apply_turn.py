@@ -436,9 +436,6 @@ def test_change_pending_confirm_applies_change_and_fires_calc() -> None:
     profile = make_complete_profile(term_months=36)
     profile.state = ProfileState.CHANGE_PENDING
     profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 60}}}
-    # In production execute_action sets this when EmitChangeConfirm dispatches.
-    # Tests bootstrap CHANGE_PENDING directly so we set it explicitly here.
-    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да, верно")
     # Re-dispatch lands in step 6 FireCalc because profile is complete
@@ -461,7 +458,6 @@ def test_change_pending_confirm_applies_multi_field_changes() -> None:
             "client_type": {"old": "Физическое лицо", "new": "Юридическое лицо"},
         }
     }
-    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="да")
     assert profile.subject == "Грузовой автомобиль"
@@ -470,116 +466,6 @@ def test_change_pending_confirm_applies_multi_field_changes() -> None:
     assert profile.pending_change is None
     # Calc fires on the re-dispatch pass (profile complete + CONFIRMED).
     assert isinstance(action, FireCalc)
-
-
-def test_change_pending_confirm_re_emits_when_last_action_was_llm_fallback() -> None:
-    """Anti-data-loss gate (live call 1e2a4d66 2026-04-28). When state is
-    CHANGE_PENDING with pending_change but the user's most recent bot turn
-    was a FireLLMFallback (or anything other than EmitChangeConfirm), the
-    "Да" must NOT auto-apply — the user is confirming something they
-    haven't actually heard staged. The dispatcher must re-emit the
-    deterministic change-confirm so the user hears what is actually
-    staged before applying.
-
-    Scenario from the live call:
-      T1: bot emits "Меняю стоимость на 115k и срок на 49, всё верно?"
-          → state=CHANGE_PENDING, pending_change={cost, term},
-          last_emitted_action="EmitChangeConfirm"
-      T1.5: BARGE-IN
-      T2: user says "ещё аванс 37"; classifier drops the extraction;
-          dispatcher returns FireLLMFallback (LLM clarifies semantically);
-          last_emitted_action="FireLLMFallback"
-          (state and pending_change unchanged)
-      T3: user says "Да" — without this gate, step 1 would apply
-          pending_change blindly and calc would fire with whatever was
-          staged, not what the user actually heard the bot propose.
-
-    Expected: re-emit EmitChangeConfirm with current pending_change so
-    the user gets a deterministic re-readback before any apply.
-    """
-    profile = make_complete_profile(term_months=36)
-    profile.state = ProfileState.CHANGE_PENDING
-    profile.pending_change = {"changes": {"term_months": {"old": 36, "new": 60}}}
-    profile.last_emitted_action = "FireLLMFallback"  # NOT EmitChangeConfirm
-    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
-    action = apply_turn(profile, classifier, utterance="да")
-
-    # Must NOT have applied the change.
-    assert profile.term_months == 36, "stale data must not be applied"
-    assert profile.state == ProfileState.CHANGE_PENDING
-    assert profile.pending_change is not None
-    # Must have re-emitted the deterministic change-confirm with current
-    # pending_change so the user hears what is staged.
-    from backend.turn_action import EmitChangeConfirm
-    assert isinstance(action, EmitChangeConfirm)
-    assert action.changes == {"term_months": {"old": 36, "new": 60}}
-
-
-def test_readback_pending_confirm_re_emits_when_last_action_was_llm_fallback() -> None:
-    """Step 2 mirror of the step 1 anti-data-loss gate (live call 897ce2bf
-    2026-04-28). Scenario:
-      T1: deterministic EmitReadback fires → state=READBACK_PENDING,
-          last_emitted_action="EmitReadback".
-      T1.5: BARGE-IN.
-      T2: user says 'аванс 37%' but classifier drops the extraction →
-          delta empty → step 4 doesn't fire → FireLLMFallback runs →
-          last_emitted_action="FireLLMFallback". State + profile
-          unchanged.
-      T3: user says "Да". Without the gate, step 2 would advance to
-          CONFIRMED and step 6 would fire calc with the OLD profile
-          values. User believed they were confirming a recalc with the
-          new prepaid value but the prepaid value was never staged.
-
-    Expected: re-emit EmitReadback so the user hears what's actually in
-    the profile before calc fires."""
-    profile = make_complete_profile(prepaid_pct=30.0)
-    profile.state = ProfileState.READBACK_PENDING
-    profile.last_emitted_action = "FireLLMFallback"  # NOT EmitReadback
-    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
-    action = apply_turn(profile, classifier, utterance="да")
-
-    # State must NOT have advanced to CONFIRMED.
-    assert profile.state == ProfileState.READBACK_PENDING
-    # Calc must NOT have fired.
-    from backend.turn_action import EmitReadback
-    assert isinstance(action, EmitReadback)
-    assert not isinstance(action, FireCalc)
-
-
-def test_readback_pending_confirm_with_empty_last_action_still_applies() -> None:
-    """Test-fixture / fresh-session default: empty last_emitted_action
-    must NOT trip the gate. Backwards-compat for test bootstrap that
-    sets state directly without simulating a prior dispatch."""
-    profile = make_complete_profile()
-    profile.state = ProfileState.READBACK_PENDING
-    # last_emitted_action defaults to "" — should bypass gate.
-    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
-    action = apply_turn(profile, classifier, utterance="да")
-    assert profile.state == ProfileState.CONFIRMED
-    assert isinstance(action, FireCalc)
-
-
-def test_change_pending_confirm_re_emits_when_last_action_was_clarify() -> None:
-    """Same gate covers EmitClarify as the prior action — the user just
-    answered a clarification question, not a change-confirm. Their "Да"
-    cannot stand for a confirmation of staged changes they didn't hear."""
-    profile = make_complete_profile(term_months=36, prepaid_pct=20.0)
-    profile.state = ProfileState.CHANGE_PENDING
-    profile.pending_change = {"changes": {
-        "term_months": {"old": 36, "new": 60},
-        "prepaid_pct": {"old": 20.0, "new": 30.0},
-    }}
-    profile.last_emitted_action = "EmitClarify"
-    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
-    action = apply_turn(profile, classifier, utterance="да")
-
-    assert profile.term_months == 36
-    assert profile.prepaid_pct == 20.0
-    assert profile.state == ProfileState.CHANGE_PENDING
-    from backend.turn_action import EmitChangeConfirm
-    assert isinstance(action, EmitChangeConfirm)
-    assert "term_months" in action.changes
-    assert "prepaid_pct" in action.changes
 
 
 def test_change_pending_deny_does_not_apply_and_stays_in_change_pending() -> None:
@@ -838,7 +724,6 @@ def test_change_pending_legacy_single_field_shape_applies_on_confirm() -> None:
     profile = make_complete_profile(term_months=36)
     profile.state = ProfileState.CHANGE_PENDING
     profile.pending_change = {"field": "term_months", "new_value": 48}
-    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="да")
     assert profile.term_months == 48
@@ -1052,7 +937,6 @@ def test_step1_currency_change_from_usd_to_byn_clears_original_stash() -> None:
     profile.pending_change = {"changes": {
         "currency": {"old": "USD", "new": "BYN"},
     }}
-    profile.last_emitted_action = "EmitChangeConfirm"
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
     # After applying, profile.original_* should be cleared.
@@ -1148,7 +1032,6 @@ def test_step1_apply_pending_change_clears_prepaid_sibling():
         type_schedule="0",
         state=ProfileState.CHANGE_PENDING,
         pending_change={"changes": {"prepaid_amount": {"old": None, "new": 5000.0}}},
-        last_emitted_action="EmitChangeConfirm",
     )
     co = ClassifierOutput.model_validate(
         {"intent": "CONVERSATION", "is_confirmation": True},
@@ -1616,9 +1499,7 @@ def test_build_fallback_messages_includes_memory_block():
 
 
 def test_build_fallback_messages_omits_memory_block_when_absent():
-    """memory_block is optional; absence must not introduce empty noise.
-    The role-guard block IS unconditional (anti-hallucination contract),
-    so we assert structure rather than exact equality."""
+    """memory_block is optional; absence must not introduce empty noise."""
     from backend.turn_dispatcher import _build_fallback_messages
 
     msgs = _build_fallback_messages(
@@ -1626,76 +1507,7 @@ def test_build_fallback_messages_omits_memory_block_when_absent():
         rag_context=None,
         snapshot=None,
     )
-    content = msgs[0]["content"]
-    assert "Сообщение клиента: привет" in content
-    # No memory or KB blocks injected.
-    assert "Контекст диалога" not in content
-    assert "Фрагменты из базы знаний" not in content
-    assert "НЕ переспрашивай" not in content  # no snapshot anchor
-
-
-def test_build_fallback_messages_role_guard_blocks_change_confirm_hallucination():
-    """Anti-hallucination role guard (live call 8cb0bfaf 2026-04-28):
-    the LLM hallucinated 'Меняем стоимость и график. Подтвердите?' when
-    classifier dropped a multi-field change. State machine never staged
-    the change; user said 'Да' on next turn → silent data loss.
-
-    Architectural truth: change-confirm wording is ALWAYS produced by
-    build_change_confirm_text via EmitChangeConfirm. The LLM is NEVER the
-    source. The role-guard prompt must explicitly forbid the LLM from
-    writing change-confirm phrases so it cannot fabricate one even when
-    the classifier silently drops fields."""
-    from backend.turn_dispatcher import _build_fallback_messages
-
-    msgs = _build_fallback_messages(
-        utterance="давай поменяем стоимость и график",
-        rag_context=None,
-        snapshot=None,
-    )
-    content = msgs[0]["content"]
-    # Must explicitly forbid change-confirm wording.
-    assert "Меняю" in content and "всё верно" in content, (
-        "role guard must name the forbidden change-confirm shape"
-    )
-    assert "Подтверждаю изменение" in content or "Подтвердите параметры" in content
-    # Must instruct the model to clarify when uncertain.
-    assert "переспроси" in content or "уточни" in content
-
-
-def test_build_fallback_messages_role_guard_present_with_snapshot_and_kb():
-    """Role guard is unconditional — applies whether or not snapshot or
-    KB context is present. Verifies ordering: memory → anchor → role
-    guard → KB → utterance, so the LLM sees the contract before the
-    knowledge it should answer from."""
-    from backend.turn_dispatcher import _build_fallback_messages
-    from backend.turn_action import ProfileSnapshot
-
-    snap = ProfileSnapshot(
-        client_type="Физическое лицо", subject="Легковой автомобиль",
-        cost=300000.0, currency="BYN", original_cost=None,
-        original_currency=None, condition_new=0, age_years=2,
-        prepaid_pct=30.0, prepaid_amount=None, term_months=36,
-        type_schedule="0", name="Никита",
-    )
-    msgs = _build_fallback_messages(
-        utterance="а в чём разница графиков?",
-        rag_context="[Fragment 1]\nАннуитетный график — равные платежи.",
-        snapshot=snap,
-        memory_block="Контекст диалога:\nКлиент: подскажи",
-    )
-    content = msgs[0]["content"]
-    # All four blocks present.
-    assert "Контекст диалога" in content
-    assert "НЕ переспрашивай" in content  # snapshot anchor
-    assert "НЕ пиши формулировки" in content  # role guard
-    assert "Фрагменты из базы знаний" in content
-    # Ordering check.
-    pos_memory = content.index("Контекст диалога")
-    pos_anchor = content.index("НЕ переспрашивай")
-    pos_guard = content.index("НЕ пиши формулировки")
-    pos_kb = content.index("Фрагменты из базы знаний")
-    pos_utt = content.index("Сообщение клиента")
-    assert pos_memory < pos_anchor < pos_guard < pos_kb < pos_utt
+    assert msgs[0]["content"] == "Сообщение клиента: привет"
 
 
 # ---------------------------------------------------------------------------

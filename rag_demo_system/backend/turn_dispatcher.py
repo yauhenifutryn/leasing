@@ -407,32 +407,6 @@ def _dispatch_once(
         and classifier_output.is_confirmation
         and profile.pending_change
     ):
-        # Anti-data-loss gate (live call 1e2a4d66 2026-04-28): only honor
-        # the confirmation if the user's most recent bot turn was the
-        # deterministic EmitChangeConfirm wording (built by
-        # build_change_confirm_text). If the last turn was anything else —
-        # FireLLMFallback, EmitClarify, FireCalc, EmitReadback — the user
-        # is confirming something they didn't actually hear staged.
-        # Re-emit the change-confirm so they hear what is actually staged
-        # before applying. No data loss, user stays in control.
-        # Empty string is the test-fixture / fresh-session default: in
-        # production, state can only become CHANGE_PENDING via step 4
-        # which routes through execute_action and sets the flag. Skipping
-        # when "" lets test fixtures bootstrap state without paying the
-        # gate (unreachable production state).
-        _last_action = profile.last_emitted_action or ""
-        if _last_action and _last_action != "EmitChangeConfirm":
-            print(
-                f"[apply_turn] CHANGE_PENDING confirm received but last "
-                f"emitted action was {profile.last_emitted_action!r}, not "
-                f"EmitChangeConfirm. Re-emitting deterministic confirm so "
-                f"the user hears the actual staged changes before applying.",
-                flush=True,
-            )
-            return EmitChangeConfirm(
-                changes=(profile.pending_change or {}).get("changes", {}) or {},
-                snapshot=build_snapshot(profile),
-            )
         changes = profile.pending_change.get("changes", {}) or {}
         # Snapshot the change keys BEFORE apply_pending_change clears
         # pending_change, so the USD→BYN stash logic below can inspect them.
@@ -479,37 +453,6 @@ def _dispatch_once(
     # STEP 2: READBACK_PENDING + is_confirmation → CONFIRMED. No
     # return — we fall through to step 6 in the same iteration so
     # calc fires immediately after confirmation.
-    #
-    # Anti-data-loss gate (live call 897ce2bf 2026-04-28, second
-    # occurrence after step 1's gate landed in 10a5c52): the same
-    # pattern bites step 2 — user barges in mid-readback, says
-    # something the classifier drops ("аванс 37%"), LLM narrates
-    # "это отличный вариант, давайте я пересчитаю", user says "Да".
-    # Without a gate here, step 2 would advance to CONFIRMED and step
-    # 6 would fire calc with the OLD profile values (no change
-    # actually applied). The user heard the LLM offer to recalculate;
-    # they did NOT hear a deterministic readback that included the new
-    # value. Re-emit the deterministic readback so the user confirms
-    # what is actually in the profile, not what the LLM offered.
-    # Empty string is the test-fixture / fresh-session default: in
-    # production, state can only become READBACK_PENDING via step 5a
-    # which routes through execute_action and sets the flag. Skipping
-    # when "" lets test fixtures bootstrap state without paying the gate.
-    _last_action_rb = profile.last_emitted_action or ""
-    if (
-        profile.state == ProfileState.READBACK_PENDING
-        and classifier_output.is_confirmation
-        and _last_action_rb
-        and _last_action_rb != "EmitReadback"
-    ):
-        print(
-            f"[apply_turn] READBACK_PENDING confirm received but last "
-            f"emitted action was {profile.last_emitted_action!r}, not "
-            f"EmitReadback. Re-emitting deterministic readback so the "
-            f"user hears the actual profile values before calc fires.",
-            flush=True,
-        )
-        return EmitReadback(snapshot=build_snapshot(profile))
     if (
         profile.state == ProfileState.READBACK_PENDING
         and classifier_output.is_confirmation
@@ -1054,33 +997,6 @@ async def execute_action(
     real WebSocket / voice_session / LLM backend / TTS sink / calc
     client / speculative-RAG future instances.
     """
-    # Track the dispatched action class on the profile so apply_turn's
-    # step 1 + step 2 can gate apply_pending_change / readback advance on
-    # "user just heard the deterministic prompt".
-    #
-    # Codex adversarial review 2026-04-28: stamp non-deterministic
-    # actions IMMEDIATELY (their flag value is "FireLLMFallback" /
-    # "EmitClarify" / "FireCalc" / "FireOORMessage" / "FireSMS" / "Noop"
-    # — all of which DENY the gate, so over-stamping them is safe even
-    # if downstream emission fails).
-    #
-    # The two deterministic-confirm types — EmitChangeConfirm and
-    # EmitReadback — are stamped LATER, AFTER tts.say succeeds in their
-    # respective branches. Stamping these at function entry would let a
-    # failed/interrupted TTS quietly authorize a "Да" the user never
-    # heard a confirm for, reintroducing the silent-data-loss class the
-    # gates were added to prevent.
-    _DEFER_STAMP = (EmitChangeConfirm, EmitReadback)
-    try:
-        if (
-            session is not None
-            and getattr(session, "client_profile", None) is not None
-            and not isinstance(action, _DEFER_STAMP)
-        ):
-            session.client_profile.last_emitted_action = type(action).__name__
-    except Exception:  # noqa: BLE001
-        pass
-
     if isinstance(action, FireCalc):
         # Spec §7.2 invariants #3, #4, #7:
         #   - LLM bypassed: renderer drives the spoken text verbatim.
@@ -1158,26 +1074,6 @@ async def execute_action(
         from .profile_prompts import build_readback_text
         spoken = build_readback_text(action.snapshot)
         await tts.say(spoken)
-        # Stamp last_emitted_action ONLY when tts.say completed cleanly —
-        # the step 2 gate trusts this flag as proof the user actually
-        # heard the deterministic readback. If session.interrupted is
-        # True, the user barged in mid-emission and did NOT finish hearing
-        # the readback (especially the trailing "Всё верно?"). Stamping
-        # in that case would let the next "Да" pass step 2's gate and
-        # fire calc on stale profile values, silently losing the user's
-        # most recent change. Codex adversarial review 2026-04-29 (live
-        # call f4133ba5: barge-in mid-readback at 38% → next "Да" fired
-        # calc at 37% because the stamp ran post-interrupt and step 2
-        # treated the interrupted readback as authorized).
-        try:
-            if (
-                session is not None
-                and getattr(session, "client_profile", None) is not None
-                and not getattr(session, "interrupted", False)
-            ):
-                session.client_profile.last_emitted_action = "EmitReadback"
-        except Exception:  # noqa: BLE001
-            pass
         yield spoken
         return
 
@@ -1199,23 +1095,6 @@ async def execute_action(
         from .profile_prompts import build_change_confirm_text
         spoken = build_change_confirm_text({"changes": action.changes})
         await tts.say(spoken)
-        # Stamp last_emitted_action ONLY when tts.say completed cleanly.
-        # Same rationale as EmitReadback above — barge-in mid-emission
-        # means the user did not finish hearing what they would be
-        # authorizing, so the step 1 gate must NOT see the stamp.
-        # Live call f4133ba5 2026-04-29 (Codex adversarial): user barged
-        # in during change-confirm + recitation, said "Да", calc fired
-        # at the OLD prepaid value because the post-interrupt stamp
-        # falsely authorized the gate.
-        try:
-            if (
-                session is not None
-                and getattr(session, "client_profile", None) is not None
-                and not getattr(session, "interrupted", False)
-            ):
-                session.client_profile.last_emitted_action = "EmitChangeConfirm"
-        except Exception:  # noqa: BLE001
-            pass
         yield spoken
         return
 
@@ -1530,29 +1409,6 @@ def _build_fallback_messages(
                 "Уже уточнено у клиента (НЕ переспрашивай эти поля):\n"
                 + "\n".join(lines) + "\n\n"
             )
-    # Anti-hallucination role guard (live call 8cb0bfaf 2026-04-28):
-    # the LLM fallback hallucinated "Меняем стоимость на 110k и график
-    # на аннуитетный. Подтвердите?" when the classifier dropped the
-    # multi-field change. State machine never staged the change, but
-    # the user heard a confirm-prompt and said "Да" on the next turn —
-    # silent data loss when the calc fired with old values.
-    #
-    # Architectural truth: change-confirm wording is ALWAYS produced by
-    # backend.profile_prompts.build_change_confirm_text via the
-    # EmitChangeConfirm action. The LLM is NEVER the source of change-
-    # confirm sentences. This block tells the LLM that contract so it
-    # cannot accidentally fabricate one. If the LLM thinks the user
-    # asked for a change but doesn't understand what, the right move
-    # is to ask, not to make up a confirmation.
-    role_guard = (
-        "ВАЖНО — твоя роль: НЕ пиши формулировки вида «Меняю X на Y, "
-        "всё верно?», «Подтверждаю изменение», «Подтвердите параметры». "
-        "Подтверждение изменений и итоговый readback — работа отдельной "
-        "системы, а не твоя. Если клиент попросил изменение и ты не "
-        "уверен какое именно поле и какое значение — переспроси "
-        "конкретно («что именно меняем — срок, аванс, или стоимость?»). "
-        "Лучше уточнить, чем выдумать подтверждение.\n\n"
-    )
     kb_block = ""
     if rag_context:
         kb_block = (
@@ -1561,8 +1417,7 @@ def _build_fallback_messages(
             + str(rag_context) + "\n\n"
         )
     user_content = (
-        f"{memory_prefix}{anchor_block}{role_guard}{kb_block}"
-        f"Сообщение клиента: {utterance}"
+        f"{memory_prefix}{anchor_block}{kb_block}Сообщение клиента: {utterance}"
     )
     return [{"role": "user", "content": user_content}]
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import base64
 import os
+from xml.sax.saxutils import escape as xml_escape
 
-import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -50,23 +50,12 @@ class SileroTTSSynthesizer:
             "put_accent": True,
             "put_yo": True,
         }
-        # Always synth at native rate. Silero v5_4_ru's SSML <prosody rate>
-        # is parsed but silently ignored on this model — bytes come out
-        # identical at any rate value (verified live 2026-04-28: 100% and
-        # 120% produced byte-for-byte the same audio). Post-synth linear-
-        # interp resample is the only reliable way to actually speed up
-        # the output. Side effect: pitch shifts proportionally (120% = ~3
-        # semitones up), acceptable trade-off for short utterances.
-        audio = self._model.apply_tts(text=text, **common_kwargs)
-        audio_np = audio.detach().cpu().numpy().astype(np.float32)
-        if rate_pct != 100 and len(audio_np) > 1:
-            n_orig = len(audio_np)
-            n_target = max(1, int(round(n_orig * 100.0 / rate_pct)))
-            # numpy.interp is ~50us for 100k-sample clips on H100 host CPU
-            # — single-digit-ms overhead per phrase, not in the hot path.
-            indices = np.linspace(0, n_orig - 1, n_target, dtype=np.float32)
-            audio_np = np.interp(indices, np.arange(n_orig, dtype=np.float32), audio_np)
-        pcm16 = (audio_np * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
+        if rate_pct != 100:
+            ssml = f'<speak><prosody rate="{rate_pct}%">{xml_escape(text)}</prosody></speak>'
+            audio = self._model.apply_tts(ssml_text=ssml, **common_kwargs)
+        else:
+            audio = self._model.apply_tts(text=text, **common_kwargs)
+        pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
         return pcm16, self._sample_rate
 
 

@@ -22,19 +22,6 @@ from .text_utils import clean_answer, clean_voice_output, contains_stop_word, it
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
 from .classifier_schema import ClassifierOutput, parse_classifier_output
-
-# Pydantic-derived JSON Schema for vLLM's response_format=json_schema.
-# Constrains the classifier's output token-by-token to the same shape
-# the parser already validates — eliminates the field-drop class of
-# bugs and reduces output tokens (no quoted empty-string nulls).
-# Single source of truth: the ClassifierOutput model itself.
-_CLASSIFIER_RESPONSE_FORMAT: dict[str, Any] = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "ClassifierOutput",
-        "schema": ClassifierOutput.model_json_schema(),
-    },
-}
 from .rag_skip import should_skip_rag
 from .profile_prompts import (
     build_change_confirm_text,
@@ -416,34 +403,6 @@ async def _warmup() -> None:
         _shared_vad = SileroVAD(sample_rate=24000, silence_ms=silence_ms)
     except Exception:  # noqa: BLE001
         pass
-
-    # Pre-compile the json_schema FSM in the classifier vLLM (port 8788)
-    # so the first user call doesn't pay the 1-3 second outlines-backend
-    # schema-compile penalty. vLLM caches the compiled FSM after the first
-    # request with a given schema; one warmup call here makes every real
-    # user call hit the warm-cache path. Live-call evidence 2026-04-28:
-    # first turn after a quiet stretch took ~7s VAD-to-bot; second turn
-    # ~3s. Warming the schema closes that gap.
-    try:
-        from .llm import call_openai_compatible
-        _sa_base_url = settings.llm.session_agent_base_url or settings.llm.fast_base_url or settings.llm.base_url
-        _sa_model = settings.llm.session_agent_model or settings.llm.fast_model or settings.llm.model
-        if _sa_base_url and _sa_model:
-            await asyncio.to_thread(
-                call_openai_compatible,
-                base_url=_sa_base_url,
-                model=_sa_model,
-                system_prompt="warmup",
-                user_prompt="ok",
-                temperature=0.0,
-                max_tokens=10,
-                timeout_sec=15,
-                response_format=_CLASSIFIER_RESPONSE_FORMAT,
-            )
-            print("[startup] classifier json_schema FSM warmed", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        # Warmup failures are non-fatal — first user call will pay the cost.
-        print(f"[startup] classifier warmup skipped: {exc}", flush=True)
 
     if settings.jambonz.enabled:
         print("[Jambonz] Enabled. Waiting for calls on /ws/jambonz", flush=True)
@@ -988,19 +947,7 @@ async def _stream_voice_response(
         "ок", "хорошо", "конечно", "точно", "именно", "всё верно",
         "все верно", "давайте", "давай",
     })
-    # Symmetric counterpart to _CONFIRM_WORDS. Only used in pending states
-    # (READBACK_PENDING / CHANGE_PENDING) where a one-word negative reply
-    # has unambiguous meaning: "the user rejected the proposal". Strict
-    # whole-utterance match (no substring) and a tight length cap keep
-    # this safe — multi-word denials like "нет, давай аванс 30%" carry a
-    # new value and must go through the classifier so the value lands.
-    # Conservative scope per 2026-04-28 user request.
-    _DENY_WORDS = frozenset({
-        "нет", "не", "не надо", "не нужно", "отмена",
-        "неверно", "неправильно", "ошибка",
-    })
     _fast_confirm = False
-    _fast_deny = False
     _current_state = None
     try:
         _current_state = session.client_profile.state
@@ -1010,8 +957,6 @@ async def _stream_voice_response(
             # utterances that merely contain "да" as filler.
             if len(message.split()) <= 3 and _msg_stripped in _CONFIRM_WORDS:
                 _fast_confirm = True
-            elif len(message.split()) <= 2 and _msg_stripped in _DENY_WORDS:
-                _fast_deny = True
     except Exception:  # noqa: BLE001
         pass
 
@@ -1024,20 +969,6 @@ async def _stream_voice_response(
         )
         print(
             f"[Classifier] FAST-PATH: confirm in state={_current_state.value if _current_state else '?'} msg='{_msg_stripped}' session={session_id[:8]}",
-            flush=True,
-        )
-    elif _fast_deny:
-        # Dispatcher routes is_confirmation=False through normal channels:
-        # in CHANGE_PENDING this falls to FireLLMFallback so the bot can
-        # respond conversationally ("Хорошо, не меняем. Что хотите?")
-        # without paying the classifier round-trip first. State stays
-        # CHANGE_PENDING so the next utterance can correct or restart.
-        _sa_output = ClassifierOutput.model_validate(
-            {"intent": "CONVERSATION", "is_confirmation": False},
-            context={"utterance": message or ""},
-        )
-        print(
-            f"[Classifier] FAST-PATH: deny in state={_current_state.value if _current_state else '?'} msg='{_msg_stripped}' session={session_id[:8]}",
             flush=True,
         )
 
@@ -1181,25 +1112,14 @@ async def _stream_voice_response(
                     "- condition_new: 'новый/новая/новое' -> 1; "
                     "'б/у / бу / бэу / б-у / подержанный / с пробегом / "
                     "не новый / старый / бывший в употреблении' -> 0.\n"
-                    "- age_years vs term_months — это форма 'X лет/года/год', "
-                    "одинаковая на поверхности. Различай по смыслу (НЕ по словарю):\n"
-                    "  age_years = возраст транспортного средства. Извлекай когда "
-                    "клиент говорит о СВОЙСТВЕ машины: что-то 'старое/б/у/N лет', "
-                    "'машине/автомобилю/транспорту N лет', 'возраст N', "
-                    "'N-летняя машина', '2018 года выпуска' (-> сколько лет сейчас). "
-                    "Также когда бот в Диалоге выше задавал именно про возраст "
-                    "('Сколько лет вашему транспорту?').\n"
-                    "  term_months = ДЛИТЕЛЬНОСТЬ лизинга в месяцах. Извлекай когда "
-                    "клиент говорит о ВРЕМЕНИ договора: 'на N лет/месяцев', "
-                    "'срок N', 'лизинг на N', 'хочу платить N лет', 'в течение N'. "
-                    "Также когда бот выше спрашивал про срок. Конвертируй: 'N лет' "
-                    "= N*12 месяцев; 'N месяцев' = N.\n"
-                    "  Если ОБА смысла подходят — оставь оба null (бот переспросит). "
-                    "НЕ угадывай по умолчанию в term_months.\n"
-                    "  Это работает и при первичном сборе, и при смене (change_field='age_years' или 'term_months').\n"
+                    "- age_years: при 'б/у' + число лет (например, '2018 года' -> сколько лет сейчас).\n"
                     "- prepaid_pct: если клиент назвал процент (например, '20 процентов', 'двадцать процентов').\n"
                     "- prepaid_amount: если клиент назвал сумму в валюте стоимости (например, '14 тысяч рублей').\n"
                     "- Либо prepaid_pct либо prepaid_amount, не оба.\n"
+                    "- term_months: срок в месяцах. "
+                    "Принимай ЛЮБОЙ порядок слов: 'на 5 лет' / 'лет на 5' / "
+                    "'5 лет' / 'пять лет' -> 60. 'на 7 лет' / 'лет на 7' -> 84. "
+                    "'на 36 месяцев' / '36 месяцев' -> 36.\n"
                     "- type_schedule: '0' (аннуитет) или '1' (линейный). "
                     "Прямые слова: 'аннуитет/аннуитетный' -> '0'; "
                     "'линейный/убывающий/дифференцированный' -> '1'. "
@@ -1263,20 +1183,6 @@ async def _stream_voice_response(
                 temperature=0.0,
                 max_tokens=120,
                 timeout_sec=4,
-                # response_format=_CLASSIFIER_RESPONSE_FORMAT removed
-                # 2026-04-29: live call c3b3bed6 showed the 4B classifier
-                # dropping fields under schema enforcement (e.g. "Я уже
-                # сказал, 36 месяцев" returned `is_confirmation:true`
-                # only, no term_months). Same regression class as the
-                # earlier json_object attempt (commit e14f6ce, reverted
-                # at 76e35f9 with note "degraded extraction"). Schema
-                # constraint biases this small model toward minimal
-                # output. parse_classifier_output is forgiving on
-                # free-form JSON, so we don't need the schema for
-                # downstream safety. Kept the cache + downgrade
-                # infrastructure (backend/llm.py) and the warmup call
-                # in case a future bigger model benefits from FSM hot
-                # start.
             )
             _raw = classify_resp.text.strip()
             # CP-2.2: route raw classifier text through ClassifierOutput.
@@ -1853,21 +1759,6 @@ async def voice_ws(websocket: WebSocket) -> None:
             temperature=0.0,
             max_tokens=80,
             timeout_sec=5,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "FirstUtterance",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "type": {"type": "string", "enum": ["name", "question", "both"]},
-                            "name": {"type": ["string", "null"]},
-                            "question": {"type": ["string", "null"]},
-                        },
-                        "required": ["type"],
-                    },
-                },
-            },
         )
         _parsed = None
         _text = _classify_resp.text.strip()
