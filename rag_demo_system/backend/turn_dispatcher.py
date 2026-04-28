@@ -658,18 +658,29 @@ def _dispatch_once(
     # (derive_implied_flips rule table). Profile fields stay untouched;
     # mutation happens only on next-turn confirm (step 1).
     if delta:
+        # Failure B (call 0897572e 2026-04-28): if a previous change-confirm
+        # is still pending and the user issues a NEW change before confirming,
+        # MERGE the new delta into the existing pending instead of replacing.
+        # Without this, the prior staged field is silently lost on confirm.
+        existing_changes: dict = {}
+        if (
+            profile.state == ProfileState.CHANGE_PENDING
+            and profile.pending_change
+        ):
+            existing_changes = dict(profile.pending_change.get("changes") or {})
+        merged_delta = {**existing_changes, **delta}  # new delta wins on key collision
         projected_patches = dict(first_time)
-        for field_name, change in delta.items():
+        for field_name, change in merged_delta.items():
             projected_patches[field_name] = change["new"]
         profile.state = ProfileState.CHANGE_PENDING
-        profile.pending_change = {"changes": delta}
+        profile.pending_change = {"changes": merged_delta}
         # Bug J: starting a change cycle supersedes any pending post-calc
         # SMS offer. Without clearing here, the next "Да" (which confirms
         # the change) would slot into STEP 5c → FireSMS instead of going
         # through STEP 1's apply-pending-change → STEP 6 FireCalc path.
         profile.last_offer = None
         return EmitChangeConfirm(
-            changes=delta,
+            changes=merged_delta,
             snapshot=_project_snapshot(profile, projected_patches),
         )
 
