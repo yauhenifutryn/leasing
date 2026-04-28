@@ -1181,8 +1181,17 @@ async def _stream_voice_response(
                 ),
                 user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
                 temperature=0.0,
-                max_tokens=120,
+                max_tokens=160,
                 timeout_sec=4,
+                # 2026-04-29: restore morning-baseline value. 63ae614
+                # cut to 80 for latency, e14f6ce raised to 120 for the
+                # json_object experiment, 76e35f9 reverted only the
+                # json_object change. Net: classifier was on 120 tokens
+                # at evening baseline. Live call 0dd073a6 dropped
+                # term_months from a 7-field utterance — the JSON output
+                # may be hitting the 120-token ceiling on long multi-
+                # field captures and truncating before the last field.
+                # 160 buys safety margin for long Russian field values.
             )
             _raw = classify_resp.text.strip()
             # CP-2.2: route raw classifier text through ClassifierOutput.
