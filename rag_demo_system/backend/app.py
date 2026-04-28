@@ -1249,7 +1249,7 @@ async def _stream_voice_response(
                 context={"utterance": message or ""},
             )
         _t_classify_ms = (time.time() - _t_classify_start) * 1000
-        print(f"[Classifier] result: ({_t_classify_ms:.0f}ms)", flush=True)
+        print(f"[Classifier] result: ({_t_classify_ms:.0f}ms) session={session_id[:8]}", flush=True)
 
     # --- Handle semantic stop-request: hybrid gate (literal + classifier) ---
     if _sa_is_stop and contains_stop_word(message or ""):
