@@ -45,19 +45,21 @@ def _rubberband_time_stretch(audio_np: np.ndarray, sr: int, rate: float) -> np.n
 
     try:
         sf.write(in_path, audio_np, sr, subtype="FLOAT")
-        # Flags tuned for speech (Rubberband 2.0+, R3 engine default):
-        #   -F  preserve formants — keeps voice timbre stable, prevents
-        #       the "underwater / hollow" coloration that plain time-
-        #       stretching can introduce on vowels.
-        #   --crisp 6  highest transient sharpness preset — keeps
-        #              consonants (т, ц, ч, ш, щ, к) from smearing into
-        #              the echo-like artifact reported on the librosa
-        #              version. Default is 5; 6 is recommended for speech.
+        # Flags tuned for speech after live tests at 1.15×:
+        #   -2  use the R2 (legacy) engine. R3 is the 2.0+ default but its
+        #       aggressive transient-preserving phase vocoder produces
+        #       audible echo/ring on Russian sibilants and fricatives at
+        #       moderate stretch ratios. R2 is simpler — slight smoothing
+        #       but no echo on speech.
+        #   --crisp 6  max sharpness inside R2.
+        # Dropped -F (formant preservation): rubberband man explicitly says
+        # it's "Enable formant preservation when pitch shifting" — we do
+        # pure time-stretch, no pitch shift, so -F was a no-op.
         result = subprocess.run(
             [
                 "rubberband",
+                "-2",
                 "-t", f"{time_ratio:.6f}",
-                "-F",
                 "--crisp", "6",
                 in_path, out_path,
             ],
