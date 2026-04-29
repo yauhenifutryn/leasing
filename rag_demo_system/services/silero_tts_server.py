@@ -52,19 +52,30 @@ class SileroTTSSynthesizer:
         }
         # Silero v5_4_ru's SSML <prosody rate> is parsed but silently ignored
         # (verified live 2026-04-28: 100% and 120% produced byte-for-byte
-        # identical audio). Naive numpy.interp resample (1cbbee7+9caf11b)
-        # speeds up but raises pitch ~2 semitones — caused "weird voice"
-        # complaint 2026-04-29. Replace with librosa phase-vocoder
-        # time-stretch which preserves pitch.
+        # identical audio).
+        #
+        # Speed-up algorithm history on this codebase:
+        #   1. np.interp (1cbbee7+9caf11b) — fast but raises pitch ~2 semitones
+        #      on speech. Rejected: "chipmunk voice" 2026-04-29.
+        #   2. librosa.effects.time_stretch (e981e87) — phase vocoder preserves
+        #      pitch but introduces echo/reverb artifacts on Russian sibilants
+        #      and fricatives. Rejected: "weird echo" 2026-04-29.
+        #   3. pyrubberband (THIS commit) — wraps the Rubberband C library
+        #      that's used in professional DAWs (and is the same DSP class
+        #      browsers use for HTMLMediaElement.playbackRate). Best open-
+        #      source quality available for speech time-stretch. Cost:
+        #      requires `apt install rubberband-cli` on the server (handled
+        #      by provision_server.sh).
         audio = self._model.apply_tts(text=text, **common_kwargs)
         audio_np = audio.detach().cpu().numpy().astype(np.float32)
         if rate_pct != 100 and len(audio_np) > 1:
-            # Lazy import: librosa is ~50MB and only loads when speedup is
-            # enabled. First call adds ~150ms cold-start; subsequent calls
-            # add ~10-30ms per phrase for the time-stretch itself.
-            import librosa
+            # Lazy import: pyrubberband shells out to the rubberband-cli
+            # binary so it has no Python startup cost beyond the import.
+            # Per-phrase overhead: 30-80ms (binary fork + DSP). Acceptable
+            # because TTS already takes 200-500ms per phrase.
+            import pyrubberband as pyrb
             rate = rate_pct / 100.0
-            audio_np = librosa.effects.time_stretch(audio_np, rate=rate)
+            audio_np = pyrb.time_stretch(audio_np, sr=self._sample_rate, rate=rate)
         pcm16 = (audio_np * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
         return pcm16, self._sample_rate
 

@@ -16,7 +16,11 @@ nvidia-cudnn-cu12
 requests==2.33.1
 silero==0.5.5
 scipy==1.15.3
-# librosa: phase-vocoder time-stretch for pitch-preserving TTS speedup.
-# Used in services/silero_tts_server.py when SILERO_TTS_RATE_PCT != 100.
-# Lazy-imported so unused-rate deployments pay no startup cost.
-librosa==0.10.2
+# pyrubberband: high-quality time-stretch for pitch-preserving TTS speedup.
+# Wraps the rubberband-cli C library (apt install rubberband-cli — handled
+# by provision_server.sh). Used in services/silero_tts_server.py when
+# SILERO_TTS_RATE_PCT != 100. Lazy-imported so unused-rate deployments
+# pay no startup cost. Replaces librosa's phase-vocoder which produced
+# echo artifacts on Russian sibilants (2026-04-29 evening).
+pyrubberband==0.3.0
+soundfile==0.13.0

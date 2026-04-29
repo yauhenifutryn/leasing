@@ -151,11 +151,14 @@ install_apt_packages() {
     python3-pip
 
   # Libraries required by vLLM, PyTorch, and audio processing
+  # rubberband-cli: high-quality pitch-preserving time-stretch used by
+  # pyrubberband for TTS speedup (services/silero_tts_server.py).
   sudo -E apt-get install -y \
     ffmpeg \
     libssl-dev \
     libnuma-dev \
-    libtcmalloc-minimal4 || true
+    libtcmalloc-minimal4 \
+    rubberband-cli || true
 
   # Ensure Python 3.12+ (required for type hints and venv compatibility)
   PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
