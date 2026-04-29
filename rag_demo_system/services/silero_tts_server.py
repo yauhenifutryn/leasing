@@ -45,8 +45,22 @@ def _rubberband_time_stretch(audio_np: np.ndarray, sr: int, rate: float) -> np.n
 
     try:
         sf.write(in_path, audio_np, sr, subtype="FLOAT")
+        # Flags tuned for speech (Rubberband 2.0+, R3 engine default):
+        #   -F  preserve formants — keeps voice timbre stable, prevents
+        #       the "underwater / hollow" coloration that plain time-
+        #       stretching can introduce on vowels.
+        #   --crisp 6  highest transient sharpness preset — keeps
+        #              consonants (т, ц, ч, ш, щ, к) from smearing into
+        #              the echo-like artifact reported on the librosa
+        #              version. Default is 5; 6 is recommended for speech.
         result = subprocess.run(
-            ["rubberband", "-t", f"{time_ratio:.6f}", in_path, out_path],
+            [
+                "rubberband",
+                "-t", f"{time_ratio:.6f}",
+                "-F",
+                "--crisp", "6",
+                in_path, out_path,
+            ],
             capture_output=True,
             timeout=10,
         )
