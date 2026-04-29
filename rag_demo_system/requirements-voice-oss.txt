@@ -16,10 +16,3 @@ nvidia-cudnn-cu12
 requests==2.33.1
 silero==0.5.5
 scipy==1.15.3
-# soundfile: WAV I/O for the rubberband-cli subprocess wrapper in
-# services/silero_tts_server.py (TTS speedup at SILERO_TTS_RATE_PCT != 100).
-# We invoke rubberband directly instead of using pyrubberband 0.3.0 because
-# pyrubberband's setup.py imports the removed `imp` module and fails to
-# install on Python 3.12. The rubberband-cli binary itself is installed
-# via apt by provision_server.sh.
-soundfile==0.13.0

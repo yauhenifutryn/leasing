@@ -151,14 +151,11 @@ install_apt_packages() {
     python3-pip
 
   # Libraries required by vLLM, PyTorch, and audio processing
-  # rubberband-cli: high-quality pitch-preserving time-stretch used by
-  # pyrubberband for TTS speedup (services/silero_tts_server.py).
   sudo -E apt-get install -y \
     ffmpeg \
     libssl-dev \
     libnuma-dev \
-    libtcmalloc-minimal4 \
-    rubberband-cli || true
+    libtcmalloc-minimal4 || true
 
   # Ensure Python 3.12+ (required for type hints and venv compatibility)
   PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
@@ -670,7 +667,6 @@ SILERO_TTS_BASE_URL=http://127.0.0.1:50006
 SILERO_TTS_SPEAKER=xenia
 SILERO_TTS_MODEL=v5_4_ru
 SILERO_TTS_SAMPLE_RATE=24000
-SILERO_TTS_RATE_PCT=110
 
 VAD_SILENCE_MS=900
 SILERO_VAD_PATH=./models/silero_vad.jit

@@ -2,96 +2,11 @@ from __future__ import annotations
 
 import base64
 import os
-import subprocess
-import tempfile
+from xml.sax.saxutils import escape as xml_escape
 
-import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-
-
-def _rubberband_time_stretch(audio_np: np.ndarray, sr: int, rate: float) -> np.ndarray:
-    """Speed up audio by `rate` factor (e.g. 1.15 = 15% faster) using the
-    rubberband CLI binary directly. Pitch preserved.
-
-    Why we shell out instead of using pyrubberband: pyrubberband 0.3.0
-    (latest on PyPI) imports the removed `imp` module in setup.py and
-    fails to install on Python 3.12. We use exactly the same underlying
-    binary; pyrubberband was only a ~50-line wrapper around the same
-    subprocess call.
-
-    Args:
-        audio_np: float32 mono PCM samples in [-1, 1]
-        sr:       sample rate in Hz
-        rate:     speedup factor; > 1 = faster, < 1 = slower
-
-    Returns:
-        float32 mono PCM samples at the same sample rate, with duration
-        compressed by `rate`. On rubberband-cli failure (missing binary,
-        invalid input), returns the original audio unchanged so synth
-        never crashes mid-call.
-    """
-    import soundfile as sf
-
-    # rubberband -t expects a DURATION ratio (output_duration / input_duration).
-    # We want to make the output 1/rate as long as the input.
-    time_ratio = 1.0 / rate
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as in_f:
-        in_path = in_f.name
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as out_f:
-        out_path = out_f.name
-
-    try:
-        sf.write(in_path, audio_np, sr, subtype="FLOAT")
-        # Flags tuned for speech after live tests at 1.15×:
-        #   -2  use the R2 (legacy) engine. R3 is the 2.0+ default but its
-        #       aggressive transient-preserving phase vocoder produces
-        #       audible echo/ring on Russian sibilants and fricatives at
-        #       moderate stretch ratios. R2 is simpler — slight smoothing
-        #       but no echo on speech.
-        #   --crisp 6  max sharpness inside R2.
-        # Dropped -F (formant preservation): rubberband man explicitly says
-        # it's "Enable formant preservation when pitch shifting" — we do
-        # pure time-stretch, no pitch shift, so -F was a no-op.
-        result = subprocess.run(
-            [
-                "rubberband",
-                "-2",
-                "-t", f"{time_ratio:.6f}",
-                "--crisp", "6",
-                in_path, out_path,
-            ],
-            capture_output=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            print(
-                f"[silero_tts] rubberband failed (rc={result.returncode}): "
-                f"{result.stderr.decode(errors='replace')[:200]}",
-                flush=True,
-            )
-            return audio_np
-        out_audio, _ = sf.read(out_path, dtype="float32")
-        return out_audio
-    except FileNotFoundError:
-        # rubberband-cli not installed. Fall back to original audio.
-        print(
-            "[silero_tts] rubberband-cli binary not found on PATH — "
-            "speedup disabled this call. Run: apt install rubberband-cli",
-            flush=True,
-        )
-        return audio_np
-    except Exception as exc:  # noqa: BLE001
-        print(f"[silero_tts] rubberband error: {exc}", flush=True)
-        return audio_np
-    finally:
-        for p in (in_path, out_path):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
 
 
 class SpeakRequest(BaseModel):
@@ -135,32 +50,12 @@ class SileroTTSSynthesizer:
             "put_accent": True,
             "put_yo": True,
         }
-        # Silero v5_4_ru's SSML <prosody rate> is parsed but silently ignored
-        # (verified live 2026-04-28: 100% and 120% produced byte-for-byte
-        # identical audio).
-        #
-        # Speed-up algorithm history on this codebase:
-        #   1. np.interp (1cbbee7+9caf11b) — fast but raises pitch ~2 semitones
-        #      on speech. Rejected: "chipmunk voice" 2026-04-29.
-        #   2. librosa.effects.time_stretch (e981e87) — phase vocoder preserves
-        #      pitch but introduces echo/reverb artifacts on Russian sibilants
-        #      and fricatives. Rejected: "weird echo" 2026-04-29.
-        #   3. pyrubberband (THIS commit) — wraps the Rubberband C library
-        #      that's used in professional DAWs (and is the same DSP class
-        #      browsers use for HTMLMediaElement.playbackRate). Best open-
-        #      source quality available for speech time-stretch. Cost:
-        #      requires `apt install rubberband-cli` on the server (handled
-        #      by provision_server.sh).
-        audio = self._model.apply_tts(text=text, **common_kwargs)
-        audio_np = audio.detach().cpu().numpy().astype(np.float32)
-        if rate_pct != 100 and len(audio_np) > 1:
-            # Direct rubberband-cli subprocess (see _rubberband_time_stretch
-            # docstring for why we don't use pyrubberband). Per-phrase
-            # overhead: ~50-100ms for fork + WAV I/O + DSP. Falls back to
-            # original audio if the binary is missing or fails.
-            rate = rate_pct / 100.0
-            audio_np = _rubberband_time_stretch(audio_np, self._sample_rate, rate)
-        pcm16 = (audio_np * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
+        if rate_pct != 100:
+            ssml = f'<speak><prosody rate="{rate_pct}%">{xml_escape(text)}</prosody></speak>'
+            audio = self._model.apply_tts(ssml_text=ssml, **common_kwargs)
+        else:
+            audio = self._model.apply_tts(text=text, **common_kwargs)
+        pcm16 = (audio * 32767).to(torch.int16).numpy().tobytes()
         return pcm16, self._sample_rate
 
 
@@ -177,7 +72,6 @@ def create_app(synthesizer: SileroTTSSynthesizer) -> FastAPI:
             "provider": "silero_tts",
             "speaker": synthesizer._speaker,
             "voice_source": voice_source,
-            "rate_pct": int(os.getenv("SILERO_TTS_RATE_PCT") or "100"),
         }
 
     @app.post("/speak")
