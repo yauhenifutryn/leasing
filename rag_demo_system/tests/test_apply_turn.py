@@ -2241,3 +2241,93 @@ def test_change_intent_prepaid_pct_clarify_uses_canonical_label():
     action = apply_turn(p, co, utt, turn_id=2)
     assert isinstance(action, EmitClarify)
     assert "prepaid" in action.missing
+
+
+# ============================================================ Bug 6
+# Live call e6226e5d 2026-04-29 (Stanislav 15:16:11): post-calc, the
+# user said "Отправьте смс-ку" — explicit SMS request. Classifier emits
+# action="sms", step 6b fires FireSMS, but last_offer="sms" stays
+# sticky. User then asked unrelated договор / equipment / cities
+# questions — those route to FireLLMFallback and leave last_offer
+# alone. On a later bare "Да" the dispatcher matches step 5c again
+# (last_offer + is_confirmation + no change_field) and re-fires SMS.
+#
+# Universal fix:
+#   - step 6b clears last_offer before returning FireSMS, matching the
+#     existing step 5c behaviour.
+#   - FireLLMFallback returns clear last_offer too — by the time the
+#     dispatcher reaches that path, the turn is conclusively NOT acting
+#     on the prior SMS offer (bare confirms/denies are caught upstream
+#     by FAST-PATH and step 5c). So any non-structural conversational
+#     turn invalidates the stale offer.
+
+
+def test_bug6_sms_action_step_6b_clears_last_offer():
+    """Bug 6 / Stanislav 15:16:11: explicit `action=sms` request fires
+    FireSMS via step 6b but must clear last_offer so a later bare "Да"
+    on an unrelated LLM-narrated question can't re-fire SMS via step 5c."""
+    from backend.turn_action import FireSMS
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "Отправьте смс-ку"
+    co = make_classifier(
+        utterance=utt,
+        intent="TOOL",
+        action="sms",
+        is_confirmation=False,
+    )
+    action = apply_turn(p, co, utt, turn_id=2)
+    assert isinstance(action, FireSMS), (
+        f"explicit SMS request must fire FireSMS, got {type(action).__name__}"
+    )
+    assert p.last_offer is None, (
+        "step 6b must clear last_offer to prevent stale-offer re-fire"
+    )
+
+
+def test_bug6_llm_fallback_clears_stale_last_offer():
+    """Bug 6: when the dispatcher routes to FireLLMFallback (RAG
+    question, small talk, anything non-structural), the prior post-calc
+    SMS offer is invalidated. Without this, last_offer persisted across
+    an arbitrary number of unrelated turns and the next bare confirm
+    re-fired SMS via step 5c."""
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "Скажите, какие документы нужны?"
+    co = make_classifier(
+        utterance=utt,
+        intent="RAG",
+        is_confirmation=False,
+    )
+    action = apply_turn(p, co, utt, turn_id=2)
+    assert isinstance(action, FireLLMFallback), (
+        f"RAG question on confirmed profile must route to LLM fallback, "
+        f"got {type(action).__name__}"
+    )
+    assert p.last_offer is None, (
+        "FireLLMFallback path must clear stale last_offer so the next "
+        "bare confirm cannot re-fire SMS via step 5c"
+    )
+
+
+def test_bug6_canonical_da_after_sms_offer_still_works():
+    """Sanity guard: Bug 6's clearing must NOT break the canonical
+    "Да → SMS" path. Bare confirm on a fresh post-calc SMS offer must
+    still fire SMS — last_offer is cleared by step 5c itself in that
+    flow, so no behaviour regression."""
+    from backend.turn_action import FireSMS
+
+    p = make_complete_profile()
+    p.state = ProfileState.CONFIRMED
+    p.last_offer = "sms"
+
+    utt = "Да"
+    co = make_classifier(utterance=utt, intent="TOOL", is_confirmation=True)
+    action = apply_turn(p, co, utt, turn_id=2)
+    assert isinstance(action, FireSMS)
+    assert p.last_offer is None

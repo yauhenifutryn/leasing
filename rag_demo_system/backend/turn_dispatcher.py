@@ -802,7 +802,13 @@ def _dispatch_once(
     # for SMS-intent turns and SMS never fired. The handler in
     # execute_action validates session has a successful calc and a phone
     # number; if not, it speaks a deterministic fallback.
+    # Bug 6 (live call e6226e5d 2026-04-29 Stanislav 15:16:11): clear
+    # last_offer here too, mirroring step 5c. Without this, an explicit
+    # "Отправьте смс" left last_offer="sms" sticky across subsequent
+    # unrelated LLM-narrated turns; a later bare "Да" then matched step
+    # 5c again and re-fired SMS.
     if classifier_output.action == "sms":
+        profile.last_offer = None
         return FireSMS(snapshot=build_snapshot(profile))
 
     # STEP 7: classifier-flagged out-of-range → FireOORMessage with a
@@ -872,6 +878,10 @@ def _dispatch_once(
         # context. The next user utterance re-enters the clarify gate
         # with the field actually answered.
         if _is_meta_question(utterance):
+            # Bug 6: meta-question on a stale post-calc SMS offer means
+            # the user moved on. Clear last_offer so a later bare confirm
+            # cannot re-fire SMS via step 5c.
+            profile.last_offer = None
             return FireLLMFallback(
                 user_utterance=utterance,
                 rag_context=None,
@@ -933,6 +943,14 @@ def _dispatch_once(
             )
         )
     )
+    # Bug 6 (live call e6226e5d 2026-04-29 Stanislav 15:16:11): when
+    # the dispatcher reaches the catch-all FireLLMFallback, the turn is
+    # conclusively non-structural — bare confirms/denies are caught
+    # upstream by FAST-PATH and step 5c. So a stale post-calc SMS offer
+    # is invalidated by any non-trivial conversation; clearing it here
+    # prevents a bare "Да" many turns later from re-firing SMS via the
+    # step 5c gate.
+    profile.last_offer = None
     return FireLLMFallback(
         user_utterance=utterance,
         rag_context=None,   # orchestrator populates pre-dispatch
