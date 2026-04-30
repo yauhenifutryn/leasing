@@ -242,6 +242,11 @@ _META_QUESTION_RE = re.compile(
     r"\b(?:"
     r"как(?:ой|ая|ое|ие)\s+(?:луч\w+|выгодн\w+|дешев\w+|правильн\w+|"
         r"разниц\w*|подойд\w+|подход\w+)|"
+    # Bug 7 (live calls e6226e5d 15:08:23 + 19496277 15:29:01): "Что
+    # такое аннуитет?" / "что такое линейный?" — meta-questions about
+    # the open clarify, not parameter answers. Without this branch the
+    # dispatcher re-emitted the same clarify prompt and looped the user.
+    r"что\s+так(?:ое|ие)|"
     r"что\s+(?:луч\w+|выбра\w+|выгодн\w+|дешев\w+|посовет\w+|порекоменд\w+)|"
     r"в\s+ч[её]м\s+разниц\w*|"
     r"чем\s+отлич\w+|"

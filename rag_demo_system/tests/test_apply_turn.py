@@ -2315,6 +2315,60 @@ def test_bug6_llm_fallback_clears_stale_last_offer():
     )
 
 
+def test_bug7_partial_meta_question_chto_takoe_routes_to_llm_fallback():
+    """Bug 7 partial (Stanislav 15:08:23, Valery 15:29:01 — call e6226e5d
+    + 19496277): user replied to the schedule clarify with "Что такое
+    аннуитет?" — a meta-question, not a parameter answer. The current
+    meta-question regex did not match "что такое", so step 5b re-emitted
+    the same clarify prompt. Extending the regex routes the question to
+    FireLLMFallback so the LLM can explain; the next user utterance
+    re-enters the clarify gate with the field actually answered."""
+    from backend.turn_dispatcher import _is_meta_question
+
+    # Variants from live calls + grammatical relatives.
+    assert _is_meta_question("Что такое аннуитет?")
+    assert _is_meta_question("а что такое линейный?")
+    assert _is_meta_question("что такое")
+    # Counter-cases: must not match plain answers / general utterances.
+    assert not _is_meta_question("аннуитет")
+    assert not _is_meta_question("36 месяцев")
+    assert not _is_meta_question("")
+
+
+def test_bug7_partial_chto_takoe_routes_via_step_5b_meta_question_gate():
+    """End-to-end Bug 7 partial: with intent=CONVERSATION (NOT RAG —
+    RAG turns skip step 5b by design after live regression 5e6f4c48),
+    on an incomplete profile, the meta-question gate inside step 5b
+    must route to FireLLMFallback when the user replies to a clarify
+    with "что такое X". Use an utterance that doesn't ground any
+    enum field so the classifier doesn't accidentally complete the
+    profile before step 5b runs."""
+    p = make_partial_profile(
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=80000.0,
+        currency="USD",
+        condition_new=1,
+        prepaid_pct=20.0,
+        term_months=36,
+        # type_schedule deliberately missing — this is what the bot is
+        # clarifying when the user replies with the meta-question.
+    )
+    p.state = ProfileState.COLLECTING
+    # Avoid the "Бот спросил тип графика — клиент ответил 'аннуитет'"
+    # grounding pitfall by phrasing the meta-question generically.
+    utt = "А что такое лизинг вообще?"
+    co = make_classifier(
+        utterance=utt, intent="CONVERSATION", is_confirmation=False
+    )
+    action = apply_turn(p, co, utt, turn_id=1)
+    assert isinstance(action, FireLLMFallback), (
+        f"meta-question on incomplete profile must route to LLM "
+        f"fallback via step 5b's meta-question gate, "
+        f"got {type(action).__name__}"
+    )
+
+
 def test_bug6_canonical_da_after_sms_offer_still_works():
     """Sanity guard: Bug 6's clearing must NOT break the canonical
     "Да → SMS" path. Bare confirm on a fresh post-calc SMS offer must
