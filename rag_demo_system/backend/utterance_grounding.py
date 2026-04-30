@@ -445,8 +445,13 @@ _CUR_RUB_RE = re.compile(
 _COST_MIN = 10_000
 _COST_MAX = 100_000_000
 # Digit + thousand/million word ("80 тысяч", "3 миллиона", "150 000").
+# Bug 10 (live calls 2026-04-29): slang multipliers — "20 косарей",
+# "30 тонн", "15 кусков", "20 штук" — also map to thousands in
+# Russian colloquial speech. Stem-prefix branches catch every case
+# variant without enumerating each form.
 _COST_DIGIT_THOUSAND_RE = re.compile(
-    r"\b(\d{1,4})\s*(тысяч\w*|тыс\b|k\b|к\b)",
+    r"\b(\d{1,4})\s*(тысяч\w*|тыс\b|k\b|к\b|"
+    r"косар\w*|тонн\w*|куск\w*|кусок\w*|штук\w*)",
     re.IGNORECASE,
 )
 _COST_DIGIT_MILLION_RE = re.compile(
