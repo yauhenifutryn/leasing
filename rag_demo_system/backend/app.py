@@ -1005,9 +1005,15 @@ async def _stream_voice_response(
         "хорошо", "ладно", "пока", "до свидания", "всего доброго",
         "привет", "здравствуйте", "добрый день", "нет", "не надо",
         "всем пока", "это всё", "больше ничего",
+        # Bug 12 (live calls 2026-04-29): bare backchannels and the
+        # bot's own name as a vocative were sent through the classifier
+        # and routed to clarify. Skip them so apply_turn falls naturally
+        # to FireLLMFallback (small talk handling).
+        "угу", "ага", "мгм", "ксения", "ксюша",
     }
     _skip = (
         _fast_confirm  # also cover in the existing skip flag
+        or _fast_deny  # a487323 replacement: deny short-circuit also bypasses
         or (
             _msg_stripped in _SKIP_CLASSIFIER
             and not (session.tool_calls_history or session.tool_calls_this_turn)
