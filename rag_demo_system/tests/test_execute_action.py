@@ -873,6 +873,133 @@ async def test_stream_llm_to_tts_catches_mid_stream_failure():
 
 
 @pytest.mark.asyncio
+async def test_stream_llm_to_tts_drops_hallucinated_address_when_not_in_kb():
+    """Bug 11 partial (live call 14:41:57 2026-04-29): the LLM-fallback
+    output spoke "ваш юридический адрес, указанный ранее в договоре,
+    улица Первомайская дом 12" — no договор is in session and the KB
+    didn't supply that address. validate_addresses() exists in
+    backend.text_utils for exactly this defense but was never called
+    in the LLM-fallback path; only clean_answer() ran. Wire it up next
+    to clean_answer so any sentence carrying an address absent from
+    the rag_context gets dropped before TTS speaks it."""
+    from unittest.mock import AsyncMock, MagicMock
+    from backend.turn_dispatcher import _stream_llm_to_tts
+
+    class _AddressHallucinatingBackend:
+        async def stream(self, messages):
+            yield "Конечно, я подскажу. "
+            yield "Наш офис на улице Первомайская дом 12. "
+            yield "Готов помочь дальше."
+
+    tts = MagicMock()
+    tts.say = AsyncMock()
+    session = MagicMock()
+    session.interrupted = False
+
+    # KB context references a different street layout (проспект, no
+    # "улица", no "дом" word). validate_addresses extracts Russian
+    # tokens 3+ chars from the matched address — none of "улице",
+    # "Первомайская", or "дом" appear in this context, so the address
+    # is treated as a hallucination and the entire sentence is dropped.
+    rag_context = (
+        "[Fragment 1]\nГоловной офис: проспект Независимости 27, Минск.\n"
+    )
+
+    yielded: list[str] = []
+    async for chunk in _stream_llm_to_tts(
+        utterance="где ваш офис?",
+        rag_context=rag_context,
+        snapshot=None,
+        backend=_AddressHallucinatingBackend(),
+        tts=tts,
+        session=session,
+    ):
+        yielded.append(chunk)
+
+    spoken = " ".join(yielded)
+    # Hallucinated street must NOT have been spoken.
+    assert "Первомайская" not in spoken, (
+        f"hallucinated address must be dropped, but got: {spoken!r}"
+    )
+    # Surrounding clean sentences still pass through.
+    assert "Конечно" in spoken
+    assert "Готов помочь" in spoken
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_to_tts_keeps_kb_grounded_address():
+    """Counterpart to the hallucination test: when the address IS in
+    the rag_context, validate_addresses keeps the sentence so legitimate
+    grounded answers don't get accidentally dropped."""
+    from unittest.mock import AsyncMock, MagicMock
+    from backend.turn_dispatcher import _stream_llm_to_tts
+
+    class _GroundedBackend:
+        async def stream(self, messages):
+            yield "Наш офис на улице Ленина дом 5. "
+            yield "Приезжайте, будем ждать."
+
+    tts = MagicMock()
+    tts.say = AsyncMock()
+    session = MagicMock()
+    session.interrupted = False
+
+    rag_context = (
+        "[Fragment 1]\nКомпания расположена: улица Ленина, 5, Минск.\n"
+    )
+
+    yielded: list[str] = []
+    async for chunk in _stream_llm_to_tts(
+        utterance="где офис?",
+        rag_context=rag_context,
+        snapshot=None,
+        backend=_GroundedBackend(),
+        tts=tts,
+        session=session,
+    ):
+        yielded.append(chunk)
+
+    spoken = " ".join(yielded)
+    assert "Ленина" in spoken, (
+        f"grounded address must pass through, but got: {spoken!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_to_tts_no_rag_context_passes_addresses_through():
+    """When rag_context is None there is nothing to validate against;
+    validate_addresses returns text unchanged. This is the legacy
+    behaviour — addresses in non-RAG conversational turns must not
+    suddenly disappear."""
+    from unittest.mock import AsyncMock, MagicMock
+    from backend.turn_dispatcher import _stream_llm_to_tts
+
+    class _NoRagBackend:
+        async def stream(self, messages):
+            yield "Хорошо, наш офис на улице Победы дом 1. "
+            yield "Отлично."
+
+    tts = MagicMock()
+    tts.say = AsyncMock()
+    session = MagicMock()
+    session.interrupted = False
+
+    yielded: list[str] = []
+    async for chunk in _stream_llm_to_tts(
+        utterance="где офис",
+        rag_context=None,
+        snapshot=None,
+        backend=_NoRagBackend(),
+        tts=tts,
+        session=session,
+    ):
+        yielded.append(chunk)
+
+    spoken = " ".join(yielded)
+    assert "Победы" in spoken
+
+
+@pytest.mark.asyncio
 async def test_stream_llm_to_tts_no_failure_passes_through():
     """Sanity check: if backend.stream completes normally, the function
     behaves as before — no fallback sentence is spoken, all yielded

@@ -1498,20 +1498,33 @@ async def _stream_llm_to_tts(
     so the turn closes cleanly instead of tearing down the session.
     """
     from .sentence_detector import SentenceDetector
-    from .text_utils import clean_answer
+    from .text_utils import clean_answer, validate_addresses
 
     messages = _build_fallback_messages(
         utterance, rag_context, snapshot, memory_block=memory_block,
     )
     detector = SentenceDetector()
     _fallback = (
-        "Извините, сейчас технические неполадки. Попробуйте, пожалуйста, "
-        "повторить вопрос."
+        "Извините, сейчас технические неполадки. Попробуйте, пожалуйста,"
+        " повторить вопрос."
     )
+
+    # Bug 11 partial (live call 14:41:57 2026-04-29): the LLM-fallback
+    # output spoke "ваш юридический адрес, указанный ранее в договоре,
+    # улица Первомайская дом 12" — no договор is in session and the KB
+    # didn't supply that street. validate_addresses() existed but was
+    # never wired into the fallback emit path; only clean_answer() ran.
+    # Pass rag_context as the single context-chunk source. When
+    # rag_context is None or empty, validate_addresses returns text
+    # unchanged (legacy behaviour preserved for non-RAG turns).
+    _context_chunks: list[str] = [rag_context] if rag_context else []
 
     async def _emit(text: str) -> Optional[str]:
         cleaned = clean_answer(text)
         if not cleaned:
+            return None
+        cleaned = validate_addresses(cleaned, _context_chunks)
+        if not cleaned.strip():
             return None
         await tts.say(cleaned)
         return cleaned
