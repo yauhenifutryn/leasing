@@ -115,24 +115,31 @@ def test_v2_prompt_bans_offline_submission_channels() -> None:
     assert "email" in text or "имейл" in text
 
 
-def test_v2_prompt_unconditionally_bans_documents_by_mail() -> None:
-    # Bug 17 hard ban (live calls b5d70d6a + 099bfb78 2026-05-03): the
-    # earlier "two flows" disambiguation rule was bypassed because the
-    # LLM HALLUCINATES a postal-delivery offer (KB doesn't actually
-    # describe one — only states that ГАИ paperwork "оформляется"). The
-    # right surface is an unconditional ban with explicit forbidden
-    # phrasings, not a polite disambiguation.
+def test_v2_prompt_default_to_online_for_documents() -> None:
+    # Bug 17 (live calls b5d70d6a + 099bfb78 + bf527f44 2026-05-03):
+    # ambiguous "отправить документы почтой?" turns must default to the
+    # online-submission answer. The unconditional hard ban from Patch F
+    # was wrong — KB legitimately documents postal-delivery for the
+    # post-buyout-vehicle-docs flow. This rule is the soft-default
+    # version: online unless the user names a trigger.
     text = _v2_text().lower()
-    # Header marker for the unconditional ban.
-    assert "безусловный запрет" in text
-    # The exact forbidden phrasings the LLM kept emitting must be
-    # quoted in the prompt as banned strings — that's how we keep the
-    # LLM from generating them.
-    assert "отправим документы почтой" in text
-    assert "обычной почтой на ваш адрес" in text
-    # The canonical replacement reply must be locked so a future edit
-    # can't drop it silently.
-    assert "документы почтой мы не отправляем" in text
+    # Header for the default-online rule.
+    assert "по умолчанию онлайн" in text
+    # The canonical default reply must be locked.
+    assert "документы подаются онлайн через личный кабинет" in text
+    # Channel ban (default behavior): no postal/courier/email by default.
+    assert "не предлагай по умолчанию почту" in text
+
+
+def test_v2_prompt_lists_explicit_postal_triggers() -> None:
+    # Postal delivery is allowed ONLY when the caller explicitly names
+    # one of these triggers in the current turn — anchors the LLM on
+    # surface signals so the rule is reproducible.
+    text = _v2_text().lower()
+    assert "триггер исключения" in text
+    # All canonical triggers should appear at least once.
+    for trigger in ("гаи", "после выкупа", "пакет документов на машину"):
+        assert trigger in text, f"postal-trigger phrase '{trigger}' missing from prompt"
 
 
 def test_v2_prompt_keeps_online_submission_rule() -> None:
