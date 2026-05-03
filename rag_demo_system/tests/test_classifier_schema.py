@@ -921,3 +921,84 @@ def test_bare_annuitet_da_is_still_a_tool_answer():
     out = parse_classifier_output(raw, utterance="аннуитет, давай")
     assert out.intent == "TOOL"
     assert out.type_schedule == "0"
+
+
+# --- Live call 3d32af7f 2026-05-03 type_schedule semantic mapping ---
+#
+# Bug: `_TYPE_SCHEDULE_VALUE_CUES` listed `\bравн\w+` under code "1"
+# (linear / decreasing payments). Semantically wrong: "равные платежи"
+# = equal monthly = annuity = code "0". The bot's own readback says
+# "график равные платежи" for code "0". When the user echoes that
+# wording back ("Давай равными") the change-value canonicalizer mapped
+# it to "1" (linear), the inverse of what the user said. On non-TOOL
+# intent turns the value also got nulled because the cue gate for "0"
+# only matched the literal `аннуитет\w*`.
+
+def test_change_value_type_schedule_равными_canonicalizes_to_0():
+    # User's actual utterance from the live call. Classifier may emit
+    # change_field='type_schedule' + change_value='равными'; without the
+    # cue fix this lands as "1" (linear) — the wrong schedule.
+    raw = json.dumps({
+        "intent": "TOOL",
+        "change_field": "type_schedule",
+        "change_value": "равными",
+    })
+    out = parse_classifier_output(raw, utterance="Давай равными")
+    assert out.change_field == "type_schedule"
+    assert out.change_value == "0"
+
+
+def test_change_value_type_schedule_одинаковые_canonicalizes_to_0():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "change_field": "type_schedule",
+        "change_value": "одинаковые",
+    })
+    out = parse_classifier_output(raw, utterance="хочу одинаковые платежи")
+    assert out.change_value == "0"
+
+
+def test_change_value_type_schedule_уменьшающимися_canonicalizes_to_1():
+    # Mirror of равными: "уменьшающимися" = linear/decreasing = "1".
+    raw = json.dumps({
+        "intent": "TOOL",
+        "change_field": "type_schedule",
+        "change_value": "уменьшающимися",
+    })
+    out = parse_classifier_output(raw, utterance="давай с уменьшающимися")
+    assert out.change_value == "1"
+
+
+def test_change_value_type_schedule_убывающие_canonicalizes_to_1():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "change_field": "type_schedule",
+        "change_value": "убывающие",
+    })
+    out = parse_classifier_output(raw, utterance="по убывающей")
+    assert out.change_value == "1"
+
+
+def test_type_schedule_равными_grounds_0_on_intent_conversation():
+    # The CONVERSATION-intent gate is the regex-grounded path. Classifier
+    # emits type_schedule="0" + intent=CONVERSATION (e.g. user is just
+    # confirming the bot's question). Cue regex for "0" must accept
+    # "равными" so the value survives the gate.
+    raw = json.dumps({"intent": "CONVERSATION", "type_schedule": "0"})
+    out = parse_classifier_output(raw, utterance="давай равными")
+    assert out.type_schedule == "0"
+
+
+def test_type_schedule_равными_does_not_ground_1():
+    # Symmetry: "равными" is annuity (0). It must NOT ground "1" (linear).
+    # Without the fix, `\bравн\w+` lived in the "1" cue and would falsely
+    # validate a hallucinated linear emission against an annuity utterance.
+    raw = json.dumps({"intent": "CONVERSATION", "type_schedule": "1"})
+    out = parse_classifier_output(raw, utterance="давай равными")
+    assert out.type_schedule is None
+
+
+def test_type_schedule_уменьшающимися_grounds_1_on_intent_conversation():
+    raw = json.dumps({"intent": "CONVERSATION", "type_schedule": "1"})
+    out = parse_classifier_output(raw, utterance="хочу с уменьшающимися платежами")
+    assert out.type_schedule == "1"

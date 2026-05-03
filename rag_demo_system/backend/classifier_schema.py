@@ -236,8 +236,30 @@ def _currency_cue_match(value: str, utterance: str) -> bool:
 
 
 _TYPE_SCHEDULE_VALUE_CUES: dict[str, re.Pattern[str]] = {
-    "0": re.compile(r"\bаннуитет\w*", re.IGNORECASE),
-    "1": re.compile(r"\bлинейн\w+|\bдифференциров\w+|\bубыва\w+|\bравн\w+", re.IGNORECASE),
+    # "0" = аннуитет (equal monthly payments). Direct word OR semantic
+    # synonyms describing payment behavior: users echo the bot's own
+    # readback wording ("равные платежи" / "одинаковыми платежами") more
+    # often than they say "аннуитет". The bot's question is literally
+    # "график удобнее равными платежами или с уменьшением" — the cue gate
+    # MUST accept what the bot teaches the user to say.
+    #
+    # Live call 3d32af7f 2026-05-03: previously "равн..." was listed under
+    # "1" (linear) — the SEMANTIC INVERSE — so "Давай равными" was either
+    # nulled (CONVERSATION intent) or canonicalized to "1" (linear) via
+    # change_value, the opposite of what the user said.
+    "0": re.compile(
+        r"\bаннуитет\w*|\bравн[оыа]\w*|\bодинаков\w+|\bфиксиров\w+|"
+        r"\bстабильн\w+|\bпостоянн\w+",
+        re.IGNORECASE,
+    ),
+    # "1" = линейный / дифференцированный (decreasing payments, principal
+    # paid faster). Direct words OR semantic synonyms ("уменьшающиеся /
+    # убывающие / падающие платежи", "первый платёж больше").
+    "1": re.compile(
+        r"\bлинейн\w+|\bдифференциров\w+|\bубыва\w+|\bуменьш\w+|"
+        r"\bпадающ\w+|\bпервый\s+(?:платеж|платёж)\s+больше",
+        re.IGNORECASE,
+    ),
 }
 
 
