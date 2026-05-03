@@ -119,6 +119,31 @@ def _grounded_proposed_patches(
         if classifier_output.intent == "TOOL" or value_grounded(cf, cv, utterance):
             proposed[cf] = cv
 
+    # Bug 10 follow-up (live call ce1a0ad6 2026-05-03): when the user
+    # says a slang-multiplied amount ("20 косарей" = 20000), the 4B
+    # classifier sometimes captures the bare digit as cost=20 (or
+    # change_value=20) and intent=TOOL skips value_grounded. Without a
+    # corrective layer the bot reads back "Меняю стоимость на 20" and
+    # the calc fires with cost=20 BYN — silent data loss.
+    # extract_cost_from_utterance is slang-aware (косар/тонн/куск/штук
+    # stems plus тысяч/миллион); when it returns a value that disagrees
+    # with what the classifier proposed, prefer the extractor — the
+    # range gate (10_000 ≤ cost ≤ 100_000_000) ensures it only fires on
+    # genuine cost-shaped utterances.
+    if "cost" in proposed:
+        from . import utterance_grounding as ug
+        try:
+            slang_value = ug.extract_cost_from_utterance(utterance or "")
+        except Exception:  # noqa: BLE001
+            slang_value = None
+        if slang_value is not None:
+            try:
+                cls_cost = int(proposed["cost"])
+            except (TypeError, ValueError):
+                cls_cost = None
+            if cls_cost != slang_value:
+                proposed["cost"] = slang_value
+
     return proposed
 
 

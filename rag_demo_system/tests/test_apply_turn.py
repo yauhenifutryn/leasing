@@ -2385,3 +2385,88 @@ def test_bug6_canonical_da_after_sms_offer_still_works():
     action = apply_turn(p, co, utt, turn_id=2)
     assert isinstance(action, FireSMS)
     assert p.last_offer is None
+
+
+# ============================================================ Bug 10 follow-up
+# Live call ce1a0ad6 2026-05-03 17:22:04: user said "А давай всё-таки
+# поменяем цену на 20 косарей" — slang for 20 000. The classifier
+# extracted change_field=cost, change_value=20 with intent=TOOL.
+# `_grounded_proposed_patches` accepts the (cf, cv) pair unconditionally
+# on intent=TOOL (Polish A 2026-04-27 trust signal), so cost=20 lands
+# in proposed patches. Bot read back "Меняю стоимость на 20.0" and the
+# calc fired with cost=20 BYN — silent data loss.
+#
+# Batch 1 added slang stems to extract_cost_from_utterance, but that
+# function was only consulted by _apply_utterance_fallbacks (which
+# skips when classifier already proposed the field). The fix layer
+# missing in Batch 1: an active corrective override — when the
+# slang-aware extractor returns a value that disagrees with the
+# classifier's cost, prefer the extractor.
+
+
+def test_bug10_followup_slang_overrides_classifier_bare_digit_top_level():
+    """Top-level cost field: classifier emits cost=20 from "20 косарей".
+    Slang extractor returns 20000. Corrective layer must override to
+    20000 so downstream readback / calc sees the right amount."""
+    from backend.turn_dispatcher import _grounded_proposed_patches
+
+    co = make_classifier(
+        utterance="давай 20 косарей",
+        intent="TOOL",
+        cost=20.0,
+    )
+    proposed = _grounded_proposed_patches(co, "давай 20 косарей")
+    assert proposed.get("cost") == 20000, (
+        f"slang multiplier must override classifier's bare-digit cost; "
+        f"got {proposed.get('cost')!r}"
+    )
+
+
+def test_bug10_followup_slang_overrides_classifier_change_value():
+    """Change-flow: classifier emits change_field=cost change_value=20
+    on "поменяем цену на 20 косарей". Same correction must apply to
+    the change pair, since that's the actual production failure mode."""
+    from backend.turn_dispatcher import _grounded_proposed_patches
+
+    co = make_classifier(
+        utterance="поменяем цену на 20 косарей",
+        intent="TOOL",
+        change_field="cost",
+        change_value="20",
+    )
+    proposed = _grounded_proposed_patches(co, "поменяем цену на 20 косарей")
+    assert proposed.get("cost") == 20000, (
+        f"slang multiplier must override change_value when extractor disagrees; "
+        f"got {proposed.get('cost')!r}"
+    )
+
+
+def test_bug10_followup_correct_classifier_cost_kept():
+    """Sanity: when classifier matches the slang interpretation, the
+    override is a no-op. cost=80000 + utterance "80 тысяч долларов"
+    extractor=80000 → no change."""
+    from backend.turn_dispatcher import _grounded_proposed_patches
+
+    co = make_classifier(
+        utterance="за 80 тысяч долларов",
+        intent="TOOL",
+        cost=80000.0,
+    )
+    proposed = _grounded_proposed_patches(co, "за 80 тысяч долларов")
+    assert proposed.get("cost") == 80000
+
+
+def test_bug10_followup_no_slang_signal_does_not_override():
+    """Sanity: utterance has no cost mention extractor parses; classifier
+    cost stands. (Today's behaviour where classifier carries through
+    its own value when extractor cannot help.) Use a bare-digit-only
+    cost utterance to verify."""
+    from backend.turn_dispatcher import _grounded_proposed_patches
+
+    co = make_classifier(
+        utterance="за 80000 долларов",
+        intent="TOOL",
+        cost=80000.0,
+    )
+    proposed = _grounded_proposed_patches(co, "за 80000 долларов")
+    assert proposed.get("cost") == 80000
