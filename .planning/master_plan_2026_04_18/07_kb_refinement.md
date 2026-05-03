@@ -23,6 +23,26 @@ Evidence from the current file (`kb_faq_ru.yaml` 350 entries / `kb_faq_ru_v2.md`
 4. **Stale numbers across copies.** `kb-audit-report-2026-04-16.md` counted: 25 hits for `"10%"`, 14 for `"30%"` advance. Bug 14 in ANALYSIS.md (ПДН wrong definition) is the same disease.
 5. **Hallucination class.** `2026-04-17-kb-grounding-design.md` documents Vadim director hallucination + Минск ул. Немига 24 hallucination — both partially driven by canonical-question retrieval bringing irrelevant entries into the LLM's context window.
 
+## Risks (verified against codebase 2026-05-03)
+
+Honest cost/benefit before approving the rewrite. Items below are **verified by grep**, not asserted from generic knowledge.
+
+### Risks worth treating seriously
+
+1. **More LLM hallucination surface inside topical sections.** Today each entry's `best_answer` is a tight rule statement. After: a section is several paragraphs with sub-headers — the LLM is more tempted to interpolate across them. Mitigation: keep explicit sub-headers (`Кому доступно`, `Финансовые параметры`, etc.); the existing grounding validator (`backend/utterance_grounding.py`) carries the weight.
+2. **`bot_playbook.yaml` is NEW wiring, not migration.** Verified: nothing in `rag_demo_system/backend/` reads `eligibility_rules`, `empathy_patterns`, `handoff_when`, `compliance_notes`, `followups`, or `required_fields` today — they reach the LLM only via being chunked into retrieval text. After refactor we have to actively inject them via `turn_dispatcher.py` + the system-prompt builder. **If that wiring is incomplete, the bot loses guardrails it has today.** This is the single biggest engineering risk in Phase C.
+3. **Synonym matching needs tuning.** Exact match misses real phrasings; fuzzy match routes wrong topic. Has to be empirically tuned on the transcript corpus.
+4. **Editor cognitive load goes up.** Today: one new fact = add one YAML entry. After: decide topical section + edit `kb_topics_ru.md` + maybe add synonyms + maybe touch playbook. Three files instead of one. Real cost for long-term maintenance.
+5. **`dedup_similarity_threshold=0.75` (prod, `rag_demo_system/config/app.yaml:36`) was masking source duplication.** After we remove source dupes, two distinct topical sub-chunks within one section may now over-dedup. Likely needs to come up to 0.82–0.85 post-swap. Add to Phase C tuning checklist.
+6. **Section boundary mistakes.** "Автолизинг физлиц" vs "автолизинг ИП" — one section or two? Wrong boundary → wrong topic retrieved. Phase A.5 must derive boundaries from cluster output, not impose them, and explicitly flag uncertain calls.
+7. **Existing tests will need fixture updates.** `test_chunking.py`, `test_dedup_chunks.py`, `test_retrieval_threshold.py` reference current chunk shapes.
+
+### Verified-safe items (not actually risks)
+
+1. **No code references KB `intent:` field by name.** Verified in `rag_demo_system/backend/`: `intent` in code is the classifier's intent (`TOOL`/`RAG`/`CONVERSATION`), not the KB's `intent:` metadata field. Restructuring KB intents is safe — zero code coupling.
+2. **Total fact coverage.** Phase A.3 (coverage_check), the "no silent deletion" rule (Section "What NOT to do"), and the immutable archive at `knowledge_base/_archive/baseline_2026_05_03/` (committed `8830459` with SHA-256 manifest) together protect against losing facts.
+3. **Rollback.** `KB_LAYOUT=legacy|topical` env var → ~5-min revert. File-level archive is the deeper net.
+
 ## Required memories (retrieve before starting)
 
 - `project_kb_refinement_planned_2026_04_29.md` — this section's anchor memory
