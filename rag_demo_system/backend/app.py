@@ -41,6 +41,7 @@ from .rag_backends import build_backend_status
 from .settings import load_settings
 from .tools import get_tool_schemas, get_tool, init_tools, get_all_tools
 from .tools.filler import get_filler
+from .is_working_hours import augment_system_prompt_with_working_hours
 from .llm_stream import parse_tool_calls_from_events
 from .state import StateStore
 from .router import route_non_rag
@@ -595,7 +596,9 @@ async def chat(payload: ChatRequest, stream: bool = False) -> Any:
         state.update(session)
         return _stream_or_json(response, stream)
 
-    system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    system_prompt = augment_system_prompt_with_working_hours(
+        settings.app.system_prompt_path.read_text(encoding="utf-8")
+    )
     memory_block = build_memory_block(session.transcript, settings.app.memory_turns)
     context_block = "\n\n".join(
         [f"[Fragment {i+1}]\n{c['text']}" for i, c in enumerate(final_chunks)]
@@ -887,7 +890,9 @@ async def _stream_voice_response(
             rag_query = " ".join(m[:60] for m in user_msgs[-2:]) + " " + message
 
     # --- Build prompt (needed before parallel tasks) ---
-    system_prompt = settings.app.system_prompt_path.read_text(encoding="utf-8")
+    system_prompt = augment_system_prompt_with_working_hours(
+        settings.app.system_prompt_path.read_text(encoding="utf-8")
+    )
     chat_session = state.get(session_id) or state.create(session_id)
     memory_block = build_memory_block(chat_session.transcript, settings.app.memory_turns)
 

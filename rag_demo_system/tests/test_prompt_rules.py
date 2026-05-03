@@ -205,6 +205,25 @@ def test_v2_prompt_word_form_acronyms() -> None:
     assert "осаго" in text
 
 
+# ── Bug 19: working-hours-aware specialist handoff (prompt half) ──────
+
+def test_v2_prompt_references_working_hours_marker() -> None:
+    text = _v2_text()
+    # The prompt must instruct the LLM to read the runtime
+    # "[Время сейчас: ...]" tag injected by app.py before promising
+    # specialist transfers.
+    assert "Время сейчас" in text
+    assert "РАБОЧЕЕ" in text and "НЕРАБОЧЕЕ" in text
+
+
+def test_v2_prompt_carries_offhours_redirect_phrase() -> None:
+    text = _v2_text()
+    # Locks in the canonical off-hours redirect wording so any future
+    # rephrasing has to update both the helper marker and the prompt
+    # rule together.
+    assert "перезвонят в рабочее время" in text
+
+
 def test_v2_prompt_currency_pronunciation() -> None:
     text = _v2_text().lower()
     # Currency rules: BYN / USD / EUR / RUB must NOT be spelled
