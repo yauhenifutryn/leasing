@@ -468,6 +468,12 @@ class ClassifierOutput(BaseModel):
     is_confirmation: bool = False
     is_stop_request: bool = False
     wants_readback: bool = False
+    # Bug 25 (ANALYSIS.md §8): caller asked for the full breakdown after
+    # the terse calc readback ("подробнее" / "полный расчёт" /
+    # "удорожание"). Routed by apply_turn to EmitCalcDetail so the
+    # deterministic renderer speaks выкупной / общая сумма / удорожание
+    # without LLM paraphrase.
+    detail_request: bool = False
 
     change_field: Optional[_CHANGE_FIELDS] = None
     change_value: Optional[Union[str, int, float]] = None

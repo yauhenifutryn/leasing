@@ -28,6 +28,7 @@ from .turn_action import (
     EmitReadback,
     EmitClarify,
     EmitChangeConfirm,
+    EmitCalcDetail,
     FireCalc,
     FireLLMFallback,
     FireSMS,
@@ -479,6 +480,20 @@ def _dispatch_once(
         # change-confirm, NOT the prior SMS offer.
         profile.last_offer = None
         return Noop(reason="redispatch_change")
+
+    # STEP 1.5 (Bug 25, ANALYSIS.md §8): detail_request — caller asked
+    # for the full calc breakdown after the terse readback. Routed
+    # through EmitCalcDetail so the deterministic renderer speaks
+    # выкупной / общая сумма / удорожание without LLM paraphrase. Gated
+    # on `is_confirmation == False` so a "Да, поменяй" turn that ALSO
+    # carries detail_request (classifier hallucination) never hijacks
+    # the change-confirm path. Stop / change-pending turns also bypass
+    # this branch via the early returns above.
+    if (
+        getattr(classifier_output, "detail_request", False)
+        and not classifier_output.is_confirmation
+    ):
+        return EmitCalcDetail()
 
     # STEP 2: READBACK_PENDING + is_confirmation → CONFIRMED. No
     # return — we fall through to step 6 in the same iteration so
@@ -1157,6 +1172,38 @@ async def execute_action(
         # apply_turn step 4 produced.
         from .profile_prompts import build_change_confirm_text
         spoken = build_change_confirm_text({"changes": action.changes})
+        await tts.say(spoken)
+        yield spoken
+        return
+
+    if isinstance(action, EmitCalcDetail):
+        # Bug 25 (ANALYSIS.md §8): caller asked "подробнее" after the
+        # terse calc readback. Look up the most recent successful calc
+        # in session.tool_calls_history and ship the detailed render.
+        # LLM is NEVER invoked — the deterministic-numbers invariant
+        # extends to this path. When no prior calc exists (caller asked
+        # for detail before the bot ever computed anything), speak a
+        # short Russian explanation rather than failing silently.
+        from .profile_prompts import render_calc_result
+        _calls = (
+            list(getattr(session, "tool_calls_history", []) or [])
+            + list(getattr(session, "tool_calls_this_turn", []) or [])
+        )
+        _last_calc = next(
+            (
+                tc for tc in reversed(_calls)
+                if tc.get("tool") == "calculator"
+                and (tc.get("result") or {}).get("ok")
+            ),
+            None,
+        )
+        if _last_calc is None:
+            spoken = (
+                "Я ещё не делала расчёт. "
+                "Назовите параметры — стоимость, срок, аванс — и я посчитаю."
+            )
+        else:
+            spoken = render_calc_result(_last_calc["result"], detailed=True)
         await tts.say(spoken)
         yield spoken
         return

@@ -113,6 +113,23 @@ class FireOORMessage:
 
 
 @dataclass(frozen=True)
+class EmitCalcDetail:
+    """Speak the FULL breakdown (выкупной / общая сумма / удорожание) of
+    the most recent successful calculator result.
+
+    Bug 25 (ANALYSIS.md §8): the default post-calc readback is now terse
+    (cost / term / prepaid / monthly only) and the deeper figures are
+    revealed only when the caller asks for them. The handler reads
+    `session.tool_calls_history`, finds the latest calculator entry with
+    `result.ok=True`, and ships
+    `profile_prompts.render_calc_result(result, detailed=True)` to TTS.
+    Falls back to a Russian "пока нечего расшифровать" line when no
+    prior calc exists. LLM is NEVER invoked — the deterministic-numbers
+    invariant (E8) extends to this path.
+    """
+
+
+@dataclass(frozen=True)
 class FireSMS:
     """Send the last successful calculator result as SMS to the caller.
 
@@ -145,8 +162,10 @@ TurnAction = Union[
     EmitReadback,
     EmitClarify,
     EmitChangeConfirm,
+    EmitCalcDetail,
     FireCalc,
     FireLLMFallback,
     FireOORMessage,
+    FireSMS,
     Noop,
 ]

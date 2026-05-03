@@ -53,6 +53,7 @@ def test_empty_model_intent_is_none_but_dict_not_empty():
         "is_confirmation": False,
         "is_stop_request": False,
         "wants_readback": False,
+        "detail_request": False,
     }
 
 
@@ -259,6 +260,7 @@ def test_malformed_json_returns_empty():
         "is_confirmation": False,
         "is_stop_request": False,
         "wants_readback": False,
+        "detail_request": False,
     }
 
 

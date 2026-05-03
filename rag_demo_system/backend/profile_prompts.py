@@ -223,7 +223,7 @@ def build_readback_text(profile: Any) -> str:
     )
 
 
-def render_calc_result(result: dict[str, Any]) -> str:
+def render_calc_result(result: dict[str, Any], detailed: bool = False) -> str:
     """Render the post-calculator voice summary deterministically.
 
     Fix 1.1 (2026-04-19) — extracted from the inline f-string that lived in
@@ -232,6 +232,15 @@ def render_calc_result(result: dict[str, Any]) -> str:
     to paraphrase tone, never to synthesise figures. A companion
     `[deterministic_readback]` log marker is emitted by the caller so
     session_analyzer can confirm this path drove the spoken result.
+
+    Bug 25 (ANALYSIS.md §8) — default form is terse (4 values: cost,
+    term, prepaid pct, monthly payment) plus the canonical follow-up
+    offer "хотите подробный расчёт или СМС". The advanced breakdown
+    (выкупной / общая сумма / удорожание) renders only when
+    `detailed=True`, which apply_turn signals via EmitCalcDetail when
+    the caller asks "подробнее" / "полный расчёт" / "удорожание". This
+    mirrors Just AI's terse readback pattern (clip 6:03-6:25): the bot
+    leads with the headline figure and the caller can drill in on demand.
 
     When the direct-call path carried a USD->BYN conversion (Fix 1.2), the
     result dict contains `currency_conversion` and the summary is prefixed
@@ -271,32 +280,49 @@ def render_calc_result(result: dict[str, Any]) -> str:
             f"по курсу {_fmt_rate(rate_exact)} к 1). "
         )
 
-    # Fix 1.8 (2026-04-19) — TTS mispronounces decimal monetary amounts.
-    # Live call 674e3957: "Ежемесячный платёж: 536.55 USD" spoken as
-    # "пятьсот тридцать шесть запятая пятьдесят пять" — awkward and
-    # unclear. Round all monetary fields to integers at the renderer
-    # boundary. Sub-unit precision is preserved in SMS (it goes through
-    # calculator.format_sms_body and the client can read exact figures).
-    # Percentages render as int when whole, else one decimal place.
-    # Issue #5 (live call cdbcf56b 2026-04-26): "мес." was spoken as
-    # "мес" (clipped). Spell out "месяцев" so TTS pronounces the full
-    # word. No abbreviation-expansion dependency.
-    # Issue #3 (live call cdbcf56b): the FireCalc handler speaks
-    # render_calc_result verbatim and returns — no follow-up offer was
-    # appended, so the caller had to volunteer "СМС" or "линейный"
-    # without prompting. Append the canonical post-calc offer.
-    return (
-        f"{conv_prefix}"
-        f"Аванс {_fmt_pct(params.get('prepaid', 30))}%: "
-        f"{_fmt_money(result.get('advance_sum'))} {currency}. "
-        f"Ежемесячный платёж: {_fmt_money(result.get('payment_min'))} {currency}. "
-        f"Выкупной: {_fmt_money(result.get('buyout_sum'))} {currency}. "
-        f"Общая сумма: {_fmt_money(result.get('total'))} {currency}. "
-        f"Удорожание: {_fmt_pct(result.get('increase_percent'))}%. "
-        f"Срок: {result.get('num_payments', '?')} месяцев."
-        f"{defaults_note}"
-        f" Хотите изменить параметры или отправить график платежей по СМС?"
-    )
+    cost_str = _fmt_money(params.get("cost"))
+    term_str = f"{result.get('num_payments', '?')}"
+    prepaid_pct_str = _fmt_pct(params.get("prepaid", 30))
+    monthly_str = _fmt_money(result.get("payment_min"))
+
+    # Terse 4-value headline (Bug 25). When `conv_prefix` already
+    # narrated the cost in USD, omit it here to avoid a stutter
+    # ("Стоимость 20000 долларов ... Стоимость 60000 BYN").
+    if conv_prefix:
+        head = (
+            f"Срок {term_str} месяцев, аванс {prepaid_pct_str} процентов. "
+            f"Ежемесячный платёж — {monthly_str} {currency}."
+        )
+    else:
+        head = (
+            f"Стоимость {cost_str} {currency}, "
+            f"срок {term_str} месяцев, "
+            f"аванс {prepaid_pct_str} процентов. "
+            f"Ежемесячный платёж — {monthly_str} {currency}."
+        )
+
+    detail_block = ""
+    if detailed:
+        # Fix 1.8 — round monetary fields to integers; percentages stay
+        # decimal when needed. Issue #5 — spell out "месяцев". Issue #3
+        # — the deterministic offer line lives at the end of the terse
+        # path; on the detail path the caller has already heard the
+        # offer, so we close with a softer "что-нибудь ещё?".
+        detail_block = (
+            f" Выкупной: {_fmt_money(result.get('buyout_sum'))} {currency}. "
+            f"Общая сумма: {_fmt_money(result.get('total'))} {currency}. "
+            f"Удорожание: {_fmt_pct(result.get('increase_percent'))}%."
+        )
+
+    if detailed:
+        offer = " Что-нибудь ещё уточнить?"
+    else:
+        offer = (
+            " Хотите услышать подробный расчёт или отправить график "
+            "платежей по СМС?"
+        )
+
+    return f"{conv_prefix}{head}{detail_block}{defaults_note}{offer}"
 
 
 def _fmt_money(v: Any) -> str:

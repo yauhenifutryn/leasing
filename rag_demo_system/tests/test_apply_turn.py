@@ -1082,6 +1082,55 @@ def test_apply_turn_name_change_rejects_bot_name_without_self_intro() -> None:
     assert profile.name == "Сергей"
 
 
+# ---------------------------------------------------------------- Bug 25 (ANALYSIS.md §8): detail_request
+# When the caller asks "подробнее" / "полный расчёт" / "удорожание" after
+# the terse calc readback, the classifier emits detail_request=True. The
+# dispatcher returns EmitCalcDetail so execute_action can render the
+# stored prior calc result in full form. Without this, the LLM is the
+# only path that handles the question — and the LLM may not have the
+# precise figures, violating the deterministic-numbers invariant.
+
+
+def test_apply_turn_emits_calc_detail_on_detail_request() -> None:
+    """detail_request=True without a confirmation flag → EmitCalcDetail.
+    State / pending-change semantics are independent of this path."""
+    from backend.turn_action import EmitCalcDetail
+    profile = make_complete_profile()
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        detail_request=True,
+    )
+    action = apply_turn(profile, classifier, utterance="расскажи подробнее")
+    assert isinstance(action, EmitCalcDetail), (
+        f"detail_request must route to EmitCalcDetail, got {type(action).__name__}"
+    )
+
+
+def test_apply_turn_detail_request_yields_to_change_confirm() -> None:
+    """Safety: when CHANGE_PENDING + is_confirmation are both set, the
+    pending change has priority — detail_request must not short-circuit
+    a real "Да, поменяй" turn even if the classifier hallucinates the
+    detail flag alongside the confirmation."""
+    profile = make_complete_profile()
+    profile.state = ProfileState.CHANGE_PENDING
+    profile.pending_change = {
+        "changes": {"term_months": {"old": 36, "new": 60}},
+    }
+    classifier = make_classifier(
+        intent="TOOL",
+        is_confirmation=True,
+        detail_request=True,
+    )
+    action = apply_turn(profile, classifier, utterance="да, подробнее")
+    # Step 1 (CHANGE_PENDING + is_confirmation) wins → ends up in FireCalc
+    # (or further redispatch result), NOT EmitCalcDetail.
+    from backend.turn_action import EmitCalcDetail
+    assert not isinstance(action, EmitCalcDetail), (
+        "is_confirmation on CHANGE_PENDING must not be hijacked by detail_request"
+    )
+
+
 # ---------------------------------------------------------------- Codex adversarial high #1
 # Two invariants that the old raw-setattr step 1 loop violated:
 #   1. prepaid_pct/prepaid_amount slot invariant: confirming a change to

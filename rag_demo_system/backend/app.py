@@ -1090,6 +1090,7 @@ async def _stream_voice_response(
                     ' "is_confirmation": true|false,\n'
                     ' "is_stop_request": true|false,\n'
                     ' "wants_readback": true|false,\n'
+                    ' "detail_request": true|false,\n'
                     ' "change_field": "имя поля или null",\n'
                     ' "change_value": значение или null,\n'
                     ' "action": "calculate"|"recalculate"|"change_param"|"sms"|"clarify"|"clarify_client_type"|"confirm"|"invalid_param" или null}\n\n'
@@ -1183,6 +1184,11 @@ async def _stream_voice_response(
                     "'ну и что?', 'алло', 'не слышала?', 'в нашем разговоре уже'. "
                     "Если сомневаешься — false.\n"
                     "- wants_readback: клиент просит повторить параметры ('повтори', 'какие параметры', 'что у нас').\n"
+                    "- detail_request: true ТОЛЬКО когда клиент просит подробный/полный расчёт ПОСЛЕ того, "
+                    "как бот уже озвучил краткий результат калькулятора. Триггеры: 'подробнее', 'полный расчёт', "
+                    "'расскажи подробнее', 'покажи всё', 'сколько удорожание', 'какая общая сумма', 'какой выкупной'. "
+                    "Если клиент только начинает разговор или ещё не было расчёта — false. "
+                    "При обычном подтверждении 'Да' — false (это is_confirmation, не detail_request).\n"
                     "- change_field/change_value: клиент меняет ОДИН параметр. "
                     "'поменяй срок на 48' -> change_field='term_months', change_value=48. "
                     "'давай без аванса' -> change_field='prepaid_pct', change_value=0. "

@@ -1145,3 +1145,65 @@ async def test_fire_sms_failure_does_not_append_continuation(monkeypatch) -> Non
     spoken = tts.collected_text()
     assert "не удалось отправить" in spoken.lower()
     assert "Чем ещё могу помочь по лизингу" not in spoken
+
+
+# ---------------------------------------------------------------- Bug 25 (ANALYSIS.md §8): EmitCalcDetail handler
+# When the caller asks "подробнее" after a terse calc readback, apply_turn
+# emits EmitCalcDetail. The handler reads the most recent successful
+# calculator entry from session.tool_calls_history and ships the full
+# render_calc_result(result, detailed=True) text to TTS — without
+# touching the LLM. If no calc is on file, a graceful Russian fallback
+# explains there is nothing to elaborate yet.
+
+
+@pytest.mark.asyncio
+async def test_emit_calc_detail_renders_full_form_from_session_history() -> None:
+    """Bug 25: EmitCalcDetail reads the last successful calc and speaks
+    the full breakdown (выкупной / общая сумма / удорожание)."""
+    from backend.turn_dispatcher import execute_action
+    from backend.turn_action import EmitCalcDetail
+
+    session = FakeVoiceSession()
+    session.tool_calls_history = [
+        {"tool": "calculator",
+         "params": dict(_CALC_PARAMS),
+         "result": {"ok": True, **_CALC_RESULT_OK}},
+    ]
+    tts = FakeTts()
+    llm = FakeLLMBackend()
+
+    async for _ in execute_action(
+        EmitCalcDetail(), ws=None, session=session, backend=llm,
+        tts=tts, calc=FakeCalc(), rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert "Выкупной" in spoken
+    assert "Общая сумма" in spoken
+    assert "Удорожание" in spoken
+    # Deterministic — LLM must NOT be invoked.
+    assert llm.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_emit_calc_detail_graceful_fallback_when_no_prior_calc() -> None:
+    """No prior calculator success on the session → handler speaks a
+    short Russian explanation rather than failing silently."""
+    from backend.turn_dispatcher import execute_action
+    from backend.turn_action import EmitCalcDetail
+
+    session = FakeVoiceSession()  # tool_calls_history empty
+    tts = FakeTts()
+
+    async for _ in execute_action(
+        EmitCalcDetail(), ws=None, session=session, backend=FakeLLMBackend(),
+        tts=tts, calc=FakeCalc(), rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert spoken, "handler must speak something even without prior calc"
+    assert "Выкупной" not in spoken  # no fake numbers
+    assert "ещё не" in spoken.lower() or "пока нет" in spoken.lower() \
+        or "сначала" in spoken.lower(), f"expected graceful fallback, got: {spoken}"

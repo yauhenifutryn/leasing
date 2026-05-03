@@ -50,44 +50,79 @@ def _minimal_result(**overrides):
 
 
 def test_render_calc_result_basic_byn() -> None:
+    """Bug 25 (ANALYSIS.md §8): default calc readback is the 4-value
+    terse form — cost, term, prepaid, monthly. Advanced fields
+    (выкупной / общая сумма / удорожание) are on-demand only and MUST
+    NOT appear in the default render."""
     out = render_calc_result(_minimal_result())
-    assert "18000" in out
-    assert "1500" in out
-    assert "1000" in out  # buyout
-    assert "61000" in out
-    assert "12.5" in out
-    assert "36" in out
+    # 4-value contract:
+    assert "60000" in out          # cost
+    assert "36" in out             # term months
+    assert "30" in out             # prepaid pct
+    assert "1500" in out           # monthly payment
+    # Advanced fields suppressed:
+    assert "Выкупной" not in out, f"buyout leaked into terse render: {out}"
+    assert "Общая сумма" not in out, f"total leaked into terse render: {out}"
+    assert "Удорожание" not in out, f"increase leaked into terse render: {out}"
 
 
 def test_render_calc_result_rounds_decimal_money() -> None:
     """Fix 1.8 — TTS cannot pronounce "536.55 USD" cleanly. Monetary
     fields must round to integers; percentages stay decimal when needed
-    (12.5%), integer when whole (30%)."""
+    (12.5%), integer when whole (30%).
+
+    Run against the detailed form (Bug 25) so the buyout / total /
+    increase rounding contract is still exercised — these fields no
+    longer appear in the default terse render."""
     out = render_calc_result(_minimal_result(
         advance_sum=6000.0,      # whole USD amount, must render "6000"
         payment_min=536.55,      # decimal that broke live call 674e3957
         buyout_sum=200.0,
         total=25516.039,
         increase_percent=12.5,   # kept decimal (percentage)
-    ))
+    ), detailed=True)
     assert "536.55" not in out, f"decimal leaked into spoken summary: {out}"
     # round(536.55) == 537 via banker's rounding in Python 3 — either 536
     # or 537 is an acceptable integer form; both are TTS-clean.
-    assert " 537 " in out or " 536 " in out, f"rounded payment missing: {out}"
-    assert "6000" in out
+    assert "537" in out or "536" in out, f"rounded payment missing: {out}"
     assert "200" in out
     assert "25516" in out
     assert "12.5" in out          # percentage keeps one decimal
 
 
+def test_render_calc_result_terse_offer_mentions_detail_and_sms() -> None:
+    """Bug 25 contract: terse render closes with the canonical follow-up
+    offer 'Хотите услышать подробный расчёт или отправить график по СМС?'
+    so the caller knows the deeper numbers are available on demand."""
+    out = render_calc_result(_minimal_result())
+    lower = out.lower()
+    assert "подробн" in lower, f"detail offer missing: {out}"
+    assert "смс" in lower, f"SMS offer missing: {out}"
+
+
+def test_render_calc_result_detailed_form_includes_advanced_fields() -> None:
+    """Detailed form (`detailed=True`) restores the full breakdown — used
+    when the caller asks 'подробнее' / 'полный расчёт' / 'удорожание'
+    and apply_turn emits EmitCalcDetail."""
+    out = render_calc_result(_minimal_result(), detailed=True)
+    assert "Выкупной" in out
+    assert "1000" in out           # buyout sum
+    assert "Общая сумма" in out
+    assert "61000" in out          # total
+    assert "Удорожание" in out
+    assert "12.5" in out           # increase percent
+
+
 def test_render_calc_result_whole_percentage_no_trailing_zero() -> None:
-    """30.0% should render as '30%' not '30.0%' for cleaner TTS."""
+    """30.0% should render as '30' (without trailing .0) — Bug 25 spells
+    "процентов" out for TTS, so the assertion now checks the absence of
+    "30.0" rather than the literal "30%" form."""
     out = render_calc_result(_minimal_result(
         params={"subject": "Легковой автомобиль", "cost": 60000.0,
                 "currency": "BYN", "prepaid": 30.0},
     ))
-    assert "30.0%" not in out, f"trailing .0 on percentage: {out}"
-    assert "30%" in out
+    assert "30.0" not in out, f"trailing .0 on percentage: {out}"
+    assert "30" in out
 
 
 def test_render_calc_result_usd_disclosure_prefix() -> None:
