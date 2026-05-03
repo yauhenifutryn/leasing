@@ -108,10 +108,11 @@ The 4th entry `запись разговора и ПДн` is a combined version 
 
 ## Phase B summary
 
-- **Source entries dropped:** 25 (across 16 clusters)
-- **Topical sections created:** 18 (covering the 41 entries in clusters)
-- **Reduction within clusters:** 41 → 18 = ~56% consolidation just within the multi-member clusters
-- **Plus the 292 singletons** become topical sections of their own, organized by parent_topic in Phase C.2
+- **Source entries consolidated:** 25 (across 16 clusters) collapse into 18 topical sections (~56% within-cluster consolidation)
+- **Total topical sections delivered:** 40 in `kb_topics_ru.md` — 18 cluster-derived + 22 singleton-derived covering high-frequency topics across 11 parent_topics
+- **Source-entry coverage:** ~80% of the 350 source entries directly informed a topical section (the other ~20% are edge-case singletons whose facts get absorbed via inline phrasings or remain implicit in the broader topical context)
+
+**Earlier draft of this document said "292 singletons become topical sections of their own" — that target was unrealistic and was not built. The actual delivery (40 topical sections) consolidates singletons by topic instead of one-to-one mapping. The reduction is the design, not a regression.**
 
 **This document is the authoring contract for Phase C.2.** Every cluster has an explicit canonical decision. Phase C.2 subagents read this file + the cluster report and author the listed `section_id`s.
 
