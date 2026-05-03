@@ -159,7 +159,13 @@ install_apt_packages() {
 
   # Ensure Python 3.12+ (required for type hints and venv compatibility)
   PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
-  if [ "$(echo "$PY_VER 3.12" | awk '{print ($1 < $2)}')" = "1" ]; then
+  # Skip the deadsnakes PPA fetch when python3.12 is already on PATH —
+  # covers VMs with Launchpad firewalled (some Sesterce nodes block
+  # api.launchpad.net + ppa.launchpadcontent.net) where operators
+  # pre-install via uv / pyenv / manual build before running provision.
+  if command -v python3.12 >/dev/null 2>&1; then
+    log "Python 3.12 already on PATH: $(python3.12 --version) -- skipping deadsnakes PPA"
+  elif [ "$(echo "$PY_VER 3.12" | awk '{print ($1 < $2)}')" = "1" ]; then
     log "Python $PY_VER found, need 3.12+. Installing..."
     sudo -E add-apt-repository -y ppa:deadsnakes/ppa
     sudo -E apt-get update -y
