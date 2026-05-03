@@ -385,6 +385,28 @@ def test_linear_grounds_one_string() -> None:
     assert extract_type_schedule_from_utterance("дифференцированный") == "1"
 
 
+# Bug 24 — the bot now SPEAKS lay phrasing ("равными платежами" /
+# "с уменьшением суммы к концу срока"). Users echoing those phrases
+# back must ground to the same enum codes the legacy banking terms do.
+def test_lay_phrasing_annuity_grounds() -> None:
+    assert extract_type_schedule_from_utterance("равными платежами") == "0"
+    assert extract_type_schedule_from_utterance("давайте равными платежами") == "0"
+
+
+def test_lay_phrasing_linear_grounds() -> None:
+    assert extract_type_schedule_from_utterance("с уменьшением суммы") == "1"
+    assert extract_type_schedule_from_utterance(
+        "хочу с уменьшением суммы к концу срока"
+    ) == "1"
+
+
+def test_legacy_banking_terms_still_ground() -> None:
+    # Regression guard: the input side keeps accepting аннуитет / линейный
+    # because clients who already know finance still use them.
+    assert extract_type_schedule_from_utterance("аннуитет, давай") == "0"
+    assert extract_type_schedule_from_utterance("давай линейный") == "1"
+
+
 def test_ambiguous_schedule_returns_none() -> None:
     assert extract_type_schedule_from_utterance("аннуитет или линейный") is None
 

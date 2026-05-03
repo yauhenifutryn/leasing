@@ -391,9 +391,18 @@ def extract_prepaid_pct_from_utterance(utterance: str) -> Optional[float]:
 # "Аннуитет" → 0 (annuity). "Линейный" / "дифференцированный" / "убывающий"
 # → 1 (linear). Stored as a string in the profile (Literal["0", "1"]) so
 # return matches the canonical enum the calculator and classifier use.
+#
+# Bug 24 (2026-05-03): the bot OUTPUT now uses lay phrasing ("равными
+# платежами" / "с уменьшением суммы к концу срока"). Users echoing the
+# bot's phrasing back must ground correctly:
+#   - "равными платежами" / "равными выплатами"  → annuity (already covered)
+#   - "с уменьшением суммы" / "с уменьшением выплат" → linear (NEW: noun
+#     stem `уменьшен\w+` was missing — only the active participle
+#     `уменьшающ\w+` was caught, so phrases like "с уменьшением" silently
+#     failed to ground).
 _SCHEDULE_ANNUITY_RE = re.compile(r"\b(аннуитет\w*|равн\w+\s+платеж\w*)\b", re.IGNORECASE)
 _SCHEDULE_LINEAR_RE = re.compile(
-    r"\b(линейн\w+|дифференциров\w+|убыва\w+|уменьшающ\w+)\b",
+    r"\b(линейн\w+|дифференциров\w+|убыва\w+|уменьшающ\w+|уменьшен\w*)\b",
     re.IGNORECASE,
 )
 

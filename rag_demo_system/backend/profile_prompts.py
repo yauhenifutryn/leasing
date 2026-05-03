@@ -63,7 +63,14 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
         if "prepaid" in fields:
             parts.append("аванс (от 0 до 40 процентов)")
         if "type_schedule" in fields:
-            parts.append("тип графика (аннуитет или линейный)")
+            # Bug 24: lay phrasing instead of banking jargon. Clients ask
+            # "что такое аннуитет?" routinely — see Stanislav 15:08:23 and
+            # Valery 15:29:01 in the 2026-04-29 call set. Input grounding
+            # still accepts аннуитет/линейный; output never speaks them.
+            parts.append(
+                "график удобнее равными платежами или с уменьшением суммы "
+                "к концу срока"
+            )
         return "Подскажите " + ", ".join(parts) + "."
 
     return "Уточните параметры расчёта, пожалуйста."
@@ -208,9 +215,13 @@ def build_readback_text(profile: Any) -> str:
         prepaid = f"{int(profile.prepaid_amount)} {profile.currency or ''}".strip()
     else:
         prepaid = "—"
+    # Bug 24: lay phrasing in the spoken readback. The label is dropped
+    # from "график X" to a self-contained noun phrase so it slots into
+    # "график равные платежи" / "график с уменьшением суммы к концу срока"
+    # without sounding awkward when concatenated below.
     sched = (
-        "аннуитет" if profile.type_schedule == "0"
-        else "линейный" if profile.type_schedule == "1"
+        "равные платежи" if profile.type_schedule == "0"
+        else "с уменьшением суммы к концу срока" if profile.type_schedule == "1"
         else "—"
     )
     cost_phrase = _format_cost_phrase(profile)
@@ -262,7 +273,8 @@ def render_calc_result(result: dict[str, Any], detailed: bool = False) -> str:
         if "client_type" in defaulted:
             parts.append(f"тип клиента: {params.get('client_type', '?')} (по умолчанию)")
         if "type_schedule" in defaulted:
-            parts.append("аннуитетный график (по умолчанию)")
+            # Bug 24: lay phrasing.
+            parts.append("график равными платежами (по умолчанию)")
         if parts:
             defaults_note = f" Параметры по умолчанию: {', '.join(parts)}."
 
@@ -393,11 +405,16 @@ _FIELD_RU = {
 # Calculator API uses internal codes ("0"/"1" for type_schedule, etc.); we
 # never say those codes to the caller.
 _VALUE_RU: dict[str, dict[Any, str]] = {
+    # Bug 24: change-confirm output uses lay phrasing. Input grounding
+    # still accepts the legacy banking terms (аннуитет / линейный); the
+    # output side speaks "равными платежами" / "с уменьшением суммы к
+    # концу срока" because clients consistently asked "что такое
+    # аннуитет?" on live calls (Stanislav 15:08:23, Valery 15:29:01).
     "type_schedule": {
-        "0": "аннуитетный",
-        0: "аннуитетный",
-        "1": "линейный",
-        1: "линейный",
+        "0": "равными платежами",
+        0: "равными платежами",
+        "1": "с уменьшением суммы к концу срока",
+        1: "с уменьшением суммы к концу срока",
     },
     "condition_new": {
         "0": "подержанный",
