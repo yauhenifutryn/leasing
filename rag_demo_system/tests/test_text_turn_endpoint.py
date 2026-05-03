@@ -229,3 +229,91 @@ def test_text_turn_stamps_memory_block_for_llm_context(client):
     # transcript hasn't grown, but the attribute MUST be set, not None).
     assert hasattr(vs, "memory_block")
     assert vs.memory_block is not None  # was None before C2 fix
+
+
+def test_text_turn_persists_tool_calls_on_firecalc(client, monkeypatch, tmp_path):
+    """Regression for 2026-05-03 smoke finding: chat transcript persisted
+    with `tool_call_count: 0` even when FireCalc visibly fired (the bot
+    spoke the computed monthly payment). The chat persistence call site
+    must capture the dispatcher's `_append_tool_call` write.
+
+    Strategy:
+      - Monkeypatch apply_turn to return FireCalc.
+      - Monkeypatch CalcAdapter.calculate to return a fake ok result.
+      - POST /api/text-turn and assert the persisted file contains the
+        calculator tool_call entry plus tool_call_count >= 1.
+    """
+    import json
+    import backend.app as app_mod
+    from backend.turn_action import FireCalc, ProfileSnapshot
+
+    fake_snapshot = ProfileSnapshot(
+        client_type="ИП",
+        subject="Легковой автомобиль",
+        cost=50000.0,
+        currency="USD",
+        original_cost=50000.0,
+        original_currency="USD",
+        condition_new=1,
+        age_years=None,
+        prepaid_pct=30.0,
+        prepaid_amount=None,
+        term_months=36,
+        type_schedule="equal",
+        name="Иван",
+    )
+    fake_params = {
+        "cost": 50000, "currency": "USD", "term_months": 36,
+        "prepaid_pct": 30, "client_type": "ИП", "condition_new": 1,
+        "type_schedule": "equal",
+    }
+
+    def _fake_apply_turn(*_args, **_kwargs):
+        return FireCalc(snapshot=fake_snapshot, calc_params=fake_params)
+
+    async def _fake_calculate(self, params):  # noqa: ARG001
+        return {
+            "ok": True,
+            "monthly_payment": 1341.0,
+            "currency": "USD",
+            "cost": 50000,
+            "term_months": 36,
+            "prepaid_pct": 30,
+            "total_amount": 50000,
+            "total_overpay": 0,
+            "redemption_amount": 0,
+        }
+
+    # Patch in the app module namespace because /api/text-turn imports
+    # apply_turn locally inside the coroutine — we have to override the
+    # turn_dispatcher binding the lazy import resolves.
+    import backend.turn_dispatcher as td_mod
+    import backend.execute_adapters as ea_mod
+
+    monkeypatch.setattr(td_mod, "apply_turn", _fake_apply_turn)
+    monkeypatch.setattr(ea_mod.CalcAdapter, "calculate", _fake_calculate)
+
+    sid = "chat-toolpersist-1"
+    r = client.post(
+        "/api/text-turn",
+        json={
+            "message": "Посчитай лизинг",
+            "session_id": sid,
+            "name": "Иван",
+            "phone": "+375291234567",
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["ok"] is True, data
+
+    # The persisted transcript must reflect the FireCalc tool invocation.
+    record_path = tmp_path / "transcripts" / f"{sid}.json"
+    assert record_path.exists(), f"transcript not written: {record_path}"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["tool_call_count"] >= 1, (
+        f"Expected tool_call_count>=1, got {record['tool_call_count']} "
+        f"(tool_calls={record.get('tool_calls')!r})"
+    )
+    tools = [tc.get("tool") for tc in record["tool_calls"]]
+    assert "calculator" in tools, f"calculator not in persisted tools: {tools}"
