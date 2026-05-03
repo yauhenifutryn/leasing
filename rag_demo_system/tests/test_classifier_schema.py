@@ -877,3 +877,68 @@ def test_value_grounded_client_type_yur_keeps_self_reference():
     assert value_grounded(
         "client_type", "Юридическое лицо", "я от компании",
     ) is True
+
+
+# ── Bug 28: interrogative-leading suppression (live call 5746bfec) ─────
+# Same root cause as Bug 7: small classifier sometimes emits intent=TOOL
+# with parameter slots filled when the user is asking ABOUT a concept,
+# not naming it. Belt-and-suspenders against the 4B model: at the schema
+# layer, force intent=RAG and null all parameter slots when the utterance
+# leads with an interrogative.
+
+def test_interrogative_what_is_annuity_forces_rag_and_drops_params():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "type_schedule": "0",
+        "action": "calculate",
+    })
+    out = parse_classifier_output(raw, utterance="что такое аннуитет?")
+    assert out.intent == "RAG"
+    assert out.type_schedule is None
+
+
+def test_interrogative_kakoy_luchshe_forces_rag():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "type_schedule": "1",
+    })
+    out = parse_classifier_output(raw, utterance="какой график лучше?")
+    assert out.intent == "RAG"
+    assert out.type_schedule is None
+
+
+def test_interrogative_zachem_avans_forces_rag():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "prepaid_pct": 30,
+    })
+    out = parse_classifier_output(raw, utterance="зачем нужен аванс?")
+    assert out.intent == "RAG"
+    assert out.prepaid_pct is None
+
+
+def test_interrogative_kak_rabotaet_lizing_forces_rag():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "subject": "Легковой автомобиль",
+    })
+    out = parse_classifier_output(raw, utterance="как работает лизинг?")
+    assert out.intent == "RAG"
+    assert out.subject is None
+
+
+# ── Negative regression: legitimate parameter answers must NOT be
+# interpreted as interrogatives, even when they contain аннуитет /
+# линейный (which were the words triggering the live regression).
+
+def test_bare_annuitet_da_is_still_a_tool_answer():
+    raw = json.dumps({
+        "intent": "TOOL",
+        "type_schedule": "0",
+        "action": "confirm",
+    })
+    out = parse_classifier_output(raw, utterance="аннуитет, давай")
+    # The user is naming the schedule, not asking about it. intent=TOOL
+    # must survive and type_schedule must remain "0".
+    assert out.intent == "TOOL"
+    assert out.type_schedule == "0"

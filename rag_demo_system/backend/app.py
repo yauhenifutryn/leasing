@@ -1115,6 +1115,14 @@ async def _stream_voice_response(
                     "  Бот спрашивал параметры. Клиент: 'А кто у вас директор?' -> intent=RAG\n"
                     "  Бот спрашивал параметры. Клиент: 'А какой ваш адрес в Бресте?' -> intent=RAG\n"
                     "  Бот спрашивал параметры. Клиент: 'Когда вы работаете?' -> intent=RAG\n"
+                    # Bug 28 (live call 5746bfec 2026-05-03): definition
+                    # questions look like topic-naming to a 4B model. Lock
+                    # in the canonical examples so the classifier stops
+                    # filling parameter slots from interrogative utterances.
+                    "  Клиент: 'что такое аннуитет?' -> intent=RAG, type_schedule=null (definition question, не выбор графика)\n"
+                    "  Клиент: 'какой график лучше?' -> intent=RAG, type_schedule=null\n"
+                    "  Клиент: 'зачем нужен аванс?' -> intent=RAG, prepaid_pct=null\n"
+                    "  Клиент: 'как работает лизинг?' -> intent=RAG, subject=null\n"
                     "intent=TOOL только когда клиент реально прогрессирует расчёт: "
                     "называет параметр (стоимость, валюта, срок, аванс, график, тип/возраст), "
                     "подтверждает, меняет, явно просит посчитать или отправить СМС. "
