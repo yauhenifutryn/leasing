@@ -91,6 +91,20 @@
   background: none; border: 0; color: var(--mlc-muted);
   font: inherit; cursor: pointer; padding: 8px;
 }
+.mlc-close {
+  background: none; border: 0;
+  color: var(--mlc-muted);
+  cursor: pointer;
+  font-size: 22px; line-height: 1;
+  padding: 4px 8px;
+  margin-left: 4px;
+  border-radius: 8px;
+  transition: background var(--mlc-dur) var(--mlc-ease), color var(--mlc-dur) var(--mlc-ease);
+}
+.mlc-close:hover {
+  background: var(--mlc-border);
+  color: var(--mlc-ink);
+}
 
 .mlc-transcript {
   flex: 1; overflow-y: auto;

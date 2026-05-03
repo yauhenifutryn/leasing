@@ -13,7 +13,8 @@
     if (props) for (var k in props) {
       if (k === 'class') n.className = props[k];
       else if (k === 'text') n.textContent = props[k];
-      else if (k.indexOf('on') === 0) n.addEventListener(k.slice(2), props[k]);
+      else if (k.indexOf('on') === 0 && typeof props[k] === 'function')
+        n.addEventListener(k.slice(2), props[k]);
       else n.setAttribute(k, props[k]);
     }
     if (children) for (var i = 0; i < children.length; i++) {
@@ -53,14 +54,24 @@
     var composerInput = el('textarea', {
       placeholder: 'Сообщение...',
       rows: '1',
+      'aria-label': 'Сообщение',
       onkeydown: function(e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
       },
     });
-    var sendBtn = el('button', { class: 'mlc-send', text: '→', onclick: send });
+    var sendBtn = el('button', {
+      class: 'mlc-send',
+      text: '→',
+      'aria-label': 'Отправить',
+      onclick: send,
+    });
     var composer = el('div', { class: 'mlc-composer' }, [composerInput, sendBtn]);
 
-    var statusDot = el('span', { class: 'mlc-status-dot' });
+    var statusDot = el('span', {
+      class: 'mlc-status-dot',
+      role: 'status',
+      'aria-label': 'Подключено',
+    });
     var headerTitle = el('div', { class: 'mlc-header-title', text: 'Микро Лизинг' });
     var headerMeta = el('div', { class: 'mlc-header-meta', text: 'Аноним' });
     var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta]);
@@ -76,6 +87,7 @@
     var panel = el('div', { class: 'mlc-panel mlc-root' }, [header, transcript, composer]);
 
     function append(role, text) {
+      if (!transcript.isConnected) return null;  // panel closed mid-fetch
       var b = el('div', { class: 'mlc-bubble mlc-' + role, text: text });
       transcript.appendChild(b);
       transcript.scrollTop = transcript.scrollHeight;
@@ -83,6 +95,7 @@
     }
 
     function appendChip(text) {
+      if (!transcript.isConnected) return;
       var c = el('div', { class: 'mlc-action-chip', text: text });
       transcript.appendChild(c);
       transcript.scrollTop = transcript.scrollHeight;
@@ -91,6 +104,7 @@
     async function send() {
       var msg = composerInput.value.trim();
       if (!msg) return;
+      var prior = composerInput.value;          // capture for restore-on-failure
       composerInput.value = '';
       composerInput.style.height = 'auto';
       sendBtn.disabled = true;
@@ -119,11 +133,13 @@
             composerInput.disabled = true;
             sendBtn.disabled = true;
             statusDot.classList.add('mlc-disconnected');
+            statusDot.setAttribute('aria-label', 'Соединение завершено');
             return;
           }
         }
       } catch (e) {
         append('bot', '[нет связи с сервером]');
+        composerInput.value = prior;           // restore for retry
       } finally {
         sendBtn.disabled = false;
       }
@@ -161,15 +177,28 @@
       'aria-label': 'Открыть чат',
     });
     var current = null;
-    fab.addEventListener('click', function() {
+
+    function dismiss() {
       if (current) {
         current.remove();
         current = null;
-        fab.style.display = 'grid';
-        return;
       }
+      fab.style.display = 'grid';
+    }
+
+    fab.addEventListener('click', function() {
+      if (current) { dismiss(); return; }
       var built = buildPanel();
       built.panel.classList.add('mlc-embed-panel');
+      // Inject a close button into the header (embed mode only).
+      var closeBtn = el('button', {
+        class: 'mlc-close',
+        text: '×',
+        'aria-label': 'Закрыть чат',
+        onclick: dismiss,
+      });
+      var headerEl = built.panel.querySelector('.mlc-header');
+      if (headerEl) headerEl.appendChild(closeBtn);
       document.body.appendChild(built.panel);
       current = built.panel;
       fab.style.display = 'none';
