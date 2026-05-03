@@ -456,6 +456,17 @@ class VoiceChatRequest(BaseModel):
     backend: str | None = None
 
 
+class TextTurnRequest(BaseModel):
+    """Chat-widget turn request. Mirrors the Jambonz audio path but with a
+    text utterance instead of speech. Only `message` is required; the rest
+    are optional and default cleanly when missing or empty."""
+
+    message: str
+    session_id: str | None = None
+    name: str | None = None
+    phone: str | None = None
+
+
 def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> None:
     if max_turns <= 0:
         return
@@ -2113,6 +2124,379 @@ async def _jambonz_process_utterance(
         t_stt_done=t_stt_done,
         question_id=question_id,
         rtc_handler=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chat widget HTTP endpoint (Scope B)
+#
+# Mirrors the Jambonz audio path: SessionAgent classifier → apply_turn →
+# execute_action with TextTtsSink. The same VoiceSession dataclass is reused
+# (transport="chat") so the dispatcher's profile state machine, calc adapter,
+# and SMS handler all just work. No audio path is exercised — TextTtsSink
+# collects sentences instead of synthesizing PCM.
+# ---------------------------------------------------------------------------
+
+
+def _state_dir_for_persistence() -> Path:
+    """Resolve the .state/ directory used by chat persistence + analysis.
+
+    Tests can override the destination by setting the module-level global
+    ``_TEST_STATE_DIR_OVERRIDE`` (via monkeypatch) so transcripts land in
+    ``tmp_path`` instead of the real .state/ directory. Reading via
+    ``globals().get`` keeps the override optional — production never sets it.
+    """
+    override = globals().get("_TEST_STATE_DIR_OVERRIDE")
+    if override is not None:
+        return override
+    return Path(__file__).resolve().parents[1] / ".state"
+
+
+async def _broadcast_profile_snapshot(voice_session: VoiceSession) -> None:
+    """Mirror the immediate profile snapshot the Jambonz dispatcher path
+    broadcasts so chat sessions appear in the SIP monitor with the same
+    shape as voice calls. Bug K parity."""
+    p = voice_session.client_profile
+    try:
+        await broadcast_sip_event({
+            "type": "sip.profile.snapshot",
+            "call_id": voice_session.session_id,
+            "state": p.state.value,
+            "fields": {
+                "name": p.name,
+                "subject": p.subject,
+                "cost": p.cost,
+                "currency": p.currency,
+                "client_type": p.client_type,
+                "condition_new": p.condition_new,
+                "age_years": getattr(p, "age_years", None),
+                "term_months": p.term_months,
+                "prepaid_pct": p.prepaid_pct,
+                "prepaid_amount": p.prepaid_amount,
+                "type_schedule": p.type_schedule,
+            },
+            "missing": sorted(p.missing_fields()),
+        })
+    except Exception:  # noqa: BLE001
+        # Broadcast failures must never break a chat turn — the monitor
+        # is observability, not on the critical path.
+        pass
+
+
+async def _run_chat_session_analysis(
+    *,
+    session_id: str,
+    transcript: list,
+    phone: str,
+    state_dir: Path,
+) -> None:
+    """Run the same session-quality analysis voice uses, in a background
+    task so the HTTP response isn't held up. Triggered when EndCall fires
+    on a chat turn."""
+    try:
+        from .session_analyzer import analyze_session, save_report
+        from .llm import call_openai_compatible
+        report = await asyncio.to_thread(
+            analyze_session,
+            transcript,
+            call_openai_compatible,
+            settings.llm.base_url,
+            settings.llm.model,
+        )
+        report["session_id"] = session_id
+        report["transport"] = "chat"
+        report["phone"] = phone or "unknown"
+        save_report(report, state_dir)
+        print(
+            f"[ChatTurn:{session_id[:8]}] analysis: "
+            f"score={report.get('overall_score', '?')}",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ChatTurn:{session_id[:8]}] analysis failed: {exc}", flush=True)
+
+
+async def _text_process_utterance(
+    *,
+    voice_session: VoiceSession,
+    chat_session: Any,
+    message: str,
+) -> dict[str, Any]:
+    """Run a single chat turn through the same dispatcher voice uses.
+
+    Steps mirror `_stream_voice_response` (the voice dispatcher invocation
+    block ~line 1170) minus the audio path:
+
+      1. Stamp turn_id and broadcast `sip.stt.result` so the monitor sees
+         the caller utterance land.
+      2. Classify via the dedicated SessionAgent vLLM (same prompt + model
+         as voice). On classifier failure, fall back to a synthesized
+         CONVERSATION ClassifierOutput so apply_turn still receives a
+         non-None input.
+      3. Start RAG retrieval in parallel — execute_action's
+         FireLLMFallback handler awaits the future only when needed.
+      4. Build the dispatcher adapters (LLM stream, TextTtsSink, calc, RAG
+         future) and run apply_turn → execute_action.
+      5. Append the user/assistant turn to chat_session.transcript and
+         persist the chat turn to disk (per-turn save: HTTP has no
+         disconnect signal, so we must be safe against the user closing
+         the tab between turns).
+      6. On EndCall, stamp ended_at, emit `sip.call.end`, and dispatch the
+         analyzer in a background task so it doesn't block the response.
+    """
+    from .classifier_prompt import build_classifier_system_prompt
+    from .classifier_schema import parse_classifier_output
+    from .execute_adapters import (
+        LLMStreamBackend,
+        TextTtsSink,
+        CalcAdapter,
+        RagFuture,
+    )
+    from .turn_dispatcher import apply_turn, execute_action
+    from .llm import call_openai_compatible
+
+    voice_session.latest_finalized_turn_id += 1
+    turn_id = voice_session.latest_finalized_turn_id
+
+    # Caller utterance -> monitor (parity with the Jambonz path's STT broadcast).
+    try:
+        await broadcast_sip_event({
+            "type": "sip.stt.result",
+            "call_id": voice_session.session_id,
+            "text": message,
+        })
+    except Exception:  # noqa: BLE001
+        # Monitor broadcast must never break a chat turn.
+        pass
+
+    # 1. Classify (same SessionAgent vLLM the voice path uses; falls
+    # through to the legacy effective_* defaults when the dedicated
+    # classifier instance is unset).
+    sa_base_url = settings.llm.session_agent_base_url or settings.llm.base_url
+    sa_model = settings.llm.session_agent_model or settings.llm.model
+    try:
+        classify_resp = await asyncio.to_thread(
+            call_openai_compatible,
+            base_url=sa_base_url,
+            model=sa_model,
+            system_prompt=build_classifier_system_prompt(),
+            user_prompt=message,
+            temperature=0.0,
+            max_tokens=160,
+            timeout_sec=4,
+        )
+        sa_output = parse_classifier_output(
+            (classify_resp.text or "").strip(), message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[ChatTurn:{voice_session.session_id[:8]}] classify failed: {exc}",
+            flush=True,
+        )
+        # apply_turn requires a non-None ClassifierOutput; the parser
+        # synthesizes an empty CONVERSATION fallback when given empty
+        # text, so dispatch still reaches FireLLMFallback or Noop.
+        sa_output = parse_classifier_output("", message)
+
+    # 2. RAG retrieval in parallel (same shape as voice — voice_fast=False
+    # because there's no audio latency budget to fight here).
+    rag_task = asyncio.create_task(asyncio.to_thread(
+        engine.retrieve, message, False, False, voice_session.session_id,
+    ))
+
+    # 3. Dispatcher adapters.
+    text_sink = TextTtsSink(
+        session_id=voice_session.session_id,
+        broadcast_fn=broadcast_sip_event,
+    )
+    system_prompt = augment_system_prompt_with_working_hours(
+        settings.app.system_prompt_path.read_text(encoding="utf-8")
+    )
+    llm_backend = LLMStreamBackend(
+        base_url=settings.llm.base_url,
+        model=settings.llm.model,
+        temperature=settings.llm.temperature,
+        max_tokens=200,
+        timeout_sec=settings.llm.timeout_sec,
+        system_prompt=system_prompt,
+    )
+    calc = CalcAdapter(
+        session_id=voice_session.session_id,
+        client_phone=voice_session.client_phone,
+    )
+    rag_future_adapter = RagFuture(rag_task)
+
+    # 4. apply_turn -> execute_action.
+    action = apply_turn(
+        voice_session.client_profile,
+        sa_output,
+        message,
+        turn_id=turn_id,
+    )
+    action_name = type(action).__name__
+    print(
+        f"[ChatTurn:{voice_session.session_id[:8]}] turn_id={turn_id} "
+        f"action={action_name}",
+        flush=True,
+    )
+
+    # Pre-execute snapshot so the monitor reflects state-machine work
+    # apply_turn already did before the (potentially slow) LLM stream
+    # runs. Voice does the same at app.py:1245-1267.
+    await _broadcast_profile_snapshot(voice_session)
+
+    chunks: list[str] = []
+    try:
+        async for chunk in execute_action(
+            action,
+            ws=None,
+            session=voice_session,
+            backend=llm_backend,
+            tts=text_sink,
+            calc=calc,
+            rag_future=rag_future_adapter,
+        ):
+            chunks.append(chunk)
+    finally:
+        # If apply_turn picked an action that doesn't consume the RAG
+        # future, the speculative task is still running. Cancel it so
+        # we don't leak threads / event-loop callbacks.
+        if not rag_task.done():
+            rag_task.cancel()
+
+    # Prefer the dispatcher's yielded chunks; fall back to whatever
+    # TextTtsSink collected (handlers like EmitClarify say() text without
+    # yielding it back to the caller).
+    full_reply = " ".join(chunks).strip()
+    if not full_reply:
+        full_reply = " ".join(text_sink.collected).strip()
+
+    ended = action_name == "EndCall"
+
+    # Update the SessionState transcript (used by per-turn persistence
+    # and downstream memory_block construction in voice paths). Mirrors
+    # _append_turn's role/text shape.
+    if message:
+        chat_session.transcript.append({"role": "user", "text": message})
+    if full_reply:
+        chat_session.transcript.append({"role": "assistant", "text": full_reply})
+    state.update(chat_session)
+
+    if full_reply:
+        try:
+            await broadcast_sip_event({
+                "type": "sip.llm.final",
+                "call_id": voice_session.session_id,
+                "text": full_reply,
+                "interrupted": False,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Post-execute snapshot — voice path equivalent at app.py:1334-1356.
+    await _broadcast_profile_snapshot(voice_session)
+
+    # 5. Per-turn persistence. HTTP has no disconnect, so we save after
+    # every turn — close-the-tab still leaves a complete record of every
+    # finished exchange.
+    from .chat_persistence import save_chat_turn, mark_session_ended
+    state_dir = _state_dir_for_persistence()
+    tool_calls = (
+        list(getattr(voice_session, "tool_calls_history", []) or [])
+        + list(getattr(voice_session, "tool_calls_this_turn", []) or [])
+    )
+    try:
+        save_chat_turn(
+            session_id=voice_session.session_id,
+            transcript=chat_session.transcript,
+            tool_calls=tool_calls,
+            name=voice_session.client_name or "",
+            phone=voice_session.client_phone or "",
+            state_dir=state_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Never let a disk error sabotage the live response — log + move on.
+        print(
+            f"[ChatTurn:{voice_session.session_id[:8]}] persistence failed: {exc}",
+            flush=True,
+        )
+
+    # 6. EndCall: stamp ended_at, broadcast call.end, fire-and-forget the
+    # quality analysis. Analysis runs in a background task because the
+    # 30-second LLM call would block the HTTP response.
+    if ended:
+        try:
+            mark_session_ended(voice_session.session_id, state_dir=state_dir)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await broadcast_sip_event({
+                "type": "sip.call.end",
+                "call_id": voice_session.session_id,
+                "reason": "end_call_action",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        if len(chat_session.transcript) >= 4:
+            asyncio.create_task(_run_chat_session_analysis(
+                session_id=voice_session.session_id,
+                transcript=list(chat_session.transcript),
+                phone=voice_session.client_phone or "",
+                state_dir=state_dir,
+            ))
+
+    return {
+        "ok": True,
+        "session_id": voice_session.session_id,
+        "reply": full_reply,
+        "action": action_name,
+        "ended": ended,
+        "profile_state": voice_session.client_profile.state.value,
+        "missing": sorted(voice_session.client_profile.missing_fields()),
+    }
+
+
+@app.post("/api/text-turn")
+async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
+    """Chat widget turn endpoint (Scope B).
+
+    Single HTTP POST = one user utterance through the full SessionAgent
+    classifier -> apply_turn -> execute_action pipeline. Returns the
+    assistant's reply plus the post-turn profile state so the widget can
+    render progress (state, missing fields).
+    """
+    message = (req.message or "").strip()
+    if not message:
+        # Match /api/chat convention: HTTP 200 + ok:false + error string.
+        return {"ok": False, "error": "empty message"}
+
+    session_id = req.session_id or f"chat-{uuid.uuid4().hex[:12]}"
+
+    voice_session = voice_sessions.get(session_id)
+    if voice_session is None:
+        # First turn of a new chat session — instantiate the same
+        # VoiceSession dataclass voice uses, with transport="chat" so any
+        # downstream code that switches on transport handles it correctly.
+        voice_session = VoiceSession(session_id=session_id, transport="chat")
+        voice_session.client_name = (req.name or "").strip()
+        voice_session.client_phone = (req.phone or "").strip() or None
+        voice_sessions[session_id] = voice_session
+        try:
+            await broadcast_sip_event({
+                "type": "sip.call.start",
+                "call_id": session_id,
+                "phone": voice_session.client_phone or "chat",
+                "sip_user": "chat",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    chat_session = state.get(session_id) or state.create(session_id)
+
+    return await _text_process_utterance(
+        voice_session=voice_session,
+        chat_session=chat_session,
+        message=message,
     )
 
 
