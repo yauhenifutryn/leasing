@@ -32,13 +32,13 @@ def test_classifier_max_tokens_bound():
     marker = "Ты SessionAgent голосового бота"
     assert marker in src
     idx = src.index(marker)
-    # Look for the max_tokens line within ~18000 chars of the system prompt
-    # (the SessionAgent prompt is now ~9-10k chars after the Bug 28
-    # follow-up added the ПРАВИЛО block + 7 definition/comparison
-    # examples; add headroom for the call_openai_compatible args block
-    # that follows). The contract under test is the integer bound, not
-    # the prompt size.
-    block = src[idx : idx + 18000]
+    # Look for the max_tokens line within ~20000 chars of the system prompt
+    # (the SessionAgent prompt grew again with Bug 29's expanded END_CALL
+    # examples + bare-form type_schedule examples + odd-month term examples,
+    # in response to live call 3d32af7f 2026-05-03 where the classifier
+    # missed inflected forms. The contract under test is the integer bound,
+    # not the prompt size — the prompt-text scan window is just a locator.
+    block = src[idx : idx + 20000]
     # max_tokens must stay <=180 to keep latency bounded. 160 is the current
     # safe value (full JSON ~140 tokens + 20 headroom).
     import re as _re
