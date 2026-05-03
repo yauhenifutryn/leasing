@@ -70,3 +70,23 @@ def test_v2_prompt_keeps_feminine_grammar_forms() -> None:
     # as the required first-person forms.
     for form in ("рада", "готова", "смогла", "могла"):
         assert form in text, f"Bug 13: feminine grammar form '{form}' must stay"
+
+
+# ── Bug 16: Belarus-only scope ─────────────────────────────────────────
+# Live call ccf0139a 14:37:12: caller asked "Что по лизингу в России?"
+# and the bot answered with generic Russian-context info. Active prompt
+# must restrict the consultation scope to Belarus and gracefully
+# redirect questions about other countries.
+
+def test_v2_prompt_restricts_scope_to_belarus() -> None:
+    text = _v2_text().lower()
+    assert "только по лизингу в беларуси" in text, (
+        "Bug 16: prompt must explicitly scope consultation to Belarus."
+    )
+
+
+def test_v2_prompt_handles_other_country_questions() -> None:
+    text = _v2_text().lower()
+    # The prompt must mention at least one non-Belarus country in the
+    # redirect rule so the bot has an explicit pattern for the case.
+    assert "россии" in text or "россия" in text or "казахстан" in text
