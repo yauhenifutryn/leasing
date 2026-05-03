@@ -597,27 +597,42 @@ def _dispatch_once(
     # STT on live ac0e35d6 turn 14 from overwriting "Евгений" with
     # "Боянс"). Snapshot then carries the captured name into the
     # FireLLMFallback prompt anchor.
+    # Bug O (live call 42b6e6bf 2026-04-26): when the user addresses
+    # the bot ("Привет, Ксения, подскажи..."), the classifier extracts
+    # the bot's persona name. The accept guard below rejects the bot
+    # name unless the utterance shows an explicit self-introduction.
+    # Real clients named Ксения/Ксюша still work via "я Ксения" /
+    # "меня зовут Ксения" patterns.
+    import re as _re_name
+    _bot_names = ("ксения", "ксюша")
+
+    def _name_acceptable(candidate: str) -> bool:
+        if candidate.lower() not in _bot_names:
+            return True
+        _utt_lower = (utterance or "").lower()
+        return bool(_re_name.search(
+            r"\b(я|меня\s+зовут|меня\s+звать|зовите\s+меня|это\s+я)"
+            r"\s+(ксения|ксюша)\b",
+            _utt_lower,
+        ))
+
+    sa_name_change = (
+        getattr(classifier_output, "name_change", None) or ""
+    ).strip()
     sa_name = (getattr(classifier_output, "name", None) or "").strip()
-    if sa_name and not (profile.name or "").strip():
-        # Bug O (live call 42b6e6bf 2026-04-26): when the user addresses
-        # the bot ("Привет, Ксения, подскажи..."), the classifier extracts
-        # name="Ксения" — the bot's persona, not the caller. Reject the
-        # bot's name unless the utterance shows an explicit
-        # self-introduction. Real clients named Ксения/Ксюша still work
-        # via "я Ксения" / "меня зовут Ксения" patterns.
-        import re as _re_name
-        _bot_names = ("ксения", "ксюша")
-        if sa_name.lower() in _bot_names:
-            _utt_lower = (utterance or "").lower()
-            _is_self_intro = bool(_re_name.search(
-                r"\b(я|меня\s+зовут|меня\s+звать|зовите\s+меня|это\s+я)"
-                r"\s+(ксения|ксюша)\b",
-                _utt_lower,
-            ))
-            if not _is_self_intro:
-                sa_name = ""
-        if sa_name:
-            profile.name = sa_name
+    # Bug 8 (ANALYSIS.md §2): name_change is the explicit correction
+    # signal — overwrite profile.name even when one is already set. The
+    # plain `name` field keeps first-time-only semantics (legacy
+    # app.py:1414-1416 / live ac0e35d6 turn 14: garbled STT must not
+    # silently rewrite a real capture). Bot-name guard applies to both.
+    if sa_name_change and _name_acceptable(sa_name_change):
+        profile.name = sa_name_change
+    elif (
+        sa_name
+        and not (profile.name or "").strip()
+        and _name_acceptable(sa_name)
+    ):
+        profile.name = sa_name
 
     # Mixed-category clarify: when the classifier explicitly signals
     # `action == "clarify"` AND a client_type delta is present AND the

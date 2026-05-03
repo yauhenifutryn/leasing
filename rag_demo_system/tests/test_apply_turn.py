@@ -1005,6 +1005,83 @@ def test_snapshot_anchor_lines_include_name_field() -> None:
     assert any("name: Евгений" in line for line in lines)
 
 
+# ---------------------------------------------------------------- Bug 8 (ANALYSIS.md): name correction
+# Live evidence: clients correct themselves (negation, apology, mishearing
+# correction). Today the dispatcher's first-time-only gate at
+# turn_dispatcher.py:601 silently keeps the stale name in profile.name.
+# Downstream artefacts (SMS body, CRM handoff, persistence) then anchor on
+# the wrong identity. Bug 8 introduces an explicit `name_change` signal
+# from the classifier — when set, apply_turn replaces profile.name even if
+# a previous name was already captured. Plain `name` retains first-time-
+# only semantics so a garbled re-emission cannot overwrite a real capture
+# (test_apply_turn_ignores_stale_name_on_later_turn still applies).
+
+
+def test_apply_turn_name_change_overwrites_existing_name() -> None:
+    """name_change is the explicit correction signal: replace profile.name
+    even when one is already set."""
+    profile = make_partial_profile()
+    profile.name = "Сергей"
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        name_change="Андрей",
+    )
+    apply_turn(profile, classifier, utterance="Я не Сергей, Андрей")
+    assert profile.name == "Андрей"
+
+
+def test_apply_turn_name_change_apologetic_pattern() -> None:
+    """`ой, перепутала, я Y` — classifier emits name_change=Y, profile
+    swaps to Y."""
+    profile = make_partial_profile()
+    profile.name = "Сергей"
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        name_change="Андрей",
+    )
+    apply_turn(profile, classifier, utterance="ой, перепутала, я Андрей")
+    assert profile.name == "Андрей"
+
+
+def test_apply_turn_name_change_correction_pattern() -> None:
+    """`ошиблась, я Y` — same overwrite semantics."""
+    profile = make_partial_profile()
+    profile.name = "Сергей"
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        name_change="Мария",
+    )
+    apply_turn(profile, classifier, utterance="ошиблась, я Мария")
+    assert profile.name == "Мария"
+
+
+def test_apply_turn_name_change_first_capture_when_empty() -> None:
+    """When profile.name is empty and only name_change fires, capture the
+    new name. (Edge case: classifier emits the correction signal even if
+    no prior identity was set — graceful fallback, no skip.)"""
+    profile = make_partial_profile()
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        name_change="Анна",
+    )
+    apply_turn(profile, classifier, utterance="Я не Сергей, Анна")
+    assert profile.name == "Анна"
+
+
+def test_apply_turn_name_change_rejects_bot_name_without_self_intro() -> None:
+    """Bot-name guard (live call 42b6e6bf 2026-04-26) still applies on
+    the name_change path: 'Привет, Ксения...' with name_change="Ксения"
+    must NOT overwrite profile.name."""
+    profile = make_partial_profile()
+    profile.name = "Сергей"
+    classifier = make_classifier(
+        intent="CONVERSATION",
+        name_change="Ксения",
+    )
+    apply_turn(profile, classifier, utterance="Привет, Ксения, подскажи...")
+    assert profile.name == "Сергей"
+
+
 # ---------------------------------------------------------------- Codex adversarial high #1
 # Two invariants that the old raw-setattr step 1 loop violated:
 #   1. prepaid_pct/prepaid_amount slot invariant: confirming a change to

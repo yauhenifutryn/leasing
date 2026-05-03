@@ -457,6 +457,13 @@ class ClassifierOutput(BaseModel):
     term_months: Optional[int] = Field(None, ge=-100, le=500)
     type_schedule: Optional[_SCHEDULE_VALUES] = None
     name: Optional[str] = None
+    # Bug 8 (ANALYSIS.md §2): explicit name-correction signal. `name`
+    # remains first-time-only (a garbled STT re-emission cannot overwrite
+    # a real capture); `name_change` is the dispatcher's authority to
+    # replace profile.name even when one is already set. Classifier
+    # emits this when the utterance carries a negation+name pattern
+    # ("Я не X, Y") or apologetic correction ("ой, перепутала, я Y").
+    name_change: Optional[str] = None
 
     is_confirmation: bool = False
     is_stop_request: bool = False
