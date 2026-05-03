@@ -390,3 +390,47 @@ class RagFuture:
             for i, chunk in enumerate(final_chunks)
         )
         return self._resolved
+
+
+class TextTtsSink:
+    """TtsSink-shaped adapter for text-mode dispatch (chat widget).
+
+    The dispatcher (`execute_action`) only calls four members on the
+    sink: `say(text)`, `disconnect()`, `await_playback_drain()`, and
+    reads `total_audio_seconds`. This class implements the same surface
+    without any audio path: collected strings go into `self.collected`
+    and a `sip.llm.sentence` event is broadcast per say() so the SIP
+    monitor sees chat turns alongside voice turns.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        broadcast_fn: Optional[Any] = None,
+    ) -> None:
+        self._session_id = session_id
+        self._broadcast = broadcast_fn  # async callable taking dict
+        self.collected: list[str] = []
+        self.total_audio_seconds: float = 0.0
+        self._first_push_time: Optional[float] = None
+
+    async def say(self, text: str) -> None:
+        if not text:
+            return
+        self.collected.append(text)
+        if self._broadcast is not None:
+            try:
+                await self._broadcast({
+                    "type": "sip.llm.sentence",
+                    "call_id": self._session_id,
+                    "text": text,
+                })
+            except Exception:  # noqa: BLE001
+                pass  # broadcast failures must never break the dispatcher
+
+    async def disconnect(self) -> bool:
+        return True  # no SIP leg to drop
+
+    async def await_playback_drain(self) -> None:
+        return None  # no audio buffer to drain
