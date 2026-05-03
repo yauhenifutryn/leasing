@@ -90,3 +90,26 @@ def test_v2_prompt_handles_other_country_questions() -> None:
     # The prompt must mention at least one non-Belarus country in the
     # redirect rule so the bot has an explicit pattern for the case.
     assert "россии" in text or "россия" in text or "казахстан" in text
+
+
+# ── Bug 17: online submission only ─────────────────────────────────────
+# Live call ccf0139a 14:41:40: bot offered "отправить документы почтой".
+# Real flow is online via личный кабинет на mikro-leasing.by. The prompt
+# must positively name the online channel and ban postal/courier/email.
+
+def test_v2_prompt_requires_online_only_submission() -> None:
+    text = _v2_text().lower()
+    assert "только онлайн" in text, (
+        "Bug 17: prompt must positively assert online-only submission."
+    )
+    assert "личный кабинет" in text
+    assert "mikro-leasing.by" in text
+
+
+def test_v2_prompt_bans_offline_submission_channels() -> None:
+    text = _v2_text().lower()
+    # The ban list must explicitly name post / courier / email so the
+    # bot can't slip into "отправьте документы по почте" again.
+    assert "почт" in text  # почтой / по почте / почту
+    assert "курьер" in text
+    assert "email" in text or "имейл" in text
