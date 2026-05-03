@@ -323,6 +323,13 @@ _ABBREV_TTS: dict[str, str] = {
     "ЕС": "е эс",
     "ФСБ": "эф эс бэ",
     "ВВП": "вэ вэ пэ",
+    # Bug 26 follow-up (live call 099bfb78 2026-05-03): Silero reads
+    # "ГАИ" as one fast syllable that sounds like "гай" — clients can't
+    # parse it. The natural slower pronunciation is "га и" (two
+    # syllables with a slight pause). Cyrillic-letter pronunciation
+    # ("гэ а и") sounds artificial in this case; the two-syllable form
+    # is what native Russian speakers use in casual speech.
+    "ГАИ": "га и",
 }
 
 # Build regex that matches any abbreviation (longest first to avoid partial matches)

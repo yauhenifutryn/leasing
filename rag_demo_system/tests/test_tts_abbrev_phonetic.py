@@ -60,3 +60,14 @@ def test_word_boundary_avoids_partial_match() -> None:
     # ПДНщик shouldn't be touched (word-boundary regex). This locks the
     # \b anchor stays in place if the dict grows.
     assert normalize_abbreviations_for_tts("ПДНщик не слово") == "ПДНщик не слово"
+
+
+def test_gai_two_syllable_pronunciation() -> None:
+    # Bug 26 follow-up (live call 099bfb78 2026-05-03): TTS read "ГАИ"
+    # as one fast indistinct syllable. The two-syllable form "га и"
+    # gives Silero a slight pause for clarity.
+    out = normalize_abbreviations_for_tts(
+        "Документы для ГАИ оформляются после выкупа."
+    )
+    assert "га и" in out
+    assert "ГАИ" not in out

@@ -115,21 +115,31 @@ def test_v2_prompt_bans_offline_submission_channels() -> None:
     assert "email" in text or "имейл" in text
 
 
-def test_v2_prompt_disambiguates_two_document_flows() -> None:
-    # Bug 17 follow-up: live call b5d70d6a 2026-05-03 19:47, caller
-    # asked "Можно ли отправить документы почтой?" and the bot answered
-    # about post-buyout vehicle paperwork (a real flow) instead of
-    # rejecting offline application submission. The prompt now must
-    # tell the LLM these are TWO different flows and to disambiguate.
+def test_v2_prompt_unconditionally_bans_documents_by_mail() -> None:
+    # Bug 17 hard ban (live calls b5d70d6a + 099bfb78 2026-05-03): the
+    # earlier "two flows" disambiguation rule was bypassed because the
+    # LLM HALLUCINATES a postal-delivery offer (KB doesn't actually
+    # describe one — only states that ГАИ paperwork "оформляется"). The
+    # right surface is an unconditional ban with explicit forbidden
+    # phrasings, not a polite disambiguation.
     text = _v2_text().lower()
-    # Header that names both flows.
-    assert "два разных потока документов" in text or "два разных потока" in text
-    # Both flows must be named explicitly.
-    assert "подачи заявки" in text
-    assert "после выкупа" in text or "после выкупного" in text
-    # The disambiguating question must be present verbatim so the LLM
-    # has the exact phrasing to mirror.
-    assert "это документы для подачи заявки" in text
+    # Header marker for the unconditional ban.
+    assert "безусловный запрет" in text
+    # The exact forbidden phrasings the LLM kept emitting must be
+    # quoted in the prompt as banned strings — that's how we keep the
+    # LLM from generating them.
+    assert "отправим документы почтой" in text
+    assert "обычной почтой на ваш адрес" in text
+    # The canonical replacement reply must be locked so a future edit
+    # can't drop it silently.
+    assert "документы почтой мы не отправляем" in text
+
+
+def test_v2_prompt_keeps_online_submission_rule() -> None:
+    text = _v2_text().lower()
+    assert "только онлайн" in text
+    assert "личный кабинет" in text
+    assert "mikro-leasing.by" in text
 
 
 # ── Bug 20: over-escalation to specialist ──────────────────────────────
