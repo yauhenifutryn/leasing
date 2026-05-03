@@ -62,6 +62,12 @@ state = StateStore(Path(__file__).resolve().parents[1] / ".state")
 engine = RAGEngine(settings, Path(__file__).resolve().parents[1] / ".state")
 voice_sessions: dict[str, VoiceSession] = {}
 
+# Per-session locks for /api/text-turn so two overlapping HTTP requests
+# for the same session_id serialize. Without this, an older classifier
+# result can apply after a newer one and corrupt profile state.
+# Codex adversarial review finding (2026-05-03 chat-widget branch).
+chat_session_locks: dict[str, asyncio.Lock] = {}
+
 # Jambonz: store caller phone from control WS for audio WS to read
 _jambonz_last_caller_phone: str = ""
 
@@ -2547,32 +2553,49 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
     if not _VALID_SESSION_ID.match(session_id):
         return {"ok": False, "error": "invalid session_id"}
 
-    voice_session = voice_sessions.get(session_id)
-    if voice_session is None:
-        # First turn of a new chat session — instantiate the same
-        # VoiceSession dataclass voice uses, with transport="chat" so any
-        # downstream code that switches on transport handles it correctly.
-        voice_session = VoiceSession(session_id=session_id, transport="chat")
-        voice_session.client_name = (req.name or "").strip()
-        voice_session.client_phone = (req.phone or "").strip() or None
-        voice_sessions[session_id] = voice_session
-        try:
-            await broadcast_sip_event({
-                "type": "sip.call.start",
-                "call_id": session_id,
-                "phone": voice_session.client_phone or "chat",
-                "sip_user": "chat",
-            })
-        except Exception:  # noqa: BLE001
-            pass
+    # Codex adversarial review: chat copy of the dispatcher lacks voice's
+    # stale-turn guard, so two overlapping HTTP turns for one session_id
+    # (retry, double-submit, slow classifier) could apply older classifier
+    # result after newer → profile-state / calc / SMS corruption. Acquire
+    # a per-session lock to serialize turns. setdefault is safe here: no
+    # await happens between lookup and acquisition, so another coroutine
+    # can't slip a competing Lock into the dict.
+    lock = chat_session_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        voice_session = voice_sessions.get(session_id)
+        if voice_session is None:
+            # First turn of a new chat session — instantiate the same
+            # VoiceSession dataclass voice uses, with transport="chat" so any
+            # downstream code that switches on transport handles it correctly.
+            voice_session = VoiceSession(session_id=session_id, transport="chat")
+            voice_session.client_name = (req.name or "").strip()
+            voice_session.client_phone = (req.phone or "").strip() or None
+            voice_sessions[session_id] = voice_session
+            try:
+                await broadcast_sip_event({
+                    "type": "sip.call.start",
+                    "call_id": session_id,
+                    "phone": voice_session.client_phone or "chat",
+                    "sip_user": "chat",
+                })
+            except Exception:  # noqa: BLE001
+                pass
 
-    chat_session = state.get(session_id) or state.create(session_id)
+        chat_session = state.get(session_id) or state.create(session_id)
 
-    return await _text_process_utterance(
-        voice_session=voice_session,
-        chat_session=chat_session,
-        message=message,
-    )
+        result = await _text_process_utterance(
+            voice_session=voice_session,
+            chat_session=chat_session,
+            message=message,
+        )
+
+    # On EndCall the session was already popped from voice_sessions inside
+    # _text_process_utterance. Drop the lock from the registry too so we
+    # don't leak entries — the session_id won't be reused.
+    if result.get("ended"):
+        chat_session_locks.pop(session_id, None)
+
+    return result
 
 
 @app.websocket("/ws/jambonz")

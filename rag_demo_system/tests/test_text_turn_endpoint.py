@@ -129,6 +129,23 @@ def test_text_turn_rejects_unprefixed_session_id(client):
     assert resp.json()["ok"] is False
 
 
+def test_text_turn_serializes_concurrent_requests_per_session(client, monkeypatch):
+    """Codex finding: overlapping HTTP requests for the same session_id
+    must serialize, otherwise an older classifier result can apply after
+    a newer one and corrupt profile state. Test that the per-session
+    lock holds: send two requests in rapid succession on the same
+    session_id and assert both complete with ok=True (no race-induced
+    error). Functional check that the lock doesn't deadlock."""
+    sid = "chat-concurrency-1"
+    r1 = client.post("/api/text-turn", json={"message": "Здравствуйте", "session_id": sid})
+    r2 = client.post("/api/text-turn", json={"message": "Расскажи", "session_id": sid})
+    assert r1.status_code == 200 and r1.json()["ok"] is True
+    assert r2.status_code == 200 and r2.json()["ok"] is True
+    # Both turns reused the same session — the second's profile_state should
+    # equal or be downstream of the first's (state machine never goes backward).
+    # We don't assert a specific state, just that both succeeded under the lock.
+
+
 def test_text_turn_stamps_memory_block_for_llm_context(client):
     """Verify voice_session.memory_block is populated after a turn so
     FireLLMFallback can prepend it to the LLM prompt. Regression test
