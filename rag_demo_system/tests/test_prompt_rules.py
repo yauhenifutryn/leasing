@@ -140,3 +140,35 @@ def test_v2_prompt_lists_actionable_alternatives_to_escalation() -> None:
     has_calc = "калькулятор" in text
     has_phone = "+375 17 322 77 00" in text or "+375" in text
     assert has_online or has_calc or has_phone
+
+
+# ── Bug 23: encourage immediate document submission ────────────────────
+# Client wants the bot to actively upsell: "если подадите документы
+# прямо сейчас онлайн, решение придёт в течение одного рабочего дня".
+# Lives in the prompt because the deterministic post-calc renderer is
+# now terse (Bug 25); per the handover, the upsell goes prompt-side, not
+# in profile_prompts.render_calc_result.
+
+def test_v2_prompt_carries_immediate_submission_upsell() -> None:
+    text = _v2_text().lower()
+    # Time-promise phrase + online channel reference, both required so
+    # the bot can't ship one half without the other.
+    has_time = "одного рабочего дня" in text or "один рабочий день" in text
+    assert has_time, "Bug 23: prompt must include the 'one business day' time promise."
+    assert "подадите документы" in text or "оформите заявку онлайн" in text
+
+
+def test_v2_prompt_upsell_lives_in_post_calc_context() -> None:
+    text = _v2_text()
+    # Locate the upsell line and verify it sits near a post-calc anchor
+    # so the LLM associates it with the right moment in the flow.
+    assert "одного рабочего дня" in text.lower() or "один рабочий день" in text.lower()
+    # The line must mention "после расчёта" / "после успешного расчёта"
+    # OR live inside the existing "После успешного расчёта" block.
+    upsell_idx = text.lower().find("одного рабочего дня")
+    if upsell_idx < 0:
+        upsell_idx = text.lower().find("один рабочий день")
+    # Window of ~600 chars around the upsell must mention расчёт / SMS
+    # — otherwise it'll fire at the wrong moment in the conversation.
+    window = text[max(0, upsell_idx - 600): upsell_idx + 600].lower()
+    assert "расчёт" in window or "расчета" in window or "смс" in window or "сейчас" in window
