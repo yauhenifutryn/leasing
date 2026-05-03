@@ -78,3 +78,23 @@ def test_save_chat_turn_includes_tool_calls(tmp_path: Path):
     assert len(data["tool_calls"]) == 1
     assert data["tool_calls"][0]["tool"] == "calculator"
     assert data["tool_call_count"] == 1
+
+
+def test_save_chat_turn_rejects_traversal_session_id(tmp_path):
+    """Codex finding: ../sessions would overwrite StateStore. Must raise."""
+    import pytest
+    with pytest.raises(ValueError, match="outside transcripts dir"):
+        save_chat_turn(
+            session_id="../sessions",
+            transcript=[],
+            tool_calls=[],
+            name="",
+            phone="",
+            state_dir=tmp_path,
+        )
+
+
+def test_mark_session_ended_rejects_traversal_session_id(tmp_path):
+    import pytest
+    with pytest.raises(ValueError, match="outside transcripts dir"):
+        mark_session_ended("../sessions", state_dir=tmp_path)

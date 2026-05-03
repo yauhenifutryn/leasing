@@ -75,6 +75,15 @@ _INFO_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Allowlist for caller-supplied session_id on /api/text-turn.
+# Codex adversarial review (2026-05-03 chat-widget branch): a request
+# with session_id="../sessions" would resolve to .state/sessions.json
+# inside chat_persistence.save_chat_turn and overwrite the StateStore.
+# Tight regex: must start with "chat-" prefix (matches the auto-generated
+# `chat-<uuid12>` shape), then 6-64 chars of [A-Za-z0-9_-]. Min length 6
+# accepts the 12-char uuid suffix; max 64 caps DoS-via-long-id.
+_VALID_SESSION_ID = re.compile(r"^chat-[A-Za-z0-9_-]{6,64}$")
+
 
 async def broadcast_sip_event(event: dict[str, Any]) -> None:
     """Fire-and-forget broadcast to all connected SIP monitor pages."""
@@ -2529,6 +2538,14 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
         return {"ok": False, "error": "empty message"}
 
     session_id = req.session_id or f"chat-{uuid.uuid4().hex[:12]}"
+
+    # Codex adversarial review: caller-controlled session_id flows into
+    # chat_persistence's f"{session_id}.json" path; "../sessions" would
+    # overwrite the StateStore. Reject anything that isn't the auto-
+    # generated chat-<uuid12> shape. Defense-in-depth path containment
+    # also lives in chat_persistence._safe_transcript_path.
+    if not _VALID_SESSION_ID.match(session_id):
+        return {"ok": False, "error": "invalid session_id"}
 
     voice_session = voice_sessions.get(session_id)
     if voice_session is None:

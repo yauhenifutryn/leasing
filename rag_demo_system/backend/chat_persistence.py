@@ -19,6 +19,29 @@ def _transcripts_dir(state_dir: Path) -> Path:
     return out
 
 
+def _safe_transcript_path(state_dir: Path, session_id: str) -> Path:
+    """Build the transcript file path and assert it cannot escape
+    `state_dir/transcripts/`. Defense in depth: the route already
+    validates session_id, but this guard prevents any future caller
+    from accidentally introducing a traversal.
+
+    Codex adversarial review (2026-05-03): a session_id like
+    "../sessions" would resolve to .state/sessions.json and overwrite
+    the StateStore. Resolving the candidate path and asserting
+    `relative_to(transcripts_root)` makes that physically impossible.
+    """
+    transcripts_root = (state_dir / "transcripts").resolve()
+    transcripts_root.mkdir(parents=True, exist_ok=True)
+    candidate = (state_dir / "transcripts" / f"{session_id}.json").resolve()
+    try:
+        candidate.relative_to(transcripts_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"refusing to write outside transcripts dir: session_id={session_id!r}"
+        ) from exc
+    return candidate
+
+
 def save_chat_turn(
     *,
     session_id: str,
@@ -33,7 +56,7 @@ def save_chat_turn(
     `started_at` is preserved across calls; `last_turn_at` is updated
     on every save; `ended_at` stays None until `mark_session_ended`.
     """
-    out_path = _transcripts_dir(state_dir) / f"{session_id}.json"
+    out_path = _safe_transcript_path(state_dir, session_id)
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
     started_at = now_iso
     if out_path.exists():
@@ -62,7 +85,7 @@ def save_chat_turn(
 
 def mark_session_ended(session_id: str, *, state_dir: Path) -> None:
     """Stamp `ended_at` on a saved chat record. Triggered by EndCall action."""
-    out_path = _transcripts_dir(state_dir) / f"{session_id}.json"
+    out_path = _safe_transcript_path(state_dir, session_id)
     if not out_path.exists():
         return
     try:

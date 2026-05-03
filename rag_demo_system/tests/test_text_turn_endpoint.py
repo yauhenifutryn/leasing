@@ -99,13 +99,43 @@ def test_text_turn_multi_turn_resets_per_turn_state(client, monkeypatch):
     )
 
 
+def test_text_turn_rejects_traversal_session_id(client):
+    """Codex finding: client-supplied session_id with .. must be rejected."""
+    resp = client.post("/api/text-turn", json={
+        "message": "hi",
+        "session_id": "../sessions",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "invalid session_id" in data["error"]
+
+
+def test_text_turn_rejects_session_id_with_slashes(client):
+    resp = client.post("/api/text-turn", json={
+        "message": "hi",
+        "session_id": "chat-/etc/passwd",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+def test_text_turn_rejects_unprefixed_session_id(client):
+    resp = client.post("/api/text-turn", json={
+        "message": "hi",
+        "session_id": "evil-no-prefix",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
 def test_text_turn_stamps_memory_block_for_llm_context(client):
     """Verify voice_session.memory_block is populated after a turn so
     FireLLMFallback can prepend it to the LLM prompt. Regression test
     for the lost-conversational-memory bug (C2)."""
     import backend.app as app_mod
 
-    sid = "chat-mem-1"
+    sid = "chat-mem-001"
     r = client.post(
         "/api/text-turn",
         json={"message": "Здравствуйте", "session_id": sid},
