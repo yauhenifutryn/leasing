@@ -1131,6 +1131,87 @@ def test_apply_turn_detail_request_yields_to_change_confirm() -> None:
     )
 
 
+def test_apply_turn_detail_request_yields_to_change_param_pair() -> None:
+    """Live regression call 356221c6 turn 11 (2026-05-03):
+    'поменяй срок на 12 месяцев, пожалуйста, подробнее' co-fired
+    change_field=term_months + change_value=12 + detail_request=True.
+    is_confirmation was False, so the original guard let
+    EmitCalcDetail short-circuit and the bot replayed the prior calc
+    detail instead of staging the change.
+
+    The widened guard must defer detail_request whenever the classifier
+    proposes ANY parameter mutation (change_field pair, top-level enum
+    value, mutating action). Detail_request is a freeform query about
+    the prior result — semantically incompatible with mutating state."""
+    from backend.turn_action import EmitCalcDetail, EmitChangeConfirm
+    profile = make_complete_profile()
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(
+        intent="TOOL",
+        change_field="term_months",
+        change_value=12,
+        detail_request=True,
+        action="change_param",
+        utterance="поменяй срок на 12 месяцев, подробнее",
+    )
+    action = apply_turn(
+        profile, classifier,
+        utterance="поменяй срок на 12 месяцев, подробнее",
+    )
+    assert not isinstance(action, EmitCalcDetail), (
+        f"change_field must take priority over detail_request, "
+        f"got {type(action).__name__}"
+    )
+    assert isinstance(action, EmitChangeConfirm), (
+        f"expected EmitChangeConfirm for change_param, got {type(action).__name__}"
+    )
+
+
+def test_apply_turn_detail_request_yields_to_top_level_field_update() -> None:
+    """Symmetric guard: 'хочу 50 тысяч долларов и подробнее' — top-level
+    cost change with detail_request piggybacked. The cost change must
+    take priority (will route through EmitChangeConfirm); detail_request
+    is dropped."""
+    from backend.turn_action import EmitCalcDetail
+    profile = make_complete_profile()
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(
+        intent="TOOL",
+        cost=50000.0,
+        currency="USD",
+        detail_request=True,
+        utterance="хочу пятьдесят тысяч долларов и подробнее",
+    )
+    action = apply_turn(
+        profile, classifier,
+        utterance="хочу пятьдесят тысяч долларов и подробнее",
+    )
+    assert not isinstance(action, EmitCalcDetail), (
+        f"top-level cost change must block detail_request, got {type(action).__name__}"
+    )
+
+
+def test_apply_turn_detail_request_yields_to_sms_action() -> None:
+    """'отправь смс и подробнее' — action='sms' has priority. SMS is the
+    explicit user request; detail can be re-asked next turn."""
+    from backend.turn_action import EmitCalcDetail
+    profile = make_complete_profile()
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(
+        intent="TOOL",
+        action="sms",
+        detail_request=True,
+        utterance="отправь смс и подробнее",
+    )
+    action = apply_turn(
+        profile, classifier,
+        utterance="отправь смс и подробнее",
+    )
+    assert not isinstance(action, EmitCalcDetail), (
+        f"action=sms must block detail_request, got {type(action).__name__}"
+    )
+
+
 # ---------------------------------------------------------------- Codex adversarial high #1
 # Two invariants that the old raw-setattr step 1 loop violated:
 #   1. prepaid_pct/prepaid_amount slot invariant: confirming a change to

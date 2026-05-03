@@ -484,16 +484,37 @@ def _dispatch_once(
     # STEP 1.5 (Bug 25, ANALYSIS.md §8): detail_request — caller asked
     # for the full calc breakdown after the terse readback. Routed
     # through EmitCalcDetail so the deterministic renderer speaks
-    # выкупной / общая сумма / удорожание without LLM paraphrase. Gated
-    # on `is_confirmation == False` so a "Да, поменяй" turn that ALSO
-    # carries detail_request (classifier hallucination) never hijacks
-    # the change-confirm path. Stop / change-pending turns also bypass
-    # this branch via the early returns above.
-    if (
-        getattr(classifier_output, "detail_request", False)
-        and not classifier_output.is_confirmation
-    ):
-        return EmitCalcDetail()
+    # выкупной / общая сумма / удорожание without LLM paraphrase.
+    #
+    # detail_request is a freeform query about the prior result —
+    # semantically incompatible with mutating state. The guard MUST
+    # defer to any classifier signal that proposes a parameter change
+    # so a "поменяй срок на 12, подробнее" turn (live regression call
+    # 356221c6 turn 11 2026-05-03) routes to the change-confirm path
+    # instead of replaying the prior calc detail. We block on:
+    #   - is_confirmation / is_stop_request (turn-shape semantics)
+    #   - change_field set (explicit change pair)
+    #   - any top-level _GROUNDED_FIELDS slot non-None (parameter
+    #     mutation in flight, e.g. cost=50000 piggybacked on detail)
+    #   - mutating actions (change_param / calculate / recalculate /
+    #     sms / confirm); pure clarify / invalid_param / None do not
+    #     block — they don't progress state mutation.
+    if getattr(classifier_output, "detail_request", False):
+        _blocks_detail = (
+            classifier_output.is_confirmation
+            or classifier_output.is_stop_request
+            or classifier_output.change_field is not None
+            or classifier_output.action in (
+                "change_param", "calculate", "recalculate",
+                "sms", "confirm",
+            )
+            or any(
+                getattr(classifier_output, _f, None) is not None
+                for _f in _GROUNDED_FIELDS
+            )
+        )
+        if not _blocks_detail:
+            return EmitCalcDetail()
 
     # STEP 2: READBACK_PENDING + is_confirmation → CONFIRMED. No
     # return — we fall through to step 6 in the same iteration so
