@@ -43,6 +43,10 @@ Where N is one of: 1, 2, 3, 4, 5, 6. Claude should:
 - Section 5b (Qwen3.6 brain eval) and 5c (classifier 4B → 8B/7B eval) are optional model-swap sidelines. Both run on scratch branches with env-var rollback. Run independently, never simultaneously on the same H100.
 - Section 6 is the verification + docs + self-improvement close-out. It has a **verification gate** as its first phase that must pass before any docs work.
 
+## Deferred bugs from ANALYSIS.md
+
+5 bugs from the 2026-04-29 client review are deferred to specific sections (1, 2 → 5c; 3 → TTS engine swap; 5 → opportunistic; 15 → Section 4). Full registry: [known_bugs_deferred.md](known_bugs_deferred.md). All other 23 ANALYSIS.md bugs are shipped on `feature/voice-pipeline` (tags `analysis-batch-1-shipped` through `analysis-batch-4-shipped`).
+
 ## Rollback
 
 If any section introduces a regression:
