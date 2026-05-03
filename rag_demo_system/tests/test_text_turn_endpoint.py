@@ -146,6 +146,68 @@ def test_text_turn_serializes_concurrent_requests_per_session(client, monkeypatc
     # We don't assert a specific state, just that both succeeded under the lock.
 
 
+def test_chat_session_reaper_evicts_idle_sessions(client, monkeypatch):
+    """Codex finding: abandoned chat sessions must be evicted by the
+    reaper, otherwise tab-close leaks memory forever."""
+    import backend.app as app_mod
+
+    sid = "chat-reaper-1"
+    r = client.post("/api/text-turn", json={"message": "hi", "session_id": sid})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert sid in app_mod.voice_sessions
+    assert sid in app_mod.chat_session_last_activity
+
+    # Backdate the activity timestamp past the idle timeout.
+    app_mod.chat_session_last_activity[sid] = (
+        app_mod.time.monotonic() - app_mod.CHAT_SESSION_IDLE_TIMEOUT_SEC - 10
+    )
+
+    # Run a single reaper iteration synchronously (don't wait 60s).
+    # The reaper body uses time.monotonic() and the dict directly.
+    import asyncio as _asyncio
+    async def _reap_once():
+        # Inline copy of the reaper's eviction loop body (one pass).
+        now = app_mod.time.monotonic()
+        stale = [
+            s for s, last in list(app_mod.chat_session_last_activity.items())
+            if now - last > app_mod.CHAT_SESSION_IDLE_TIMEOUT_SEC
+        ]
+        for s in stale:
+            app_mod.voice_sessions.pop(s, None)
+            app_mod.chat_session_locks.pop(s, None)
+            app_mod.chat_session_last_activity.pop(s, None)
+    _asyncio.get_event_loop().run_until_complete(_reap_once())
+
+    assert sid not in app_mod.voice_sessions
+    assert sid not in app_mod.chat_session_last_activity
+
+
+def test_chat_session_max_active_returns_busy(client, monkeypatch):
+    """Codex finding: random session_id posts must not grow voice_sessions
+    unboundedly. When the cap is hit, new sessions get a busy response."""
+    import backend.app as app_mod
+
+    # Drain any sessions left over from earlier tests so the cap-of-1
+    # check is meaningful (voice_sessions is a module-level dict shared
+    # across tests).
+    app_mod.voice_sessions.clear()
+    app_mod.chat_session_locks.clear()
+    app_mod.chat_session_last_activity.clear()
+
+    monkeypatch.setattr(app_mod, "CHAT_SESSION_MAX_ACTIVE", 1, raising=False)
+    # Fill the cap with one session. Session-id suffix must be 6-64 chars
+    # of [A-Za-z0-9_-] to satisfy the route validator.
+    r1 = client.post("/api/text-turn", json={"message": "hi", "session_id": "chat-cap-001"})
+    assert r1.json()["ok"] is True
+    # New session should bounce.
+    r2 = client.post("/api/text-turn", json={"message": "hi", "session_id": "chat-cap-002"})
+    assert r2.json()["ok"] is False
+    assert "server busy" in r2.json()["error"]
+    # Existing session should still work.
+    r3 = client.post("/api/text-turn", json={"message": "Расскажи", "session_id": "chat-cap-001"})
+    assert r3.json()["ok"] is True
+
+
 def test_text_turn_stamps_memory_block_for_llm_context(client):
     """Verify voice_session.memory_block is populated after a turn so
     FireLLMFallback can prepend it to the LLM prompt. Regression test

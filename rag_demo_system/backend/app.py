@@ -68,6 +68,21 @@ voice_sessions: dict[str, VoiceSession] = {}
 # Codex adversarial review finding (2026-05-03 chat-widget branch).
 chat_session_locks: dict[str, asyncio.Lock] = {}
 
+# Per-session last-activity timestamps for the idle-session reaper.
+# Updated on every chat turn; reaper task evicts entries older than
+# CHAT_SESSION_IDLE_TIMEOUT_SEC.
+chat_session_last_activity: dict[str, float] = {}
+
+# 30 minutes idle → evict. Tab-close in chat is the common case; users
+# also walk away mid-conversation. Long enough that a comfort-break
+# doesn't drop their session, short enough to bound memory.
+CHAT_SESSION_IDLE_TIMEOUT_SEC = 30 * 60
+
+# Hard cap on concurrent chat sessions to bound memory growth from
+# random session_id posts. Master plan §8 targets ~30 concurrent chat
+# sessions; 200 is a 6x safety margin.
+CHAT_SESSION_MAX_ACTIVE = 200
+
 # Jambonz: store caller phone from control WS for audio WS to read
 _jambonz_last_caller_phone: str = ""
 
@@ -437,6 +452,47 @@ async def _warmup() -> None:
 
     if settings.jambonz.enabled:
         print("[Jambonz] Enabled. Waiting for calls on /ws/jambonz", flush=True)
+
+
+async def _chat_session_reaper() -> None:
+    """Periodic eviction of idle chat sessions. Tab-close is the common
+    abandonment path (no EndCall ever fires), so we age out by inactivity.
+    Codex adversarial review: without this, voice_sessions grows unboundedly.
+
+    StateStore + on-disk transcript are intentionally NOT touched here —
+    they remain durable for analytics / future account-layer reads. Only
+    the in-memory hot state (voice_sessions, chat_session_locks,
+    chat_session_last_activity) is dropped.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            now = time.monotonic()
+            stale = [
+                sid for sid, last in list(chat_session_last_activity.items())
+                if now - last > CHAT_SESSION_IDLE_TIMEOUT_SEC
+            ]
+            for sid in stale:
+                voice_sessions.pop(sid, None)
+                chat_session_locks.pop(sid, None)
+                chat_session_last_activity.pop(sid, None)
+            if stale:
+                print(
+                    f"[chat-reaper] evicted {len(stale)} idle sessions",
+                    flush=True,
+                )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            print(f"[chat-reaper] iteration error: {exc}", flush=True)
+            # don't die on transient errors; sleep and retry
+            await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def _start_chat_session_reaper() -> None:
+    """Launch the chat-session reaper. Lives for the process lifetime."""
+    asyncio.create_task(_chat_session_reaper())
 
 
 app.add_middleware(
@@ -2553,6 +2609,16 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
     if not _VALID_SESSION_ID.match(session_id):
         return {"ok": False, "error": "invalid session_id"}
 
+    # Codex adversarial review: random session_id posts could grow
+    # voice_sessions unboundedly. Cap blocks NEW session creation only;
+    # existing sessions always proceed. Reaper drops idle entries to
+    # free slots.
+    if (
+        session_id not in voice_sessions
+        and len(voice_sessions) >= CHAT_SESSION_MAX_ACTIVE
+    ):
+        return {"ok": False, "error": "server busy, retry later"}
+
     # Codex adversarial review: chat copy of the dispatcher lacks voice's
     # stale-turn guard, so two overlapping HTTP turns for one session_id
     # (retry, double-submit, slow classifier) could apply older classifier
@@ -2581,6 +2647,10 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
             except Exception:  # noqa: BLE001
                 pass
 
+        # Stamp last-activity for the idle reaper. Inside the lock so the
+        # reaper-vs-handler ordering is well-defined.
+        chat_session_last_activity[session_id] = time.monotonic()
+
         chat_session = state.get(session_id) or state.create(session_id)
 
         result = await _text_process_utterance(
@@ -2590,10 +2660,11 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
         )
 
     # On EndCall the session was already popped from voice_sessions inside
-    # _text_process_utterance. Drop the lock from the registry too so we
-    # don't leak entries — the session_id won't be reused.
+    # _text_process_utterance. Drop the lock + activity stamp from the
+    # registries too so we don't leak entries — session_id won't be reused.
     if result.get("ended"):
         chat_session_locks.pop(session_id, None)
+        chat_session_last_activity.pop(session_id, None)
 
     return result
 
