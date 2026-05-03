@@ -351,6 +351,12 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(report, encoding="utf-8")
 
+    out_display = args.out.resolve()
+    try:
+        out_display = out_display.relative_to(REPO_ROOT)
+    except ValueError:
+        pass
+
     drift_count = 0
     by_cat_val: dict[tuple[str, str], set[str]] = defaultdict(set)
     for h in all_hits:
@@ -359,7 +365,7 @@ def main() -> None:
         if len(vals) >= 2:
             drift_count += 1
 
-    print(f"Wrote {args.out.relative_to(REPO_ROOT)}", file=sys.stderr)
+    print(f"Wrote {out_display}", file=sys.stderr)
     print(
         f"Hits: {len(all_hits)} total across {len(PATTERNS)} patterns. "
         f"Drift candidates (pattern×category with ≥2 distinct values): {drift_count}.",

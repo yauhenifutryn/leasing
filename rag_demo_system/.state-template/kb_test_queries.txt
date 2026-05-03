@@ -1,0 +1,102 @@
+# KB Test Queries — Section 7 Phase A.3 corpus
+# Used by kb_coverage_check.py when no live transcript log is available.
+#
+# Sources:
+#   1. Documented production failures (master_plan.txt + Section 7 spec)
+#   2. User-quoted utterances from ANALYSIS.md transcripts (8 calls, 2026-04-29)
+#   3. Common real-shaped phrasings covering each major KB topic
+#
+# Format: one query per line. Lines starting with # and blank lines are ignored.
+# Queries are intentionally a mix of:
+#   - colloquial / terse ("хочу машину в лизинг")
+#   - documented-failure phrasings ("как с вами связаться в Бресте")
+#   - canonical phrasings ("какие условия автолизинга для физлиц")
+# Coverage check classifies each as MISS/PARTIAL/COVERED based on top retrieval score.
+
+# === Documented production failures ===
+как с вами связаться в Бресте
+адрес офиса в Бресте
+что такое ПДН
+что такое нагрузка
+что такое аннуитет
+что по лизингу в России
+
+# === Office / contact / IVR (current 3-4x duplicates per spec) ===
+как выбрать офис
+телефон Минск
+телефон Гомель
+адрес офиса Витебск
+у вас есть филиалы
+куда подъехать
+связь с бухгалтерией
+перевод в бухгалтерию
+как позвонить в офис
+
+# === Conditions / pricing / advance ===
+сколько стоит лизинг
+минимальный аванс
+максимальный срок лизинга
+лизинг без аванса
+аванс 10 процентов
+условия для физлиц
+условия автолизинга
+какие условия для ИП
+
+# === Documents / requirements ===
+какие нужны документы
+что нужно для лизинга
+документы для физлица
+документы для ИП
+какая справка о доходах нужна
+
+# === Subject types ===
+автолизинг
+лизинг автомобиля
+хочу машину в лизинг
+лизинг б/у авто
+лизинг недвижимости
+лизинг оборудования
+лизинг такси
+лизинг грузового транспорта
+лизинг прицепа
+лизинг новой машины
+
+# === Calculator / pre-calc ===
+посчитайте лизинг на тойоту
+беру в лизинг автомобиль за 100 тысяч
+рассчитайте платеж
+сколько ежемесячный платеж
+график платежей
+
+# === Currency / payment ===
+лизинг в долларах
+лизинг в евро
+конвертация валют
+курс НБРБ
+
+# === Lifecycle: payment changes / closure / proxy ===
+перенос даты платежа
+просрочка платежа
+досрочное погашение
+досрочный выкуп
+выкуп автомобиля
+доверенность
+доверенность после лизинга
+
+# === Edge cases from spec / ANALYSIS.md ===
+лизинг при работе за границей
+лизинг при работе в России
+лизинг с видом на жительство
+ИП с залогом
+лизинг новым ИП
+лизинг для пенсионера
+возрастные ограничения
+
+# === Status / process queries ===
+как подать заявку
+как узнать решение
+сколько ждать одобрение
+
+# === Off-topic / out-of-scope (should retrieve weakly or trigger handoff) ===
+какая сегодня погода
+сколько стоит iPhone
