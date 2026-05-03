@@ -33,8 +33,10 @@ Where N is one of: 1, 2, 3, 4, 5, 6. Claude should:
 | 5b | [05b_qwen36_eval.md](05b_qwen36_eval.md) | pending | optional sideline; safest after 3 | ~2-4 hours | LOW — swap only if Russian/tool eval shows no regression |
 | 5c | [05c_classifier_model_upgrade_eval.md](05c_classifier_model_upgrade_eval.md) | pending | optional sideline; after 3 | ~3-5 hours | LOW — only if residual-failure corpus ≥ 2% after Section 3 ships |
 | 6 | [06_final_docs_and_self_improvement.md](06_final_docs_and_self_improvement.md) | pending | all above + client UAT | ~1 day | FINAL — close out plan |
+| 7 | [07_kb_refinement.md](07_kb_refinement.md) | pending | NONE for build phases (parallel branch); production cutover waits for ANALYSIS.md stable window | ~2-3 days | HIGH — fixes canonical-question retrieval failures + stale-number disease |
+| 8 | [08_capacity_and_concurrency.md](08_capacity_and_concurrency.md) | pending | independent of 1-7; Phase A unblocks H100/H200 hardware decision and chat-widget design | discovery 1-2 days; full rollout depends on client decisions | HIGH — answers client's open concurrency / chat / multi-product / overflow questions with measured numbers |
 
-**Recommended execution order**: 1 → 2 → 3 → 3.5 → 4 → 5 → (5b / 5c optional, independent) → 6.
+**Recommended execution order**: 1 → 2 → 3 → 3.5 → 4 → 5 → (5b / 5c optional, independent) → 6 → 7. Section 8 is independent — Phase A (measurement) can start any time the live VM is available for a load-test window.
 
 - Section 1 ships visible client wins fast while 2-3 cook the deeper fix.
 - Section 5 (speaker mode) is experimental — isolated session recommended, easy-revert via env var.
