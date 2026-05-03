@@ -47,3 +47,26 @@ def test_v2_prompt_uses_lay_schedule_phrasing() -> None:
     text = _v2_text()
     assert "равными платежами" in text
     assert "с уменьшением суммы к концу срока" in text
+
+
+# ── Bug 13: gendered persona — neutral self-claims, feminine grammar ──
+# Source: live call 15:34:53 — bot replied "у меня есть пол, я женщина".
+# Right behavior: stay neutral about personhood claims, but keep feminine
+# grammatical agreement on first-person verbs/adjectives.
+
+def test_v2_prompt_blocks_gendered_self_claims() -> None:
+    text = _v2_text().lower()
+    # No personhood assertion that the bot IS a woman.
+    assert "вы — женщина" not in text
+    assert "вы женщина" not in text
+    # Old "if asked your gender, you ARE a woman" rule must be gone.
+    assert "если клиент спрашивает ваш пол, вы женщина" not in text
+
+
+def test_v2_prompt_keeps_feminine_grammar_forms() -> None:
+    text = _v2_text()
+    # The feminine-form instructions stay — they're about grammar, not
+    # personhood. рада / готова / смогла / могла are listed in the prompt
+    # as the required first-person forms.
+    for form in ("рада", "готова", "смогла", "могла"):
+        assert form in text, f"Bug 13: feminine grammar form '{form}' must stay"
