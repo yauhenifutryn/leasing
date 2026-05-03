@@ -1454,32 +1454,26 @@ async def execute_action(
         return
 
     if isinstance(action, EndCall):
-        # Bug 22: speak the farewell, drain TTS, request the SIP teardown.
-        # Voice path: TtsSink wraps a Jambonz websocket (rtc_handler / ws);
-        # we send `{"type": "disconnect"}` which Jambonz translates to a
-        # SIP BYE. Text path (Chat Widget Scope B): TtsSink is a stub that
-        # just collects strings; the disconnect signal becomes a
-        # `call_ended` SIP-monitor event with no real teardown.
+        # Bug 22: speak the farewell, drain the audio buffer, then send
+        # the Jambonz hangup verb. tts.disconnect() (defined in
+        # backend/execute_adapters.py:TtsSink) handles the drain timing
+        # and the {"type": "disconnect"} send on the same websocket the
+        # rest of the voice path uses. For text mode (Chat Widget Scope
+        # B), TtsSink will be subclassed; the subclass overrides
+        # disconnect() to emit a `call_ended` SIP-monitor event without
+        # touching a real SIP leg.
         try:
             await tts.say(action.farewell)
         except Exception:  # noqa: BLE001
             pass
         yield action.farewell
-        # Best-effort drain — the audio path takes ~1s to play the
-        # farewell; without the wait, disconnect would clip the audio.
+        # Drain + hangup verb (best-effort; never raises).
         try:
-            import asyncio as _asyncio_end
-            await _asyncio_end.sleep(1.5)
+            disc = getattr(tts, "disconnect", None)
+            if callable(disc):
+                await disc()
         except Exception:  # noqa: BLE001
             pass
-        # Voice path: send Jambonz disconnect via the underlying websocket.
-        ws = getattr(tts, "websocket", None)
-        if ws is not None:
-            try:
-                import json as _json_end
-                await ws.send_text(_json_end.dumps({"type": "disconnect"}))
-            except Exception:  # noqa: BLE001
-                pass
         # Stamp the session for analyzer / monitor.
         try:
             session.call_ended_reason = action.reason  # type: ignore[attr-defined]

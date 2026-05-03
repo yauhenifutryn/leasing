@@ -130,6 +130,36 @@ class TtsSink:
         self._first_push_time: Optional[float] = None
         self.total_audio_seconds: float = 0.0
 
+    async def disconnect(self) -> bool:
+        """Bug 22: drain the audio buffer, then send the Jambonz hangup
+        verb so the SIP leg actually drops. Returns True when the
+        disconnect frame was sent, False otherwise (already torn down,
+        no websocket, etc.).
+
+        Drain wait is computed from `total_audio_seconds` (the cumulative
+        PCM duration pushed to the wire); without it, Jambonz cuts the
+        farewell mid-word because mod_audio_fork's play queue still has
+        ~1s of buffered audio when the disconnect arrives.
+        """
+        # Drain — let queued PCM finish playing before tearing down.
+        # Bound at 3.5s so a stuck pipeline can't hang the dispatcher.
+        try:
+            wait = max(0.0, self.total_audio_seconds + 0.4)
+            await asyncio.sleep(min(wait, 3.5))
+        except Exception:  # noqa: BLE001
+            pass
+        # Send the Jambonz disconnect verb on the same websocket the
+        # rest of the path uses for killAudio / text-delta / TTS frames.
+        ws = self._ws
+        if ws is None:
+            return False
+        try:
+            import json as _json
+            await ws.send_text(_json.dumps({"type": "disconnect"}))
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     async def say(self, text: str) -> None:
         if not text:
             return
