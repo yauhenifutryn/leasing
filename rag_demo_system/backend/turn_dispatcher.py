@@ -29,6 +29,7 @@ from .turn_action import (
     EmitClarify,
     EmitChangeConfirm,
     EmitCalcDetail,
+    EndCall,
     FireCalc,
     FireLLMFallback,
     FireSMS,
@@ -285,6 +286,42 @@ _META_QUESTION_RE = re.compile(
 )
 
 
+# Bug 22 (2026-04-29 client review): the bot has no deterministic
+# end-of-call action. Without this list, "до свидания" / "пока" turns
+# fall to FireLLMFallback and the SIP leg stays open. The list is
+# intentionally narrow — bare "хорошо" / "ладно" / "понятно" are
+# acknowledgements, NOT goodbye signals, and stay in the SKIP_CLASSIFIER
+# small-talk path. Anchored to ^ and tolerant of trailing punctuation
+# / pleasantries so "До свидания, спасибо!" matches but "до свидания, а
+# что насчёт..." does not (still ambiguous, let the LLM handle).
+_GOODBYE_RE = re.compile(
+    r"^\s*(?:"
+    r"до\s+свидан\w+|"
+    r"всего\s+доброго|всего\s+хорошего|"
+    r"спасибо\s*,?\s*вс[её](?:\s+пока)?|"
+    r"вс[её]\s*,?\s*спасибо|"
+    r"больше\s+ничего\s+не\s+нужно|"
+    r"пока\b|пока-пока|"
+    r"всем\s+пока"
+    r")[\s\.,!?]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_goodbye_utterance(utterance: str) -> bool:
+    """True when the utterance is a clean caller-initiated goodbye.
+
+    Conservative: only matches the canonical farewell forms. Mixed
+    utterances ("до свидания, а ещё один вопрос") are deliberately not
+    matched — those carry pending intent and should not trigger a
+    hangup. The classifier's intent=END_CALL signal covers richer cases
+    semantically; this regex is the deterministic fallback.
+    """
+    if not utterance:
+        return False
+    return bool(_GOODBYE_RE.match(utterance))
+
+
 def _is_meta_question(utterance: str) -> bool:
     """True when the utterance is a meta-question about the open clarify
     rather than a concrete answer. Conservative: returns False on empty
@@ -450,6 +487,41 @@ def _dispatch_once(
     """
     if pre_turn_state is None:
         pre_turn_state = profile.state
+
+    # STEP 0 (Bug 22, 2026-04-29 client review): EndCall — caller-
+    # initiated goodbye. Placed at the top of dispatch so the user's
+    # signal to leave wins over field-collection logic (otherwise STEP
+    # 5b clarify on an incomplete profile would emit a clarify prompt
+    # for a caller who's literally saying goodbye).
+    #
+    # Two signals trigger:
+    #   (a) classifier emits intent=END_CALL semantically (richer
+    #       phrasings like "Хорошо, спасибо, на этом всё, до свидания").
+    #   (b) FAST-PATH for narrow goodbye forms via _is_goodbye_utterance.
+    #       Existing SKIP_CLASSIFIER list at app.py:1010 routes those
+    #       through with intent=CONVERSATION; the regex fallback here
+    #       lifts them without a classifier round-trip.
+    #
+    # Suppressed when:
+    #   - pre_turn_state in {READBACK_PENDING, CHANGE_PENDING}: the user
+    #     is mid-state, hanging up loses progress. Let STEP 1/2 handle
+    #     the turn first.
+    #   - classifier_output.change_field is set: a staged change is
+    #     in flight ("поменяй срок на 48, до свидания"); apply the
+    #     change first, the user can goodbye next turn.
+    _is_goodbye_intent = (
+        classifier_output.intent == "END_CALL"
+        or _is_goodbye_utterance(utterance or "")
+    )
+    _pending_state = pre_turn_state in (
+        ProfileState.READBACK_PENDING,
+        ProfileState.CHANGE_PENDING,
+    )
+    _change_in_flight = bool(classifier_output.change_field)
+    if _is_goodbye_intent and not _pending_state and not _change_in_flight:
+        # Short, feminine-grammar farewell. No AI-disclosure repeat.
+        farewell = "Хорошего дня! Обращайтесь, если возникнут вопросы."
+        return EndCall(farewell=farewell, reason="user_goodbye")
 
     # STEP 1 (post-change apply): CHANGE_PENDING + is_confirmation →
     # apply the staged change via ClientProfile.apply_pending_change (which
@@ -1379,6 +1451,40 @@ async def execute_action(
             )
         await tts.say(spoken)
         yield spoken
+        return
+
+    if isinstance(action, EndCall):
+        # Bug 22: speak the farewell, drain TTS, request the SIP teardown.
+        # Voice path: TtsSink wraps a Jambonz websocket (rtc_handler / ws);
+        # we send `{"type": "disconnect"}` which Jambonz translates to a
+        # SIP BYE. Text path (Chat Widget Scope B): TtsSink is a stub that
+        # just collects strings; the disconnect signal becomes a
+        # `call_ended` SIP-monitor event with no real teardown.
+        try:
+            await tts.say(action.farewell)
+        except Exception:  # noqa: BLE001
+            pass
+        yield action.farewell
+        # Best-effort drain — the audio path takes ~1s to play the
+        # farewell; without the wait, disconnect would clip the audio.
+        try:
+            import asyncio as _asyncio_end
+            await _asyncio_end.sleep(1.5)
+        except Exception:  # noqa: BLE001
+            pass
+        # Voice path: send Jambonz disconnect via the underlying websocket.
+        ws = getattr(tts, "websocket", None)
+        if ws is not None:
+            try:
+                import json as _json_end
+                await ws.send_text(_json_end.dumps({"type": "disconnect"}))
+            except Exception:  # noqa: BLE001
+                pass
+        # Stamp the session for analyzer / monitor.
+        try:
+            session.call_ended_reason = action.reason  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
         return
 
     if isinstance(action, Noop):

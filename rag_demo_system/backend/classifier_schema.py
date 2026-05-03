@@ -440,7 +440,7 @@ class ClassifierOutput(BaseModel):
     the orchestrator stack.
     """
 
-    intent: Optional[Literal["TOOL", "RAG", "CONVERSATION"]] = None
+    intent: Optional[Literal["TOOL", "RAG", "CONVERSATION", "END_CALL"]] = None
     subject: Optional[_SUBJECT_VALUES] = None
     # allow_inf_nan=False (Codex thorough review 2026-04-20): Python json
     # accepts NaN/Infinity literals, and Pydantic passes them through by

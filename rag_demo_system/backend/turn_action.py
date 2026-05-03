@@ -158,6 +158,36 @@ class Noop:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class EndCall:
+    """Speak a farewell line and hang up the SIP leg.
+
+    Bug 22 (2026-04-29 client review): bot has no deterministic way to
+    end the call when the caller says "до свидания" / "пока" / "спасибо,
+    всё". Without this action the dispatcher fell through to
+    FireLLMFallback and the LLM occasionally narrated a goodbye but the
+    SIP leg stayed open until the carrier timeout.
+
+    The dispatcher emits EndCall ONLY when both are true:
+      1. Classifier signals intent=END_CALL OR utterance matches the
+         narrow goodbye list (`до свидания`, `пока`, `спасибо, всё`,
+         `всего доброго`, `всё, спасибо`).
+      2. No pending state is active (READBACK_PENDING / CHANGE_PENDING)
+         and no half-completed change is sitting on the profile —
+         hanging up mid-state would lose the user's progress.
+
+    `farewell` is the line spoken before the hangup verb is sent.
+    `reason` is a log tag (e.g. "user_goodbye", "consent_denied") so
+    session_analyzer can distinguish caller-initiated end from system-
+    initiated end. Voice path (execute_action) speaks `farewell` via
+    TTS, awaits drain, then sends Jambonz `{"type": "disconnect"}`.
+    Text path (Chat Widget Scope B) emits the farewell text and a
+    `call_ended` SIP-monitor event without an actual SIP teardown.
+    """
+    farewell: str
+    reason: str = "user_goodbye"
+
+
 TurnAction = Union[
     EmitReadback,
     EmitClarify,
@@ -167,5 +197,6 @@ TurnAction = Union[
     FireLLMFallback,
     FireOORMessage,
     FireSMS,
+    EndCall,
     Noop,
 ]
