@@ -105,6 +105,23 @@
   background: var(--mlc-border);
   color: var(--mlc-ink);
 }
+.mlc-download {
+  background: none; border: 0;
+  color: var(--mlc-muted);
+  cursor: pointer;
+  font-size: 18px; line-height: 1;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background var(--mlc-dur) var(--mlc-ease), color var(--mlc-dur) var(--mlc-ease);
+}
+.mlc-download:hover {
+  background: var(--mlc-border);
+  color: var(--mlc-ink);
+}
+.mlc-download:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 .mlc-transcript {
   flex: 1; overflow-y: auto;

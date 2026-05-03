@@ -49,6 +49,7 @@
     var sessionId = opts.sessionId || genSessionId();
     var name = '';
     var phone = '';
+    var messages = [];   // {role: 'user'|'bot'|'chip', text, ts (ms epoch)}
 
     var transcript = el('div', { class: 'mlc-transcript' });
     var composerInput = el('textarea', {
@@ -74,7 +75,15 @@
     });
     var headerTitle = el('div', { class: 'mlc-header-title', text: 'Микро Лизинг' });
     var headerMeta = el('div', { class: 'mlc-header-meta', text: 'Аноним' });
-    var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta]);
+    var downloadBtn = el('button', {
+      class: 'mlc-download',
+      text: '↓',
+      'aria-label': 'Скачать переписку',
+      title: 'Скачать переписку (.md)',
+      onclick: function() { downloadMarkdown(); },
+      disabled: 'true',
+    });
+    var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta, downloadBtn]);
 
     var intake = buildIntake(function(n, p) {
       name = n; phone = p;
@@ -88,6 +97,8 @@
 
     function append(role, text) {
       if (!transcript.isConnected) return null;  // panel closed mid-fetch
+      messages.push({ role: role, text: text, ts: Date.now() });
+      if (downloadBtn) downloadBtn.disabled = false;
       var b = el('div', { class: 'mlc-bubble mlc-' + role, text: text });
       transcript.appendChild(b);
       transcript.scrollTop = transcript.scrollHeight;
@@ -96,9 +107,49 @@
 
     function appendChip(text) {
       if (!transcript.isConnected) return;
+      messages.push({ role: 'chip', text: text, ts: Date.now() });
+      if (downloadBtn) downloadBtn.disabled = false;
       var c = el('div', { class: 'mlc-action-chip', text: text });
       transcript.appendChild(c);
       transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    function downloadMarkdown() {
+      if (!messages.length) return;
+      var lines = [];
+      lines.push('# Чат с Микро Лизинг');
+      lines.push('');
+      var hdrParts = [];
+      hdrParts.push('**Сессия:** `' + sessionId + '`');
+      if (name) hdrParts.push('**Имя:** ' + name);
+      if (phone) hdrParts.push('**Телефон:** ' + phone);
+      hdrParts.push('**Экспортировано:** ' + new Date().toISOString().replace('T', ' ').slice(0, 19));
+      lines.push(hdrParts.join('  \n'));
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+      for (var i = 0; i < messages.length; i++) {
+        var m = messages[i];
+        var t = new Date(m.ts).toLocaleTimeString('ru-RU', { hour12: false });
+        if (m.role === 'chip') {
+          lines.push('> _[' + t + '] ' + m.text + '_');
+        } else if (m.role === 'user') {
+          lines.push('**[' + t + '] Вы:** ' + m.text);
+        } else if (m.role === 'bot') {
+          lines.push('**[' + t + '] Бот:** ' + m.text);
+        }
+        lines.push('');
+      }
+      var md = lines.join('\n');
+      var blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'chat-' + sessionId.replace(/^chat-/, '') + '-' + new Date().toISOString().slice(0, 10) + '.md';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
     }
 
     async function send() {
