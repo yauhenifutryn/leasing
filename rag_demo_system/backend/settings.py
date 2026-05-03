@@ -153,6 +153,27 @@ DEFAULT_CONFIG = REPO_ROOT / "rag_demo_system" / "config" / "app.yaml"
 DEFAULT_ENV = REPO_ROOT / "rag_demo_system" / ".env"
 
 
+_TOPICAL_KB_RELATIVE = Path("..") / "knowledge_base" / "kb_topics_ru.md"
+
+
+def _kb_path_for_layout(configured: str | Path | None) -> Path:
+    """Resolve the KB markdown path, honoring the KB_LAYOUT env var.
+
+    KB_LAYOUT (case-insensitive):
+      - "legacy" or unset: use the configured path (current kb_faq_ru_v2.md).
+      - "topical": override to knowledge_base/kb_topics_ru.md (Phase C output).
+      - any other value: warn (silently log) and fall back to legacy.
+
+    Section 7 Phase C.5 — env-var-gated swap so production can flip
+    layouts without a config edit, and revert in ~5 minutes by unsetting.
+    """
+    layout = os.getenv("KB_LAYOUT", "legacy").strip().lower()
+    if layout == "topical":
+        return _resolve_path(_TOPICAL_KB_RELATIVE)
+    # legacy or invalid -> configured path (current behavior)
+    return _resolve_path(configured)
+
+
 def _resolve_path(value: str | Path) -> Path:
     path = Path(value)
     if not path.is_absolute():
@@ -217,7 +238,7 @@ def load_settings(path: Path | None = None) -> Settings:
             name=app.get("name", "RAG Demo"),
             language=app.get("language", "ru"),
             system_prompt_path=_resolve_path(app.get("system_prompt_path")),
-            kb_markdown_path=_resolve_path(app.get("kb_markdown_path")),
+            kb_markdown_path=_kb_path_for_layout(app.get("kb_markdown_path")),
             strict_refusal_text=app.get("strict_refusal_text", ""),
             memory_turns=int(app.get("memory_turns", 4)),
         ),
