@@ -3,6 +3,7 @@
 If someone refactors the classifier block and bumps these values back up,
 latency regresses ~1-2 seconds. This test catches that.
 """
+import inspect
 from pathlib import Path
 
 
@@ -10,20 +11,20 @@ _APP_PY = Path(__file__).resolve().parents[1] / "backend" / "app.py"
 
 
 def test_classifier_recent_turns_bound():
-    src = _APP_PY.read_text(encoding="utf-8")
+    """Fix-18: classifier dialog context must be capped at the most recent
+    6 transcript entries (3 turn pairs). The literal [-6:] slice lives
+    inside _build_classifier_user_prompt; scan the helper's source so the
+    test survives future refactors that move the marker around app.py.
+    """
+    from backend.app import _build_classifier_user_prompt
+    src = inspect.getsource(_build_classifier_user_prompt)
     # The slice must be [-6:] (3 pairs), not [-14:] or larger.
-    assert "chat_session.transcript[-6:]" in src, (
+    assert "transcript[-6:]" in src, (
         "Fix 18 regression: classifier _recent_turns window grew beyond 3 pairs. "
         "This re-introduces ~1-2s of latency per turn."
     )
-    # Ensure the old 14-window isn't present in the classifier block.
-    # (Other slices may legitimately exist for other purposes; we only check
-    # the specific classifier context line.)
-    classifier_marker = "# Build conversation context"
-    assert classifier_marker in src
-    idx = src.index(classifier_marker)
-    block = src[idx : idx + 400]
-    assert "[-14:]" not in block, "old 7-pair window still present"
+    # Ensure the old 14-window isn't present in the helper.
+    assert "[-14:]" not in src, "old 7-pair window still present"
 
 
 def test_classifier_max_tokens_bound():
@@ -49,8 +50,15 @@ def test_classifier_max_tokens_bound():
 
 
 def test_classifier_turn_text_truncation():
-    src = _APP_PY.read_text(encoding="utf-8")
-    # Truncation must be present so long bot responses don't bloat the prompt.
-    assert "len(_text) > 200" in src, (
+    """Fix-18: per-turn text inside the classifier dialog context must be
+    truncated to <= 200 chars to bound classifier prompt length. Scan the
+    extracted helper rather than app.py, so the test survives variable
+    renames (e.g. _text -> text in commit 4cb30c5).
+    """
+    from backend.app import _build_classifier_user_prompt
+    src = inspect.getsource(_build_classifier_user_prompt)
+    # Accept either the length-check or a direct slice — semantically
+    # equivalent for the 200-char-bound contract.
+    assert "len(text) > 200" in src or "[:200]" in src, (
         "Fix 18 regression: classifier turn-text truncation removed."
     )
