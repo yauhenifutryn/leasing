@@ -895,6 +895,55 @@ def test_step6_prepaid_over_40_pct_yields_oor_with_workaround() -> None:
     # Workaround must be in the same message so the caller has a
     # concrete next step instead of a generic "out of range".
     assert "первым платежом" in action.message
+    # Bug 27 follow-up: the OOR turn must stamp the workaround offer on
+    # the profile so the next is_confirmation turn auto-applies prepaid=40.
+    assert profile.last_offer == "prepaid_workaround_40"
+
+
+def test_step5d_prepaid_workaround_acceptance_fires_calc_with_40() -> None:
+    """Bug 27 follow-up (live call b5d70d6a 2026-05-03 19:49): after the
+    OOR turn stamped last_offer='prepaid_workaround_40', the next
+    is_confirmation turn must AUTO-APPLY prepaid_pct=40 and fire calc.
+    Without this branch the bot LLM-narrated agreement but the calc
+    never re-fired and the caller had to manually re-state the
+    parameter."""
+    profile = make_complete_profile(
+        cost=100000.0, currency="BYN", prepaid_pct=60.0,
+    )
+    # Simulate the state right after the workaround OOR fired.
+    profile.last_offer = "prepaid_workaround_40"
+    profile.state = ProfileState.CONFIRMED
+    classifier = make_classifier(intent="CONVERSATION", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Удобно")
+    # Calc must fire — and with prepaid_pct == 40, not 60.
+    assert isinstance(action, FireCalc)
+    assert profile.prepaid_pct == 40.0
+    assert action.calc_params["prepaid"] == 40 or action.calc_params["prepaid"] == 40.0
+    # The offer flag must be cleared so a later bare-Да doesn't loop.
+    assert profile.last_offer is None
+
+
+def test_step5d_workaround_with_change_field_is_not_consumed() -> None:
+    """If the user replies to the workaround offer with a parameter
+    change ('давай 30%'), the change-flow must take precedence so the
+    user's explicit intent isn't overridden by the auto-apply branch."""
+    profile = make_complete_profile(
+        cost=100000.0, currency="BYN", prepaid_pct=60.0,
+    )
+    profile.last_offer = "prepaid_workaround_40"
+    profile.state = ProfileState.CONFIRMED
+    # change_field set means the user is mutating the parameter, not
+    # accepting the workaround.
+    classifier = make_classifier(
+        intent="TOOL",
+        is_confirmation=False,
+        change_field="prepaid_pct",
+        change_value=30,
+        action="change_param",
+    )
+    action = apply_turn(profile, classifier, utterance="Давай 30%")
+    # Auto-apply branch must NOT fire — change-confirm flow takes over.
+    assert not isinstance(action, FireCalc) or action.calc_params.get("prepaid") != 40
 
 
 def test_step6_legal_person_usd_does_not_convert() -> None:

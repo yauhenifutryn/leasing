@@ -362,9 +362,18 @@ def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
     #     next step instead of a generic OOR. The helper is shaped to
     #     absorb future range checks (term_months, age_years, cost) so
     #     this dispatcher gate stays a one-liner.
+    #
+    # Bug 27 follow-up (live call b5d70d6a 2026-05-03 19:49): when the
+    # user said "Удобно" to accept the workaround, the bot LLM-narrated
+    # agreement but calc never re-fired. Stamp last_offer here so the
+    # next is_confirmation turn auto-applies prepaid_pct=40 (the "40%
+    # авансом" half of the workaround that the calculator API can
+    # actually accept; the "20% первым платежом" half is a verbal
+    # arrangement with the client, outside the calc params).
     from .preflight_calc import validate_calc_inputs as _validate
     msg = _validate(profile)
     if msg:
+        profile.last_offer = "prepaid_workaround_40"
         return FireOORMessage(message=msg)
 
     return None
@@ -856,6 +865,34 @@ def _dispatch_once(
     ):
         profile.last_offer = None
         return FireSMS(snapshot=build_snapshot(profile))
+
+    # STEP 5d (Bug 27 follow-up, live call b5d70d6a 2026-05-03 19:49):
+    # the prior turn fired the prepaid-over-40 workaround OOR
+    # ("максимум 40 процентов... 40% авансом + 20% первым платежом"
+    # — see backend/preflight_calc.py). When the user accepts ("Удобно"
+    # / "Да"), auto-apply prepaid_pct = 40 and fire calc on this turn,
+    # rather than waiting for the user to manually re-state the
+    # parameter. The "20% первым платежом" half is informational only
+    # — calculator API doesn't accept it as a parameter — the bot's
+    # acceptance message ("оформим 40% авансом, 20% первым платежом")
+    # carries the verbal arrangement.
+    if (
+        getattr(profile, "last_offer", None) == "prepaid_workaround_40"
+        and classifier_output.is_confirmation
+        and not classifier_output.change_field
+        and classifier_output.action != "change_param"
+    ):
+        profile.last_offer = None
+        profile.prepaid_pct = 40.0
+        # Re-run preflight (covers a pathological profile where another
+        # OOR field would now surface; in normal flow this returns None).
+        policy_action = _preflight_calc_policy(profile)
+        if policy_action is not None:
+            return policy_action
+        return FireCalc(
+            snapshot=build_snapshot(profile),
+            calc_params=build_calc_params(profile),
+        )
 
     # Issue 4 (live call 2ab41112 2026-04-26): post-SMS, the user said
     # "Спасибо. Кто владелец Вашей компании?" — the small classifier
