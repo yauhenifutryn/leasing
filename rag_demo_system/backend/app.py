@@ -2476,9 +2476,17 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
             return
 
         # 5. Send welcome TTS (consent passed)
+        # Bug 18 (2026-04-29 client review): the intro must disclose AI
+        # basis upfront so callers know they may need to double-check
+        # anything critical with a human specialist. Two markers must
+        # stay (locked in by tests/test_ai_disclosure_greeting.py):
+        #   - "на основе искусственного интеллекта" (or the short form)
+        #   - "могу ошибаться" + "уточняйте у специалиста"
         session.assistant_speaking = True
         intro_text = (
-            "Спасибо за согласие! Меня зовут Ксения, я голосовая помощница компании Микро Лизинг. "
+            "Спасибо за согласие! Меня зовут Ксения, я голосовая помощница "
+            "компании Микро Лизинг на основе искусственного интеллекта. "
+            "Я могу ошибаться — при сомнении уточняйте у специалиста. "
             "Как я могу к вам обращаться?"
         )
         asyncio.create_task(_jambonz_send_tts(websocket, session, session_id, intro_text))
