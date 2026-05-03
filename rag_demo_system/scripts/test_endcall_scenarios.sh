@@ -18,18 +18,32 @@ if [[ "${1:-}" == "-v" ]]; then
     VERBOSE_FLAG="-v"
 fi
 
+# Pick the right Python: prefer the project venv (server / production
+# layout), fall back to system python3 (developer laptop). Both invoke
+# pytest as a module so PATH isn't relied on.
+if [[ -x ".venv/bin/python" ]]; then
+    PY=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PY="python3"
+else
+    echo "ERROR: no python interpreter found (.venv/bin/python or python3)" >&2
+    exit 1
+fi
+echo "Using interpreter: $PY"
+echo
+
 echo "=== Bug 22 EndCall — full scenario suite ==="
 echo
 
 if [[ -n "$VERBOSE_FLAG" ]]; then
-    pytest tests/test_endcall_dispatcher.py "$VERBOSE_FLAG" --no-header -q
+    "$PY" -m pytest tests/test_endcall_dispatcher.py "$VERBOSE_FLAG" --no-header -q
 else
-    pytest tests/test_endcall_dispatcher.py --no-header -q
+    "$PY" -m pytest tests/test_endcall_dispatcher.py --no-header -q
 fi
 
 echo
 echo "=== Surface-form regex coverage (positive + negative) ==="
-python3 - <<'PY'
+"$PY" - <<'PY'
 import sys
 sys.path.insert(0, ".")
 from backend.turn_dispatcher import _is_goodbye_utterance
@@ -78,7 +92,7 @@ PY
 
 echo
 echo "=== Dispatcher integration: pre_turn_state matrix ==="
-python3 - <<'PY'
+"$PY" - <<'PY'
 import sys
 sys.path.insert(0, ".")
 from backend.classifier_schema import ClassifierOutput
@@ -117,7 +131,7 @@ PY
 
 echo
 echo "=== TtsSink.disconnect() interface check ==="
-python3 - <<'PY'
+"$PY" - <<'PY'
 import sys
 sys.path.insert(0, ".")
 from backend.execute_adapters import TtsSink
