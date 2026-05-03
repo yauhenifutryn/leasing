@@ -877,6 +877,26 @@ def test_step6_commercial_subject_restriction_is_safety_net() -> None:
     assert "физических" in action.message.lower()
 
 
+def test_step6_prepaid_over_40_pct_yields_oor_with_workaround() -> None:
+    """Bug 27 (live call 5746bfec 2026-05-03 18:42:14): user asked for
+    prepaid 60%; calc API would have returned FAIL. _preflight_calc_policy
+    now catches prepaid_pct > 40 BEFORE FireCalc and surfaces the KB
+    workaround (the rest goes as a первый платёж по графику). The
+    confirmation flow that would otherwise emit FireCalc must yield
+    FireOORMessage instead."""
+    profile = make_complete_profile(
+        cost=60000.0, currency="BYN", prepaid_pct=60.0,
+    )
+    profile.state = ProfileState.READBACK_PENDING
+    classifier = make_classifier(intent="TOOL", is_confirmation=True)
+    action = apply_turn(profile, classifier, utterance="Да")
+    assert isinstance(action, FireOORMessage)
+    assert "максимум 40" in action.message
+    # Workaround must be in the same message so the caller has a
+    # concrete next step instead of a generic "out of range".
+    assert "первым платежом" in action.message
+
+
 def test_step6_legal_person_usd_does_not_convert() -> None:
     """Юр лицо + USD: conversion does NOT fire — ЮЛ calculator supports
     USD natively. No original_* stash."""

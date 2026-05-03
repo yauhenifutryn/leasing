@@ -354,6 +354,19 @@ def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
         profile.original_cost = old_cost
         profile.original_currency = "USD"
 
+    # (4) Bug 27 (live call 5746bfec 2026-05-03 18:42:14): user asked
+    #     for prepaid 60%; calc API returned FAIL. The KB section
+    #     `minimum-advance-and-no-advance` documents the rule (max 40%)
+    #     AND the workaround (the rest goes as a первый платёж по
+    #     графику). Surface both inline so the caller has a concrete
+    #     next step instead of a generic OOR. The helper is shaped to
+    #     absorb future range checks (term_months, age_years, cost) so
+    #     this dispatcher gate stays a one-liner.
+    from .preflight_calc import validate_calc_inputs as _validate
+    msg = _validate(profile)
+    if msg:
+        return FireOORMessage(message=msg)
+
     return None
 
 
