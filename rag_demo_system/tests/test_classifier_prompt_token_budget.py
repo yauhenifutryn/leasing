@@ -36,7 +36,7 @@ def test_count_tokens_approx_is_reasonable():
 
 
 def test_assert_prompt_token_budget_passes_at_current_size():
-    assert_prompt_token_budget(max_model_len=8192, fraction=0.80)
+    assert_prompt_token_budget(max_model_len=8192, fraction=0.65)
 
 
 def test_assert_prompt_token_budget_raises_when_over_budget():

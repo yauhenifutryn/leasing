@@ -159,21 +159,29 @@ def build_classifier_system_prompt() -> str:
 
 
 def count_tokens_approx(text: str) -> int:
-    """Crude estimate. Mixed Russian+English averages ~3 chars/token on
-    Qwen tokenizers. Off by <20% from the real tokenizer for the
-    classifier prompt shape — sufficient for a budget assert.
+    """Crude length-based estimate. Uses ~3 chars/token, which holds for
+    mixed Russian + English on Qwen tokenizers but can underestimate by
+    up to 20-25% on Russian-heavy text. The 35% headroom in
+    ``assert_prompt_token_budget(fraction=0.65)`` absorbs both that
+    underestimate and the runtime user prompt (~600 tokens worst case)
+    plus max_tokens output (~160). Avoids importing ``transformers`` or
+    ``tiktoken`` at module import time so the assert is cheap.
     """
     return max(1, len(text) // 3)
 
 
 def assert_prompt_token_budget(
     max_model_len: int = 8192,
-    fraction: float = 0.80,
+    fraction: float = 0.65,
 ) -> None:
-    """Reserve ``1 - fraction`` of ``max_model_len`` for user message + output.
+    """Reserve ``1 - fraction`` of ``max_model_len`` for: (a) the heuristic
+    underestimate (~25%), (b) the runtime user prompt (~600 tokens worst
+    case = 6 turns x 200 chars), (c) the classifier output budget
+    (max_tokens=160). At fraction=0.65 with max_model_len=8192, the
+    system-prompt budget is 5324 tokens.
 
-    Past incident (Bug 29, 2026-05-03): prompt grew to ~5000 tokens against
-    max_model_len=4096, producing silent HTTP 400 on every classifier call.
+    Past incident: prompt grew to ~5000 tokens against max_model_len=4096
+    -> silent HTTP 400 on every classifier call (Bug 29, 2026-05-03).
     """
     prompt = build_classifier_system_prompt()
     tokens = count_tokens_approx(prompt)
@@ -182,5 +190,7 @@ def assert_prompt_token_budget(
         raise AssertionError(
             f"Classifier system prompt has ~{tokens} tokens, exceeds budget "
             f"of {budget} ({fraction*100:.0f}% of max_model_len={max_model_len}). "
-            f"Trim the prompt or bump max_model_len in scripts/start_sessionagent.sh."
+            f"Trim the prompt or bump --max-model-len in "
+            f"scripts/regenerate_env_and_restart.sh "
+            f"(and scripts/provision_server.sh for fresh deploys)."
         )

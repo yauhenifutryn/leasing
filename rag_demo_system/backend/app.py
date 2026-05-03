@@ -403,7 +403,13 @@ async def _warmup() -> None:
     # Bug 29 (2026-05-03) guard: classifier prompt must fit in vLLM
     # max_model_len. Raises AssertionError loudly at startup instead of
     # producing silent HTTP 400s on every classifier call in production.
-    assert_prompt_token_budget(max_model_len=8192, fraction=0.80)
+    assert_prompt_token_budget(max_model_len=8192, fraction=0.65)
+    print(
+        f"[startup] classifier_prompt_tokens_approx="
+        f"{count_tokens_approx(build_classifier_system_prompt())} "
+        f"(budget={int(8192 * 0.65)} at max_model_len=8192, fraction=0.65)",
+        flush=True,
+    )
     try:
         engine.retrieve("warmup", fast=True, voice_fast=True)
     except Exception:  # noqa: BLE001
