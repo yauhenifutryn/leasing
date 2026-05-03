@@ -648,7 +648,7 @@ write_env_file() {
   local SESSIONAGENT_CMD_LINE=""
   if [ "$SESSIONAGENT_GPU_UTIL" != "0.00" ]; then
     SESSIONAGENT_ENV_LINES=$'\n'"SESSIONAGENT_BASE_URL=http://127.0.0.1:${SESSIONAGENT_PORT}/v1"$'\n'"SESSIONAGENT_MODEL=Qwen/Qwen3-4B-Instruct-2507-FP8"
-    SESSIONAGENT_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-2507-FP8 ${QWEN_SESSIONAGENT_REV_FLAG} --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
+    SESSIONAGENT_CMD_LINE="STACK_SESSIONAGENT_CMD=\"./.venv/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-4B-Instruct-2507-FP8 ${QWEN_SESSIONAGENT_REV_FLAG} --port ${SESSIONAGENT_PORT} --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization ${SESSIONAGENT_GPU_UTIL} --enable-prefix-caching --download-dir ${MODELS_DIR}\""
   else
     SESSIONAGENT_ENV_LINES=$'\n'"# SessionAgent disabled on small GPU; classifier falls back to main LLM"$'\n'"SESSIONAGENT_BASE_URL="$'\n'"SESSIONAGENT_MODEL="
     SESSIONAGENT_CMD_LINE="STACK_SESSIONAGENT_CMD=\"\""

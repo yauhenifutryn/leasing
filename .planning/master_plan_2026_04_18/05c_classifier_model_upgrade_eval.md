@@ -82,7 +82,29 @@ HF_HUB_ENABLE_HF_TRANSFER=1 huggingface-cli download \
 #   SESSIONAGENT_GPU_UTIL=0.18   # up from 0.12; verify total stays < 1.0
 ```
 
-VRAM sanity check before boot: brain (0.60) + new SessionAgent (~0.18) + Whisper (0.04) + embed/rerank (~0.07) ≈ 0.89. Leave 10% for KV cache growth.
+### H100 80GB fit math (verified 2026-05-03 against scripts/regenerate_env_and_restart.sh:46-52)
+
+**Today's allocation:**
+| Process | Model | gpu-memory-utilization | Allocated |
+|---|---|---|---|
+| Main brain | Qwen3.5-35B-A3B-FP8 | 0.70 | 56 GB |
+| SessionAgent | Qwen3-4B-Instruct-2507-FP8 | 0.12 | 9.6 GB |
+| **Total** | | **0.82** | **65.6 GB** |
+| Headroom (OS + CUDA graph) | | | **14.4 GB** |
+
+**With Qwen3-8B-Instruct-FP8 (target):**
+
+8B-FP8 weights ≈ 8 GB vs 4B-FP8 ≈ 4 GB. The current 9.6 GB SessionAgent budget leaves only ~1.6 GB for KV cache after the bigger weights — too tight for 4096-token context. Need ~14.4 GB total budget (~6 GB KV).
+
+| Path | Main util | SA util | Brain KV cost | Concurrent-call ceiling impact |
+|---|---|---|---|---|
+| **A (recommended)** rebalance | 0.65 (52 GB) | 0.18 (14.4 GB) | -4 GB | ~15-20% reduction (5-12 → ~4-10) |
+| **B** Qwen2.5-7B-FP8 instead | 0.70 (unchanged) | 0.15 (12 GB) | unchanged | Negligible |
+| **C** AWQ 4-bit fallback | 0.70 | 0.12 (unchanged) | unchanged | Negligible (smaller-quality model) |
+
+**On H200 141GB**: 8B-FP8 fits trivially without rebalancing. Math: 0.78 main (110 GB) + 0.10 SA (14.1 GB) = 124.1 GB used, 17 GB headroom. The H200 makes §5c essentially free; on H100 it costs measurable concurrent-call ceiling.
+
+VRAM sanity check before boot: total `gpu-memory-utilization` must stay ≤ 0.85 on H100 (15% buffer for CUDA graphs + activations under load). Use Path A or B; Path C is the no-rebalance fallback.
 
 ### Step 4 — Checkpoints
 
