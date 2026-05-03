@@ -172,3 +172,54 @@ def test_v2_prompt_upsell_lives_in_post_calc_context() -> None:
     # — otherwise it'll fire at the wrong moment in the conversation.
     window = text[max(0, upsell_idx - 600): upsell_idx + 600].lower()
     assert "расчёт" in window or "расчета" in window or "смс" in window or "сейчас" in window
+
+
+# ── Bug 26: TTS abbreviation pronunciation block ───────────────────────
+# Live call 5746bfec (post-KB-swap, 2026-05-03): bot read "ПДН" as
+# "пэ-дэ-эн-эн" (extra trailing "эн") and "РФ" as "эр-эф-эф" — Silero
+# letter-spelling is robotic and adds extra phonemes when given Cyrillic
+# uppercase tokens it doesn't have explicit pronunciation rules for.
+# The fix is to pre-spell the abbreviations in the prompt so the LLM
+# emits the phonetic form to TTS.
+
+def test_v2_prompt_has_abbreviation_pronunciation_block() -> None:
+    text = _v2_text()
+    # Header marker for the block.
+    assert "ПРОИЗНОШЕНИЕ" in text.upper(), (
+        "Bug 26: prompt must have a 'ПРОИЗНОШЕНИЕ АБРЕВИАТУР' block."
+    )
+
+
+def test_v2_prompt_letter_form_acronyms() -> None:
+    text = _v2_text().lower()
+    # Letter-by-letter Russian: ПДН / РФ / ВНЖ.
+    assert "пэ-дэ-эн" in text
+    assert "эр-эф" in text
+    assert "вэ-эн-жэ" in text
+
+
+def test_v2_prompt_word_form_acronyms() -> None:
+    text = _v2_text().lower()
+    # Word-form acronyms: КАСКО / ОСАГО — read as words, not letter-by-letter.
+    assert "каско" in text
+    assert "осаго" in text
+
+
+def test_v2_prompt_currency_pronunciation() -> None:
+    text = _v2_text().lower()
+    # Currency rules: BYN / USD / EUR / RUB must NOT be spelled
+    # letter-by-letter. The block lists the canonical full-name
+    # pronunciation for each.
+    assert "белорусские рубли" in text
+    assert "доллары" in text
+    assert "евро" in text
+    # Explicit ban on letter-by-letter currencies.
+    has_ban = (
+        "не произноси" in text
+        or "не озвучивай" in text
+        or "запрещено произносить" in text
+    )
+    assert has_ban, (
+        "Bug 26: prompt must explicitly ban letter-by-letter "
+        "currency pronunciation (BYN/USD/EUR)."
+    )
