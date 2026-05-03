@@ -115,6 +115,23 @@ def test_v2_prompt_bans_offline_submission_channels() -> None:
     assert "email" in text or "имейл" in text
 
 
+def test_v2_prompt_disambiguates_two_document_flows() -> None:
+    # Bug 17 follow-up: live call b5d70d6a 2026-05-03 19:47, caller
+    # asked "Можно ли отправить документы почтой?" and the bot answered
+    # about post-buyout vehicle paperwork (a real flow) instead of
+    # rejecting offline application submission. The prompt now must
+    # tell the LLM these are TWO different flows and to disambiguate.
+    text = _v2_text().lower()
+    # Header that names both flows.
+    assert "два разных потока документов" in text or "два разных потока" in text
+    # Both flows must be named explicitly.
+    assert "подачи заявки" in text
+    assert "после выкупа" in text or "после выкупного" in text
+    # The disambiguating question must be present verbatim so the LLM
+    # has the exact phrasing to mirror.
+    assert "это документы для подачи заявки" in text
+
+
 # ── Bug 20: over-escalation to specialist ──────────────────────────────
 # Client review: "часто отправляет к специалисту". The bot's stock
 # fallback for any uncertain question is "уточню у специалиста". The
