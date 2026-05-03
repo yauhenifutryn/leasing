@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
 from .llm import iter_openai_compatible_stream_events
 from .tools import get_all_tools
@@ -407,13 +407,12 @@ class TextTtsSink:
         self,
         *,
         session_id: str,
-        broadcast_fn: Optional[Any] = None,
+        broadcast_fn: Optional[Callable[[dict], Awaitable[None]]] = None,
     ) -> None:
         self._session_id = session_id
         self._broadcast = broadcast_fn  # async callable taking dict
         self.collected: list[str] = []
         self.total_audio_seconds: float = 0.0
-        self._first_push_time: Optional[float] = None
 
     async def say(self, text: str) -> None:
         if not text:
