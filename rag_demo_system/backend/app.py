@@ -1115,14 +1115,27 @@ async def _stream_voice_response(
                     "  Бот спрашивал параметры. Клиент: 'А кто у вас директор?' -> intent=RAG\n"
                     "  Бот спрашивал параметры. Клиент: 'А какой ваш адрес в Бресте?' -> intent=RAG\n"
                     "  Бот спрашивал параметры. Клиент: 'Когда вы работаете?' -> intent=RAG\n"
-                    # Bug 28 (live call 5746bfec 2026-05-03): definition
-                    # questions look like topic-naming to a 4B model. Lock
-                    # in the canonical examples so the classifier stops
-                    # filling parameter slots from interrogative utterances.
-                    "  Клиент: 'что такое аннуитет?' -> intent=RAG, type_schedule=null (definition question, не выбор графика)\n"
+                    # Bug 28 (live call 5746bfec 2026-05-03 + follow-up
+                    # call b5d70d6a 2026-05-03 19:48): definition / "what
+                    # is the difference" questions look like topic-naming
+                    # to a 4B model. The rule is SEMANTIC — the user is
+                    # asking ABOUT a concept, not picking a value. ALL
+                    # parameter slots must be null in this case, even if
+                    # the topic noun matches a known parameter value.
+                    "ПРАВИЛО (definition / comparison questions): если клиент СПРАШИВАЕТ "
+                    "о концепции ('что такое X?', 'в чём разница?', 'чем отличается?', "
+                    "'какой лучше?', 'зачем это нужно?', 'как работает?', 'не понимаю'), "
+                    "это intent=RAG и ВСЕ параметры (subject, type_schedule, prepaid_pct, "
+                    "currency, term_months, condition_new, client_type, cost) равны null. "
+                    "Сам факт упоминания термина в вопросе не означает выбор значения — "
+                    "клиент просит ОБЪЯСНИТЬ, а не НАЗВАТЬ.\n"
+                    "  Клиент: 'что такое аннуитет?' -> intent=RAG, type_schedule=null\n"
+                    "  Клиент: 'в чём их разница?' -> intent=RAG, type_schedule=null\n"
+                    "  Клиент: 'чем отличается аннуитет от линейного?' -> intent=RAG, type_schedule=null\n"
                     "  Клиент: 'какой график лучше?' -> intent=RAG, type_schedule=null\n"
                     "  Клиент: 'зачем нужен аванс?' -> intent=RAG, prepaid_pct=null\n"
                     "  Клиент: 'как работает лизинг?' -> intent=RAG, subject=null\n"
+                    "  Клиент: 'не понимаю, объясни' -> intent=RAG, всё null\n"
                     "intent=TOOL только когда клиент реально прогрессирует расчёт: "
                     "называет параметр (стоимость, валюта, срок, аванс, график, тип/возраст), "
                     "подтверждает, меняет, явно просит посчитать или отправить СМС. "

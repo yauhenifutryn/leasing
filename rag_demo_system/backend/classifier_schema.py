@@ -406,27 +406,6 @@ _CURRENCY_VALUES = Literal["BYN", "USD", "EUR", "RUB"]
 _SCHEDULE_VALUES = Literal["0", "1"]
 
 
-# Bug 28 (live call 5746bfec 2026-05-03): interrogative-leading utterances
-# ("что такое...", "какой лучше?", "зачем...?", "как работает...") must
-# never be interpreted as parameter answers, even when the classifier
-# extracts a slot from the topic noun ("что такое аннуитет?" yielded
-# type_schedule="0" because the small model conflated topic-naming with
-# value-picking). The schema layer overrides intent to RAG when this
-# pattern matches; Step 0b below then nulls every parameter slot. The
-# regex is anchored to ^ + optional leading whitespace so a mid-sentence
-# "...что такое..." doesn't trigger spuriously when the user is already
-# providing a value with explanatory commentary.
-_INTERROGATIVE_LEADING_RE = re.compile(
-    r"^\s*(?:"
-    r"что\s+(?:так(?:ое|ие)|это)|"
-    r"как(?:ой|ая|ое|ие)|"
-    r"зачем|"
-    r"почему|"
-    r"как\s+(?:работа\w+|устрое\w+|выбра\w+|посчита\w+|определ\w+)"
-    r")\b",
-    re.IGNORECASE,
-)
-
 # "prepaid" alias intentionally dropped (Codex adversarial 2026-04-20,
 # Finding B). ClientProfile has `prepaid_pct` and `prepaid_amount` fields
 # but no `prepaid` attribute, so pending_change with field="prepaid" was
@@ -591,26 +570,7 @@ class ClassifierOutput(BaseModel):
         ctx = info.context if isinstance(info.context, dict) else {}
         utterance = ctx.get("utterance", "") if ctx else ""
 
-        # --- Step 0a (Bug 28): interrogative-leading override ---
-        # Live call 5746bfec at 18:39:48 (2026-05-03): user asked
-        # "что такое аннуитет?"; the small classifier emitted intent=TOOL
-        # with type_schedule="0" (interpreted the topic-naming as a value
-        # pick); dispatcher proceeded to readback as if confirmed; bot
-        # spoke a fake confirmation. Same root cause as Bug 7 in the
-        # dispatcher — this is the schema-layer belt-and-suspenders.
-        #
-        # When the utterance leads with an interrogative phrase that
-        # asks ABOUT a concept ("что такое...", "какой лучше?",
-        # "зачем...?", "как работает...?"), force intent=RAG so Step 0b
-        # below nulls every parameter slot. The classifier-prompt
-        # example (app.py) is the upstream half; this is the load-
-        # bearing safety net.
-        if utterance and _INTERROGATIVE_LEADING_RE.match(utterance):
-            if self.intent != "RAG":
-                drops.append(f"intent={self.intent!r} -> RAG (interrogative-leading)")
-                self.intent = "RAG"
-
-        # --- Step 0b: RAG turns must not poison the profile ---
+        # --- Step 0: RAG turns must not poison the profile ---
         # Issue 1 (live call d5174335 2026-04-27): user asked "адреса
         # офисов", classifier extracted subject=Недвижимость from the
         # word "офис", schema-layer verbatim grounding accepted, profile

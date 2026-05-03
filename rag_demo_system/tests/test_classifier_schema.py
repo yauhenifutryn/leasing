@@ -879,66 +879,45 @@ def test_value_grounded_client_type_yur_keeps_self_reference():
     ) is True
 
 
-# ── Bug 28: interrogative-leading suppression (live call 5746bfec) ─────
-# Same root cause as Bug 7: small classifier sometimes emits intent=TOOL
-# with parameter slots filled when the user is asking ABOUT a concept,
-# not naming it. Belt-and-suspenders against the 4B model: at the schema
-# layer, force intent=RAG and null all parameter slots when the utterance
-# leads with an interrogative.
+# ── Bug 28: interrogative-leading suppression — semantic-only ─────────
+# The schema has NO regex layer for interrogative detection (per user
+# preference: no hardcoded word catches). The classifier prompt is the
+# single load-bearing rule. These tests cover the SEMANTIC contract that
+# must hold whenever the classifier (correctly) emits intent=RAG: all
+# parameter slots are nulled by Step 0. They do NOT exercise interrogative
+# detection itself — that's the LLM's job.
 
-def test_interrogative_what_is_annuity_forces_rag_and_drops_params():
+def test_rag_intent_nulls_all_params_when_classifier_emits_correctly():
+    # When the classifier upstream correctly tags a definition question
+    # as intent=RAG, the schema must drop any leaked parameter values
+    # (the small model sometimes leaks subject / type_schedule even after
+    # tagging RAG correctly). Step 0 in _ground_against_utterance covers
+    # this and is the only schema-side guard for Bug 28's class.
     raw = json.dumps({
-        "intent": "TOOL",
+        "intent": "RAG",
         "type_schedule": "0",
-        "action": "calculate",
+        "subject": "Легковой автомобиль",
+        "prepaid_pct": 30,
     })
     out = parse_classifier_output(raw, utterance="что такое аннуитет?")
     assert out.intent == "RAG"
     assert out.type_schedule is None
-
-
-def test_interrogative_kakoy_luchshe_forces_rag():
-    raw = json.dumps({
-        "intent": "TOOL",
-        "type_schedule": "1",
-    })
-    out = parse_classifier_output(raw, utterance="какой график лучше?")
-    assert out.intent == "RAG"
-    assert out.type_schedule is None
-
-
-def test_interrogative_zachem_avans_forces_rag():
-    raw = json.dumps({
-        "intent": "TOOL",
-        "prepaid_pct": 30,
-    })
-    out = parse_classifier_output(raw, utterance="зачем нужен аванс?")
-    assert out.intent == "RAG"
+    assert out.subject is None
     assert out.prepaid_pct is None
 
 
-def test_interrogative_kak_rabotaet_lizing_forces_rag():
-    raw = json.dumps({
-        "intent": "TOOL",
-        "subject": "Легковой автомобиль",
-    })
-    out = parse_classifier_output(raw, utterance="как работает лизинг?")
-    assert out.intent == "RAG"
-    assert out.subject is None
-
-
-# ── Negative regression: legitimate parameter answers must NOT be
-# interpreted as interrogatives, even when they contain аннуитет /
-# линейный (which were the words triggering the live regression).
-
 def test_bare_annuitet_da_is_still_a_tool_answer():
+    # Negative regression: when the user is NAMING the schedule rather
+    # than asking about it, the schema must accept the value. With the
+    # regex gone, this is a no-op test (no risk of false positive from
+    # a removed component) but it locks the canonical answer shape so a
+    # future refactor can't accidentally re-introduce a regex that
+    # would catch this turn.
     raw = json.dumps({
         "intent": "TOOL",
         "type_schedule": "0",
         "action": "confirm",
     })
     out = parse_classifier_output(raw, utterance="аннуитет, давай")
-    # The user is naming the schedule, not asking about it. intent=TOOL
-    # must survive and type_schedule must remain "0".
     assert out.intent == "TOOL"
     assert out.type_schedule == "0"
