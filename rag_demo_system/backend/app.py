@@ -1069,37 +1069,6 @@ async def _stream_voice_response(
         )
     print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
     if tool_schemas and not _skip:
-        # Build conversation context: last 3 turn pairs. Empirically, classifier
-        # only needs the last couple of exchanges to detect intent and extract
-        # hints; the full 7 pairs caused 1500-2300ms latency in production.
-        _recent_turns = chat_session.transcript[-6:] if chat_session.transcript else []  # 3 pairs
-        _conv_lines = []
-        for _turn in _recent_turns:
-            _role = "Клиент" if _turn.get("role") == "user" else "Бот"
-            _text = str(_turn.get('text', '') or '')
-            # Truncate long bot responses (KB answers can be 500+ chars) to keep
-            # classifier input short. User turns are typically short, truncation
-            # rarely hits them but keeps inputs bounded.
-            if len(_text) > 200:
-                _text = _text[:200].rsplit(' ', 1)[0] + '…'
-            _conv_lines.append(f"{_role}: {_text}")
-        _conv_context = "\n".join(_conv_lines) if _conv_lines else "начало разговора"
-
-        _tool_history = ""
-        # Whole-conversation view: prefer history (persists across turns) and
-        # also include any tool calls already appended this turn.
-        _all_tool_calls = session.tool_calls_history + session.tool_calls_this_turn
-        if _all_tool_calls:
-            _last_tools = []
-            for tc in _all_tool_calls[-3:]:
-                _tc_params = tc.get("params", {})
-                _tc_brief = f"{tc.get('tool', '')}(ok={tc.get('ok', '?')}"
-                if _tc_params.get("client_type"):
-                    _tc_brief += f", client_type={_tc_params['client_type']}"
-                _tc_brief += ")"
-                _last_tools.append(_tc_brief)
-            _tool_history = f"Инструменты в этом разговоре: {', '.join(_last_tools)}"
-
         _t_classify_start = time.time()
         # SessionAgent uses a dedicated small-model vLLM instance (Qwen3-4B on :8788)
         # to avoid scheduler contention with the main 35B model. Falls back to
@@ -1112,7 +1081,7 @@ async def _stream_voice_response(
                 base_url=_sa_base_url,
                 model=_sa_model,
                 system_prompt=build_classifier_system_prompt(),
-                user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
+                user_prompt=_build_classifier_user_prompt(chat_session, session, message),
                 temperature=0.0,
                 max_tokens=160,
                 timeout_sec=4,
@@ -2216,6 +2185,62 @@ async def _run_chat_session_analysis(
         print(f"[ChatTurn:{session_id[:8]}] analysis failed: {exc}", flush=True)
 
 
+def _build_classifier_user_prompt(
+    chat_session: Any,
+    voice_session: VoiceSession,
+    message: str,
+) -> str:
+    """Build the SessionAgent classifier user_prompt.
+
+    Shared between the Jambonz voice path and the chat /api/text-turn
+    path so single-word answers like 'да' / 'новая' / 'Минск' carry
+    enough dialog context to route correctly. Mirrors the inline
+    construction that previously lived at the voice classifier call
+    site (~app.py:1075-1115).
+
+    Inputs:
+      chat_session: SessionState with .transcript (list of role/text dicts).
+      voice_session: VoiceSession exposing tool_calls_history and
+        tool_calls_this_turn (both available for voice and chat).
+      message: the new user utterance to classify.
+
+    Output: a string with three sections (tool history, dialogue,
+    new message), the same shape parse_classifier_output expects.
+    """
+    # Last 3 turn pairs only — empirically the classifier needs no more
+    # than that, and full transcripts caused 1500-2300ms latency in
+    # production.
+    recent_turns = chat_session.transcript[-6:] if getattr(chat_session, "transcript", None) else []
+    conv_lines: list[str] = []
+    for turn in recent_turns:
+        role = "Клиент" if turn.get("role") == "user" else "Бот"
+        text = str(turn.get("text", "") or "")
+        # Truncate long bot responses (KB answers can be 500+ chars) to
+        # keep classifier input bounded.
+        if len(text) > 200:
+            text = text[:200].rsplit(" ", 1)[0] + "…"
+        conv_lines.append(f"{role}: {text}")
+    conv_context = "\n".join(conv_lines) if conv_lines else "начало разговора"
+
+    tool_history = ""
+    all_tool_calls = (
+        list(getattr(voice_session, "tool_calls_history", []) or [])
+        + list(getattr(voice_session, "tool_calls_this_turn", []) or [])
+    )
+    if all_tool_calls:
+        last_tools: list[str] = []
+        for tc in all_tool_calls[-3:]:
+            tc_params = tc.get("params", {}) or {}
+            tc_brief = f"{tc.get('tool', '')}(ok={tc.get('ok', '?')}"
+            if tc_params.get("client_type"):
+                tc_brief += f", client_type={tc_params['client_type']}"
+            tc_brief += ")"
+            last_tools.append(tc_brief)
+        tool_history = f"Инструменты в этом разговоре: {', '.join(last_tools)}"
+
+    return f"{tool_history}\n\nДиалог:\n{conv_context}\n\nНОВОЕ сообщение: {message}"
+
+
 async def _text_process_utterance(
     *,
     voice_session: VoiceSession,
@@ -2255,6 +2280,12 @@ async def _text_process_utterance(
     from .turn_dispatcher import apply_turn, execute_action
     from .llm import call_openai_compatible
 
+    # C1: Per-turn state reset — same as the voice dispatcher (app.py:905).
+    # Without this, tool_calls_this_turn stays non-empty after the first
+    # calc fires and downstream gates misbehave on subsequent turns
+    # (stuck-in-calculator loop, see voice_session.reset_turn_state docstring).
+    voice_session.reset_turn_state()
+
     voice_session.latest_finalized_turn_id += 1
     turn_id = voice_session.latest_finalized_turn_id
 
@@ -2280,7 +2311,13 @@ async def _text_process_utterance(
             base_url=sa_base_url,
             model=sa_model,
             system_prompt=build_classifier_system_prompt(),
-            user_prompt=message,
+            # I2: parity with the voice classifier — bare `message` loses
+            # dialog context, so single-word answers ('да', 'новая',
+            # 'Минск') route wrong. Shared helper builds the same
+            # tool-history + dialogue + new-message framing voice uses.
+            user_prompt=_build_classifier_user_prompt(
+                chat_session, voice_session, message,
+            ),
             temperature=0.0,
             max_tokens=160,
             timeout_sec=4,
@@ -2297,6 +2334,16 @@ async def _text_process_utterance(
         # synthesizes an empty CONVERSATION fallback when given empty
         # text, so dispatch still reaches FireLLMFallback or Noop.
         sa_output = parse_classifier_output("", message)
+
+    # C2: stamp the recent-dialogue memory block on the session so
+    # execute_action's FireLLMFallback handler can prepend it to the
+    # LLM prompt (turn_dispatcher.py:1500-1511). Without this, every
+    # chat LLM call sees only the current utterance and the bot
+    # forgets what was said two turns ago. Mirrors the voice path
+    # (app.py:933 + app.py:1226).
+    voice_session.memory_block = build_memory_block(
+        chat_session.transcript, settings.app.memory_turns,
+    )
 
     # 2. RAG retrieval in parallel (same shape as voice — voice_fast=False
     # because there's no audio latency budget to fight here).
@@ -2444,6 +2491,17 @@ async def _text_process_utterance(
                 phone=voice_session.client_phone or "",
                 state_dir=state_dir,
             ))
+        # I1: Remove the session from voice_sessions so the process
+        # doesn't leak memory across the lifetime of long-running
+        # deployments. Chat HTTP has no disconnect signal — if EndCall
+        # never fires (tab close), the entry would live forever
+        # otherwise. Transcript is already persisted to disk via
+        # save_chat_turn / mark_session_ended above; only the in-memory
+        # hot state is dropped here. Mirrors the voice path's pop on
+        # WebSocket disconnect (app.py:1965, 2984). The StateStore
+        # entry (state[session_id]) is intentionally NOT removed — it
+        # is the durable mirror used by analysis + transcript readers.
+        voice_sessions.pop(voice_session.session_id, None)
 
     return {
         "ok": True,

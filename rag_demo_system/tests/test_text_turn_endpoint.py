@@ -62,3 +62,61 @@ def test_text_turn_response_shape(client):
         "profile_state", "missing",
     ):
         assert key in data, f"missing key in response: {key}"
+
+
+def test_text_turn_multi_turn_resets_per_turn_state(client, monkeypatch):
+    """Two turns on the same session_id; verify reset_turn_state is called
+    so the second turn doesn't see the first turn's tool_calls_this_turn.
+    This is the regression test for the stuck-in-calculator loop (C1)."""
+    import backend.app as app_mod
+
+    captured_states: list[list] = []
+
+    # Spy on reset_turn_state to record each call so we can assert it
+    # fired on every turn (without coupling to the dispatcher internals).
+    real_reset = app_mod.VoiceSession.reset_turn_state
+
+    def _spy(self):
+        captured_states.append(list(self.tool_calls_this_turn))
+        return real_reset(self)
+
+    monkeypatch.setattr(app_mod.VoiceSession, "reset_turn_state", _spy)
+
+    sid = "chat-multi-1"
+    r1 = client.post(
+        "/api/text-turn",
+        json={"message": "Здравствуйте", "session_id": sid},
+    )
+    r2 = client.post(
+        "/api/text-turn",
+        json={"message": "Расскажи", "session_id": sid},
+    )
+    assert r1.status_code == 200 and r1.json()["ok"] is True
+    assert r2.status_code == 200 and r2.json()["ok"] is True
+    # Both turns should have invoked reset_turn_state at least once.
+    assert len(captured_states) >= 2, (
+        f"expected >= 2 reset_turn_state calls, got {len(captured_states)}"
+    )
+
+
+def test_text_turn_stamps_memory_block_for_llm_context(client):
+    """Verify voice_session.memory_block is populated after a turn so
+    FireLLMFallback can prepend it to the LLM prompt. Regression test
+    for the lost-conversational-memory bug (C2)."""
+    import backend.app as app_mod
+
+    sid = "chat-mem-1"
+    r = client.post(
+        "/api/text-turn",
+        json={"message": "Здравствуйте", "session_id": sid},
+    )
+    assert r.status_code == 200
+    vs = app_mod.voice_sessions.get(sid)
+    # If the session ended on this turn (EndCall), it would have been
+    # popped (I1). For "Здравствуйте" the dispatcher should NOT EndCall,
+    # so the entry must still exist with memory_block stamped.
+    assert vs is not None, "voice_session should still be in voice_sessions"
+    # memory_block should exist (may be empty string on turn 1 if the
+    # transcript hasn't grown, but the attribute MUST be set, not None).
+    assert hasattr(vs, "memory_block")
+    assert vs.memory_block is not None  # was None before C2 fix
