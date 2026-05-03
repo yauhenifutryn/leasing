@@ -29,16 +29,14 @@ def test_classifier_recent_turns_bound():
 def test_classifier_max_tokens_bound():
     src = _APP_PY.read_text(encoding="utf-8")
     # Find the classifier's call_openai_compatible invocation and its max_tokens.
-    marker = "Ты SessionAgent голосового бота"
+    # 2026-05-04: prompt was extracted to backend.classifier_prompt; locate the
+    # call site via the function-call marker instead of the prompt text.
+    marker = "system_prompt=build_classifier_system_prompt()"
     assert marker in src
     idx = src.index(marker)
-    # Look for the max_tokens line within ~20000 chars of the system prompt
-    # (the SessionAgent prompt grew again with Bug 29's expanded END_CALL
-    # examples + bare-form type_schedule examples + odd-month term examples,
-    # in response to live call 3d32af7f 2026-05-03 where the classifier
-    # missed inflected forms. The contract under test is the integer bound,
-    # not the prompt size — the prompt-text scan window is just a locator.
-    block = src[idx : idx + 20000]
+    # Look for the max_tokens line within ~2000 chars of the call site (only
+    # the bound is the contract; the window is just a locator).
+    block = src[idx : idx + 2000]
     # max_tokens must stay <=180 to keep latency bounded. 160 is the current
     # safe value (full JSON ~140 tokens + 20 headroom).
     import re as _re
