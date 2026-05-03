@@ -1032,3 +1032,116 @@ async def test_stream_llm_to_tts_no_failure_passes_through():
     joined = " ".join(yielded)
     assert "Здравствуйте" in joined
     assert "технические неполадки" not in joined
+
+
+# ---------------------------------------------------------------- Bug 21 (ANALYSIS.md §8): post-SMS continuation
+# Live evidence: bot ends conversation after "Отправила график платежей по
+# СМС...". Bug 21 appends "Чем ещё могу помочь по лизингу?" so the call
+# stays open for follow-up questions instead of trailing into silence.
+
+
+class _FakeCalcTool:
+    """Minimal stand-in for the calculator tool registered in
+    backend.tools — only `format_sms_body` is exercised by the FireSMS
+    handler."""
+    def format_sms_body(self, result: dict) -> str:
+        return "График платежей: 1500 BYN/мес, 36 мес."
+
+
+class _FakeSmsTool:
+    """Minimal stand-in for SmsSenderTool. `execute` returns ok=True so
+    the success branch fires; record params for assertion."""
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
+        self.last_params: dict | None = None
+
+    def execute(self, params: dict, session_context: dict) -> dict:
+        self.last_params = dict(params)
+        return {"ok": self.ok, "id": "stub"}
+
+
+class _FakeSmsSession(FakeVoiceSession):
+    """Adds the read-side fields the FireSMS handler consults: prior
+    calc tool history + caller phone number."""
+    def __init__(self, phone: str = "+375291234567") -> None:
+        super().__init__()
+        self.tool_calls_history: list[dict] = [
+            {"tool": "calculator", "params": dict(_CALC_PARAMS),
+             "result": {"ok": True, **_CALC_RESULT_OK}},
+        ]
+        self.client_phone = phone
+
+
+@pytest.mark.asyncio
+async def test_fire_sms_success_appends_continuation_prompt(monkeypatch) -> None:
+    """Bug 21: after a successful SMS, the spoken text MUST include the
+    follow-up offer 'Чем ещё могу помочь по лизингу?' so the bot doesn't
+    trail into silence."""
+    from backend.turn_dispatcher import execute_action
+    from backend.turn_action import FireSMS
+    from backend import tools as _tools
+
+    sms_tool = _FakeSmsTool(ok=True)
+    monkeypatch.setattr(_tools, "get_tool", lambda name: (
+        _FakeCalcTool() if name == "calculator" else
+        sms_tool if name == "send_sms" else None
+    ))
+
+    session = _FakeSmsSession()
+    tts = FakeTts()
+
+    async def _ws_send_json(payload):  # ws stub
+        return None
+
+    class _StubWs:
+        async def send_json(self, payload):  # noqa: D401
+            return None
+
+    fire = FireSMS(snapshot=_complete_snapshot_usd_to_byn())
+    async for _ in execute_action(
+        fire, ws=_StubWs(), session=session, backend=FakeLLMBackend(),
+        tts=tts, calc=FakeCalc(), rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert "Отправила" in spoken
+    assert sms_tool.last_params is not None
+    assert sms_tool.last_params["phone"] == "+375291234567"
+    # Bug 21 contract: the continuation prompt is appended on success.
+    assert "Чем ещё могу помочь по лизингу" in spoken
+
+
+@pytest.mark.asyncio
+async def test_fire_sms_failure_does_not_append_continuation(monkeypatch) -> None:
+    """When the SMS provider returns ok=False, the handler speaks the
+    apology line — Bug 21's continuation phrase belongs only to the
+    success branch (failure already invites the user to retry / verify
+    the number, an extra 'чем ещё могу помочь' would be jarring)."""
+    from backend.turn_dispatcher import execute_action
+    from backend.turn_action import FireSMS
+    from backend import tools as _tools
+
+    sms_tool = _FakeSmsTool(ok=False)
+    monkeypatch.setattr(_tools, "get_tool", lambda name: (
+        _FakeCalcTool() if name == "calculator" else
+        sms_tool if name == "send_sms" else None
+    ))
+
+    session = _FakeSmsSession()
+    tts = FakeTts()
+
+    class _StubWs:
+        async def send_json(self, payload):
+            return None
+
+    fire = FireSMS(snapshot=_complete_snapshot_usd_to_byn())
+    async for _ in execute_action(
+        fire, ws=_StubWs(), session=session, backend=FakeLLMBackend(),
+        tts=tts, calc=FakeCalc(), rag_future=None,
+    ):
+        pass
+
+    spoken = tts.collected_text()
+    assert "не удалось отправить" in spoken.lower()
+    assert "Чем ещё могу помочь по лизингу" not in spoken

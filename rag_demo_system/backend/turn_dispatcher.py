@@ -1246,7 +1246,14 @@ async def execute_action(
             pass
 
         if _ok:
-            spoken = f"Отправила график платежей по СМС на номер {_phone}."
+            # Bug 21 (ANALYSIS.md §8): the bot used to trail into silence
+            # after the SMS confirmation, leaving the caller to volunteer
+            # any next step. Append the canonical continuation offer so
+            # the call stays open for follow-up questions.
+            spoken = (
+                f"Отправила график платежей по СМС на номер {_phone}. "
+                "Чем ещё могу помочь по лизингу?"
+            )
         else:
             spoken = (
                 "Извините, не удалось отправить СМС. "
