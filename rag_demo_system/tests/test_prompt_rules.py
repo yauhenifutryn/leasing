@@ -142,6 +142,29 @@ def test_v2_prompt_lists_actionable_alternatives_to_escalation() -> None:
     assert has_online or has_calc or has_phone
 
 
+# ── Bug 20 follow-up: unknown abbreviations rule ──────────────────────
+# Live call b5d70d6a 2026-05-03 19:47: caller said "АПДН"; bot replied
+# "не встречала... уточню у специалиста" — escalated immediately. The
+# preferred behavior is to acknowledge the gap, offer a similar known
+# term, ask the user to rephrase, and only escalate as a last resort.
+
+def test_v2_prompt_handles_unknown_abbreviations_without_escalating() -> None:
+    text = _v2_text().lower()
+    # Header + key phrasing for the unknown-abbreviation rule.
+    assert "незнакомые аббревиатуры" in text or "незнакомых аббревиатур" in text
+    # Must explicitly say "do NOT escalate by default".
+    assert "не переключайте" in text or "не переключать" in text
+
+
+def test_v2_prompt_unknown_abbrev_offers_similar_known_term() -> None:
+    text = _v2_text().lower()
+    # The rule must explicitly tell the LLM to offer похожий термин
+    # from the leasing domain (ПДН, ИНН, УНП) so the bot can guess.
+    assert "возможно, вы имели в виду" in text
+    # At least one canonical similar abbreviation listed inline.
+    assert "пдн" in text or "инн" in text or "унп" in text
+
+
 # ── Bug 23: encourage immediate document submission ────────────────────
 # Client wants the bot to actively upsell: "если подадите документы
 # прямо сейчас онлайн, решение придёт в течение одного рабочего дня".
