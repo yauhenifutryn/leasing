@@ -309,6 +309,20 @@ _ABBREV_TTS: dict[str, str] = {
     "ОАО": "о а о",
     "США": "сэ шэ а",
     "ИООО": "и о о о",
+    # Bug 26 (live call b5d70d6a 2026-05-03): Silero reads ПДН as
+    # "пэ-дэ-эн-эн" (extra trailing эн) and РФ as "эр-эф-эф" — appending
+    # phantom phonemes to short Cyrillic uppercase tokens. The phonetic
+    # spelling here pre-empts that path so TTS narrates the canonical
+    # form. Domain-specific phonetic dictionary is the standard fix
+    # for Silero pronunciation drift; not a behavior-conditioning hack.
+    "ПДН": "пэ дэ эн",
+    "ПДн": "пэ дэ эн",  # mixed case occasionally emitted by LLM
+    "РФ": "эр эф",
+    "РБ": "эр бэ",
+    "АО": "акционерное общество",
+    "ЕС": "е эс",
+    "ФСБ": "эф эс бэ",
+    "ВВП": "вэ вэ пэ",
 }
 
 # Build regex that matches any abbreviation (longest first to avoid partial matches)
