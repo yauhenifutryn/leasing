@@ -113,3 +113,30 @@ def test_v2_prompt_bans_offline_submission_channels() -> None:
     assert "почт" in text  # почтой / по почте / почту
     assert "курьер" in text
     assert "email" in text or "имейл" in text
+
+
+# ── Bug 20: over-escalation to specialist ──────────────────────────────
+# Client review: "часто отправляет к специалисту". The bot's stock
+# fallback for any uncertain question is "уточню у специалиста". The
+# prompt half of the fix tightens the fallback wording — prefer "I
+# don't have that detail right now" + a concrete actionable next step
+# (online submission link, calculator, contact phone) over a stock
+# escalation. KB enrichment is a parallel track (deferred).
+
+def test_v2_prompt_documents_preferred_fallback_phrase() -> None:
+    text = _v2_text().lower()
+    assert "пока нет точной информации" in text, (
+        "Bug 20: prompt must lock in the preferred non-escalating "
+        "fallback phrase 'пока нет точной информации'."
+    )
+
+
+def test_v2_prompt_lists_actionable_alternatives_to_escalation() -> None:
+    text = _v2_text().lower()
+    # The fallback rule must name at least one concrete next step the
+    # bot can offer instead of escalating: online submission, calculator,
+    # or the contact phone.
+    has_online = "онлайн" in text and ("личный кабинет" in text or "mikro-leasing.by" in text)
+    has_calc = "калькулятор" in text
+    has_phone = "+375 17 322 77 00" in text or "+375" in text
+    assert has_online or has_calc or has_phone
