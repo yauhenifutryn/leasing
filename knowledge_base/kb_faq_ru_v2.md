@@ -1,5 +1,23 @@
 # Knowledge Base
 
+<!--
+LEGACY — DO NOT EDIT
+====================
+
+Status: superseded 2026-05-04 by `kb_topics_ru.md` (topical layout).
+Active KB on the server: `kb_topics_ru.md` when KB_LAYOUT=topical (current production setting).
+This file is kept for:
+  1. Rollback safety — `KB_LAYOUT=legacy` (or unset) routes back to this file via `backend/settings.py:_resolve_kb_path`.
+  2. Source of truth for the topical-KB content audit — when adding sections to `kb_topics_ru.md`, cross-check the equivalent v2 section here.
+  3. Archive of pre-refactor content while Phase D (kb_synonyms.yaml + bot_playbook.yaml) is pending.
+
+Editing this file is DISCOURAGED. New facts should go into `kb_topics_ru.md` under the appropriate `## Тема:` and `### section_id:` block. Bug fixes that need to land in legacy too should be applied to BOTH files in the same commit.
+
+Rename target: deferred. The path `kb_faq_ru_v2.md` is still referenced from `config/app.yaml`. A future cleanup commit can rename this to `kb_faq_ru.legacy_v2.md` and update the config in lockstep, but only after Phase D ships and a full deploy cycle confirms KB_LAYOUT=topical is the permanent active configuration.
+
+See: `.planning/master_plan_2026_04_18/07_kb_refinement_phase_b_decisions.md` for the original refactor decisions, and `project_chat_widget_refinement_backlog_2026_05_04.md` for the audit gap that surfaced 2026-05-04 (company-identity content was missing from the topical refactor; fixed in commit c3f6c66 + lease-types-overview follow-up).
+-->
+
 ## лизинг грузового ТС НДС
 **Вопрос:** Какие требования к лизингу грузового транспорта для ИП/юрлица и как учитывается НДС и VIN?
 
