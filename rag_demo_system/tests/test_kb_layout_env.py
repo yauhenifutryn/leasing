@@ -1,8 +1,8 @@
-"""Section 7 Phase C.5 — KB_LAYOUT env var resolves to legacy or topical KB file.
+"""Section 7 Phase C.5 — KB_LAYOUT env var resolves to topical or legacy KB file.
 
-Default `legacy` keeps current behavior (kb_faq_ru_v2.md).
-`topical` resolves to kb_topics_ru.md (the Phase C output).
-Invalid values fall back to legacy with a warning.
+Default flipped 2026-05-04: unset/topical → kb_topics_ru.md (active),
+explicit `legacy` → kb_faq_ru_v2.md (rollback). Invalid values fall back to
+the topical default.
 """
 from pathlib import Path
 import sys
@@ -18,10 +18,18 @@ def _isolate_kb_layout(monkeypatch):
     monkeypatch.delenv("KB_LAYOUT", raising=False)
 
 
-def test_kb_layout_unset_uses_legacy_v2_md(monkeypatch):
+def test_kb_layout_unset_uses_topical_topics_md(monkeypatch):
     _isolate_kb_layout(monkeypatch)
     loaded = settings_module.load_settings()
-    assert loaded.app.kb_markdown_path.name == "kb_faq_ru_v2.md"
+    assert loaded.app.kb_markdown_path.name == "kb_topics_ru.md"
+
+
+def test_kb_layout_topical_explicit_uses_topics_md(monkeypatch):
+    monkeypatch.setenv("KB_LAYOUT", "topical")
+    loaded = settings_module.load_settings()
+    assert loaded.app.kb_markdown_path.name == "kb_topics_ru.md"
+    # Path should be under knowledge_base/
+    assert loaded.app.kb_markdown_path.parent.name == "knowledge_base"
 
 
 def test_kb_layout_legacy_explicit_uses_v2_md(monkeypatch):
@@ -30,25 +38,23 @@ def test_kb_layout_legacy_explicit_uses_v2_md(monkeypatch):
     assert loaded.app.kb_markdown_path.name == "kb_faq_ru_v2.md"
 
 
-def test_kb_layout_topical_resolves_to_topics_md(monkeypatch):
-    monkeypatch.setenv("KB_LAYOUT", "topical")
-    loaded = settings_module.load_settings()
-    assert loaded.app.kb_markdown_path.name == "kb_topics_ru.md"
-    # Path should be under knowledge_base/ regardless of legacy config value
-    assert loaded.app.kb_markdown_path.parent.name == "knowledge_base"
-
-
 def test_kb_layout_topical_uppercase_normalized(monkeypatch):
     monkeypatch.setenv("KB_LAYOUT", "TOPICAL")
     loaded = settings_module.load_settings()
     assert loaded.app.kb_markdown_path.name == "kb_topics_ru.md"
 
 
-def test_kb_layout_invalid_falls_back_to_legacy(monkeypatch):
+def test_kb_layout_legacy_uppercase_normalized(monkeypatch):
+    monkeypatch.setenv("KB_LAYOUT", "LEGACY")
+    loaded = settings_module.load_settings()
+    assert loaded.app.kb_markdown_path.name == "kb_faq_ru_v2.md"
+
+
+def test_kb_layout_invalid_falls_back_to_topical(monkeypatch):
     monkeypatch.setenv("KB_LAYOUT", "garbage_value")
     loaded = settings_module.load_settings()
-    # Invalid -> legacy fallback (no crash)
-    assert loaded.app.kb_markdown_path.name == "kb_faq_ru_v2.md"
+    # Invalid -> topical fallback (the new default), no crash
+    assert loaded.app.kb_markdown_path.name == "kb_topics_ru.md"
 
 
 def test_kb_layout_topical_path_resolves_against_repo_root(monkeypatch):
