@@ -90,6 +90,12 @@
       headerMeta.textContent = name || 'Аноним';
       intake.remove();
       composerInput.focus();
+      // Bot kickoff after intake — voice has a hardcoded TTS intro played
+      // before any dispatcher turn. Mirror that here as a frontend-only
+      // bubble (does NOT go through /api/text-turn).
+      setTimeout(function() {
+        append('bot', 'Здравствуйте! Я Ксения, помощница Микро Лизинг. Помогу с вопросами по лизингу и расчётом. Чем могу помочь?');
+      }, 200);
     });
     transcript.appendChild(intake);
 
@@ -217,6 +223,10 @@
       el('p', { text: 'Если оставите телефон, мы отправим расчёт в SMS и сможем перезвонить.' }),
       el('div', { class: 'mlc-fields' }, [nameInput, phoneInput]),
       el('div', { class: 'mlc-intake-actions' }, [startBtn, skipBtn]),
+      el('p', {
+        class: 'mlc-consent',
+        text: 'Нажимая «Начать», вы соглашаетесь на обработку персональных данных.'
+      }),
     ]);
   }
 

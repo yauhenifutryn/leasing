@@ -2636,6 +2636,11 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
             voice_session = VoiceSession(session_id=session_id, transport="chat")
             voice_session.client_name = (req.name or "").strip()
             voice_session.client_phone = (req.phone or "").strip() or None
+            # Profile state machine reads client_profile.name. Without this, the
+            # classifier later fills the empty slot with whatever non-name input
+            # arrives next ("фиизическое", etc.). Mirror voice's name-capture step.
+            if voice_session.client_name:
+                voice_session.client_profile.name = voice_session.client_name
             voice_sessions[session_id] = voice_session
             try:
                 await broadcast_sip_event({
