@@ -2489,6 +2489,12 @@ async def _text_process_utterance(
     if not full_reply:
         full_reply = " ".join(text_sink.collected).strip()
 
+    # Chat-only post-processing: KB strings are TTS-phonetic ("точка бай",
+    # "инфо собака"). Convert to display form before persisting/broadcasting.
+    if full_reply:
+        from .tts_to_chat_render import tts_to_chat_render
+        full_reply = tts_to_chat_render(full_reply)
+
     ended = action_name == "EndCall"
 
     # Update the SessionState transcript (used by per-turn persistence

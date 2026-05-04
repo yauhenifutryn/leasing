@@ -32,6 +32,47 @@
     document.head.appendChild(link);
   }
 
+  // ── Sounds (Web Audio API tones; no asset downloads) ──
+  // Mute persists in localStorage so the choice survives reload.
+  var MUTE_KEY = 'mlc_muted';
+  function isMuted() { return localStorage.getItem(MUTE_KEY) === '1'; }
+  function setMuted(v) { localStorage.setItem(MUTE_KEY, v ? '1' : '0'); }
+
+  var _audioCtx = null;
+  function audioCtx() {
+    if (_audioCtx) return _audioCtx;
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try { _audioCtx = new Ctx(); } catch (e) { return null; }
+    return _audioCtx;
+  }
+
+  function playTick(freqStart, freqEnd, durMs) {
+    if (isMuted()) return;
+    var ctx = audioCtx();
+    if (!ctx) return;
+    // Some browsers suspend AudioContext until first user gesture; try to resume.
+    if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
+    var t0 = ctx.currentTime;
+    var t1 = t0 + (durMs / 1000);
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freqStart, t0);
+    if (freqEnd !== freqStart) osc.frequency.exponentialRampToValueAtTime(freqEnd, t1);
+    // Gentle envelope: quick attack, exponential decay (avoids click).
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t1);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t1 + 0.02);
+  }
+
+  function playSendTick() { playTick(880, 880, 60); }       // bright single beep
+  function playReceiveTick() { playTick(1320, 880, 110); }  // descending two-tone
+
   function genSessionId() {
     var key = 'mlc_session_id';
     var sid = sessionStorage.getItem(key);
@@ -83,7 +124,23 @@
       onclick: function() { downloadMarkdown(); },
       disabled: 'true',
     });
-    var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta, downloadBtn]);
+    var muteBtn = el('button', {
+      class: 'mlc-mute',
+      text: isMuted() ? '🔇' : '🔊',
+      'aria-label': isMuted() ? 'Включить звук' : 'Выключить звук',
+      title: isMuted() ? 'Включить звук' : 'Выключить звук',
+      onclick: function() {
+        var nowMuted = !isMuted();
+        setMuted(nowMuted);
+        muteBtn.textContent = nowMuted ? '🔇' : '🔊';
+        var label = nowMuted ? 'Включить звук' : 'Выключить звук';
+        muteBtn.setAttribute('aria-label', label);
+        muteBtn.setAttribute('title', label);
+        // First click also unlocks AudioContext on browsers that gate it.
+        if (!nowMuted) { var c = audioCtx(); if (c && c.state === 'suspended') { try { c.resume(); } catch (e) {} } }
+      },
+    });
+    var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta, muteBtn, downloadBtn]);
 
     var intake = buildIntake(function(n, p) {
       name = n; phone = p;
@@ -166,6 +223,7 @@
       composerInput.style.height = 'auto';
       sendBtn.disabled = true;
       append('user', msg);
+      playSendTick();
       try {
         var resp = await fetch((API || '') + '/api/text-turn', {
           method: 'POST',
@@ -181,7 +239,7 @@
         if (!data.ok) {
           append('bot', '[ошибка: ' + (data.error || 'unknown') + ']');
         } else {
-          if (data.reply) append('bot', data.reply);
+          if (data.reply) { append('bot', data.reply); playReceiveTick(); }
           var a = data.action || '';
           if (a === 'FireCalc') appendChip('Расчёт готов');
           else if (a === 'FireSMS') appendChip('SMS отправлено');

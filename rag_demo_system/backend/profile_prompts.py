@@ -245,13 +245,14 @@ def render_calc_result(result: dict[str, Any], detailed: bool = False) -> str:
     session_analyzer can confirm this path drove the spoken result.
 
     Bug 25 (ANALYSIS.md §8) — default form is terse (4 values: cost,
-    term, prepaid pct, monthly payment) plus the canonical follow-up
-    offer "хотите подробный расчёт или СМС". The advanced breakdown
-    (выкупной / общая сумма / удорожание) renders only when
-    `detailed=True`, which apply_turn signals via EmitCalcDetail when
-    the caller asks "подробнее" / "полный расчёт" / "удорожание". This
-    mirrors Just AI's terse readback pattern (clip 6:03-6:25): the bot
-    leads with the headline figure and the caller can drill in on demand.
+    term, prepaid pct, monthly payment) plus a follow-up offer. Bug 8
+    fix (2026-05-04) split the offer: terse form asks only about detail,
+    detailed form asks only about SMS. The advanced breakdown (выкупной
+    / общая сумма / удорожание) renders only when `detailed=True`,
+    which apply_turn signals via EmitCalcDetail when the caller asks
+    "подробнее" / "полный расчёт" / "удорожание". This mirrors Just AI's
+    terse readback pattern (clip 6:03-6:25): the bot leads with the
+    headline figure and the caller can drill in on demand.
 
     When the direct-call path carried a USD->BYN conversion (Fix 1.2), the
     result dict contains `currency_conversion` and the summary is prefixed
@@ -326,13 +327,20 @@ def render_calc_result(result: dict[str, Any], detailed: bool = False) -> str:
             f"Удорожание: {_fmt_pct(result.get('increase_percent'))}%."
         )
 
+    # Bug 8 fix (2026-05-04) — sequential offers, never combined.
+    # Pre-fix: a single combined "Хотите подробный расчёт ИЛИ отправить
+    # график по СМС?" question made bare "давай" ambiguous in chat — the
+    # classifier returned generic CONFIRM, the LLM fallback generated
+    # "отправим..." text but the dispatcher never fired send_sms.
+    # Post-fix: ask one thing at a time, matching the natural voice flow.
+    # First post-calc turn → detail offer; once detail is delivered → SMS
+    # offer. Either offer accepts a bare "давай" unambiguously: detail
+    # routes through EmitCalcDetail; SMS routes through detect_sms_intent
+    # affirmation-after-calc path (sms_intent.py).
     if detailed:
-        offer = " Что-нибудь ещё уточнить?"
+        offer = " Отправить график платежей по СМС?"
     else:
-        offer = (
-            " Хотите услышать подробный расчёт или отправить график "
-            "платежей по СМС?"
-        )
+        offer = " Хотите услышать подробный расчёт?"
 
     return f"{conv_prefix}{head}{detail_block}{defaults_note}{offer}"
 

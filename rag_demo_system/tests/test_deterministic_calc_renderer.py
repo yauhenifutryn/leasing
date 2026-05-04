@@ -90,14 +90,28 @@ def test_render_calc_result_rounds_decimal_money() -> None:
     assert "12.5" in out          # percentage keeps one decimal
 
 
-def test_render_calc_result_terse_offer_mentions_detail_and_sms() -> None:
-    """Bug 25 contract: terse render closes with the canonical follow-up
-    offer 'Хотите услышать подробный расчёт или отправить график по СМС?'
-    so the caller knows the deeper numbers are available on demand."""
+def test_render_calc_result_terse_offer_mentions_detail_only() -> None:
+    """Bug 8 fix (2026-05-04, supersedes original Bug 25 contract): the
+    terse-form offer asks ONLY about detail, not detail-or-SMS combined.
+    The combined question made bare 'давай' ambiguous in chat. SMS gets
+    its own follow-up offer once detail is delivered (covered by
+    `test_render_calc_result_detailed_offer_mentions_sms_only`)."""
     out = render_calc_result(_minimal_result())
     lower = out.lower()
     assert "подробн" in lower, f"detail offer missing: {out}"
-    assert "смс" in lower, f"SMS offer missing: {out}"
+    assert "смс" not in lower, f"combined SMS offer should NOT appear in terse form: {out}"
+
+
+def test_render_calc_result_detailed_offer_mentions_sms_only() -> None:
+    """Bug 8 fix companion: after the detail block has been spoken
+    (`detailed=True`), the closing offer asks about SMS — the next step
+    in the natural sequential flow. 'давай' here is unambiguous."""
+    out = render_calc_result(_minimal_result(), detailed=True)
+    lower = out.lower()
+    assert "смс" in lower, f"detailed-form SMS offer missing: {out}"
+    assert "подробн" not in lower.split("выкупной")[-1], (
+        f"detailed form should not re-offer detail after delivering it: {out}"
+    )
 
 
 def test_render_calc_result_detailed_form_includes_advanced_fields() -> None:
