@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,14 @@ _jambonz_last_caller_phone: str = ""
 # SIP monitor: connected WebSocket clients for live event streaming
 _sip_monitor_clients: set[WebSocket] = set()
 
+# Bounded ring buffer of recent SIP events. Replayed to monitor clients
+# on connect so the chat-widget iframe doesn't miss broadcasts that
+# happened during the brief gap between iframe-load and WS-open. Size
+# 500 covers ~10 minutes of a busy chat or a moderately long voice call;
+# older events are dropped silently. Read-only mirror of broadcast_sip_event
+# inputs — never reordered.
+_sip_event_history: deque[dict[str, Any]] = deque(maxlen=500)
+
 # Info-seeking question markers — used by RAG-guard to prevent stale
 # calculator retriggers on non-tool questions after profile is CONFIRMED.
 _INFO_QUESTION_RE = re.compile(
@@ -107,7 +116,14 @@ _VALID_SESSION_ID = re.compile(r"^chat-[A-Za-z0-9_-]{6,64}$")
 
 
 async def broadcast_sip_event(event: dict[str, Any]) -> None:
-    """Fire-and-forget broadcast to all connected SIP monitor pages."""
+    """Fire-and-forget broadcast to all connected SIP monitor pages.
+
+    Also appends to _sip_event_history so a monitor that connects right
+    after a chat session starts can replay the broadcasts it missed
+    during iframe-load → WS-open. The history is bounded (deque maxlen),
+    so long-running voice calls won't accumulate forever.
+    """
+    _sip_event_history.append(event)
     for ws in list(_sip_monitor_clients):
         try:
             await ws.send_json(event)
@@ -3246,8 +3262,25 @@ async def jambonz_credentials() -> JSONResponse:
 
 @app.websocket("/ws/sip-monitor")
 async def sip_monitor_ws(websocket: WebSocket) -> None:
-    """Read-only WebSocket for SIP call monitoring."""
+    """Read-only WebSocket for SIP call monitoring.
+
+    On connect, replays the recent event history (bounded by
+    _sip_event_history.maxlen) before subscribing to new broadcasts.
+    Without replay, a chat-widget iframe that opens its WS slightly
+    after the first chat broadcast would miss those events forever
+    until the page is refreshed (the user-reported "monitor empty"
+    bug 2026-05-08). Snapshot-then-subscribe order ensures we don't
+    double-deliver events that arrive during iteration.
+    """
     await websocket.accept()
+    history_snapshot = list(_sip_event_history)
+    try:
+        for past in history_snapshot:
+            await websocket.send_json(past)
+    except Exception:  # noqa: BLE001
+        # Client closed during replay; nothing to clean up since we
+        # haven't joined the broadcast set yet.
+        return
     _sip_monitor_clients.add(websocket)
     try:
         while True:
