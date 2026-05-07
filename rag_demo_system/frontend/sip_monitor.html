@@ -41,7 +41,7 @@
 </style>
 </head>
 <body>
-<h1><span class="status disconnected" id="statusDot"></span>SIP Monitor<span id="filterLabel"></span></h1>
+<h1><span class="status disconnected" id="statusDot"></span><span id="monitorTitle">SIP Monitor</span><span id="filterLabel"></span></h1>
 <div class="controls">
   <select id="userFilter" style="font-family:monospace; padding:5px 8px; border:1px solid #ccc; border-radius:3px; margin-right:8px; background:#fff;">
     <option value="">All accounts</option>
@@ -98,7 +98,14 @@
   if (filterUser) {
     document.getElementById('filterLabel').textContent = ' — ' + filterUser;
   } else if (filterSession) {
+    // Chat-embedded mode: this iframe lives inside chat_widget.html, so
+    // SIP-flavored chrome (the "SIP" word, the Zoiper Setup card) is
+    // noise. Shorten the title and hide the setup card; operator's
+    // standalone monitor (no ?session= param) keeps full chrome.
+    document.getElementById('monitorTitle').textContent = 'Monitor';
     document.getElementById('filterLabel').textContent = ' — chat ' + filterSession.substr(0, 12);
+    var setupCard = document.getElementById('setupCard');
+    if (setupCard) setupCard.style.display = 'none';
     // No dropdown switching while session-pinned (different filter axis).
     if (filterSelect) filterSelect.style.display = 'none';
   }
@@ -364,8 +371,12 @@
     document.body.removeChild(ta);
   }
 
-  // Load SIP credentials from API
-  fetch('/api/jambonz/credentials')
+  // Load SIP credentials from API. Skip entirely in chat-embedded mode
+  // (filterSession set) — the iframe doesn't need Zoiper credentials,
+  // and the fetch's success callback would re-show the setup card we
+  // just hid above. We still fall through to connect() below so the
+  // monitor WS opens and replays history.
+  if (!filterSession) fetch('/api/jambonz/credentials')
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.ok) {

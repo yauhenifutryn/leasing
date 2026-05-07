@@ -98,6 +98,17 @@ _sip_monitor_clients: set[WebSocket] = set()
 # inputs — never reordered.
 _sip_event_history: deque[dict[str, Any]] = deque(maxlen=500)
 
+# Serializes broadcast_sip_event's history-append + client-set-snapshot
+# with sip_monitor_ws's history-snapshot + client-set-add. Without this
+# lock, a broadcast that fires during a new client's replay window
+# appends to history but iterates a clients-list that doesn't yet
+# include the new client — and the new client's snapshot was taken
+# before the append. Net: live event lost for the new client until
+# refresh triggers another replay. With the lock, the snapshot+add is
+# atomic with respect to broadcasts, so every event is delivered
+# exactly once (via replay if pre-join, via live broadcast if post-join).
+_sip_broadcast_lock = asyncio.Lock()
+
 # Info-seeking question markers — used by RAG-guard to prevent stale
 # calculator retriggers on non-tool questions after profile is CONFIRMED.
 _INFO_QUESTION_RE = re.compile(
@@ -122,9 +133,18 @@ async def broadcast_sip_event(event: dict[str, Any]) -> None:
     after a chat session starts can replay the broadcasts it missed
     during iframe-load → WS-open. The history is bounded (deque maxlen),
     so long-running voice calls won't accumulate forever.
+
+    History append + client snapshot are guarded by _sip_broadcast_lock
+    so a fresh sip_monitor_ws connection sees a consistent point-in-time
+    view: either the event is in its replay snapshot (pre-join) or it
+    arrives via the live broadcast (post-join). The lock is released
+    before the actual `send_json` calls so slow clients don't block
+    other broadcasts.
     """
-    _sip_event_history.append(event)
-    for ws in list(_sip_monitor_clients):
+    async with _sip_broadcast_lock:
+        _sip_event_history.append(event)
+        clients = list(_sip_monitor_clients)
+    for ws in clients:
         try:
             await ws.send_json(event)
         except Exception:  # noqa: BLE001
@@ -3264,28 +3284,30 @@ async def jambonz_credentials() -> JSONResponse:
 async def sip_monitor_ws(websocket: WebSocket) -> None:
     """Read-only WebSocket for SIP call monitoring.
 
-    On connect, replays the recent event history (bounded by
-    _sip_event_history.maxlen) before subscribing to new broadcasts.
-    Without replay, a chat-widget iframe that opens its WS slightly
-    after the first chat broadcast would miss those events forever
-    until the page is refreshed (the user-reported "monitor empty"
-    bug 2026-05-08). Snapshot-then-subscribe order ensures we don't
-    double-deliver events that arrive during iteration.
+    On connect, snapshots the recent event history under
+    _sip_broadcast_lock and ATOMICALLY joins the broadcast set, then
+    streams the snapshot. Holding the lock around snapshot+add means
+    every broadcast is either:
+      - already in the snapshot (its history-append happened first), or
+      - delivered live via the post-join client set (its append happened
+        after we joined).
+    No event can fall in a gap. This prevents the live-streaming
+    flakiness reported 2026-05-08 where chat events occasionally
+    appeared only after a page refresh.
     """
     await websocket.accept()
-    history_snapshot = list(_sip_event_history)
+    async with _sip_broadcast_lock:
+        history_snapshot = list(_sip_event_history)
+        _sip_monitor_clients.add(websocket)
     try:
         for past in history_snapshot:
             await websocket.send_json(past)
-    except Exception:  # noqa: BLE001
-        # Client closed during replay; nothing to clean up since we
-        # haven't joined the broadcast set yet.
-        return
-    _sip_monitor_clients.add(websocket)
-    try:
         while True:
             await websocket.receive_text()  # keepalive
     except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        # Other client-side error during replay or keepalive — tear down.
         pass
     finally:
         _sip_monitor_clients.discard(websocket)
