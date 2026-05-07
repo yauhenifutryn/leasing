@@ -118,7 +118,10 @@
       hasSavedSession = !!savedName || (sessionStorage.getItem('mlc_phone') !== null);
     } catch (e) {}
 
-    var sessionId = opts.sessionId || genSessionId();
+    // Allocate the chat session before mountHost builds the monitor iframe.
+    // Fresh visits must not reuse an orphaned pre-consent id, but the id
+    // also must not change after the iframe receives ?session=.
+    var sessionId = opts.sessionId || (hasSavedSession ? genSessionId() : newSessionId());
     var name = '';
     var phone = '';
     var messages = [];   // {role: 'user'|'bot'|'chip', text, ts (ms epoch)}
@@ -202,17 +205,16 @@
     function activatePanel(n, p, isFresh) {
       name = n; phone = p;
       if (isFresh) {
-        // First-time activation: brand-new server-side session.
-        sessionId = newSessionId();
+        // First-time activation: keep the already allocated session_id so
+        // the monitor iframe filter and /api/text-turn use the same value.
         try {
           sessionStorage.setItem('mlc_name', name || '');
           sessionStorage.setItem('mlc_phone', phone || '');
         } catch (e) {}
       } else {
-        // Restore: keep the existing session_id from sessionStorage so the
+        // Restore: sessionId already came from sessionStorage so the
         // server-side state machine (profile, transcript, tool history)
         // survives the refresh.
-        sessionId = genSessionId();
       }
       headerMeta.textContent = name || 'Аноним';
       composerInput.disabled = false;
