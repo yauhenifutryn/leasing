@@ -3022,10 +3022,12 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     vad.feed(pcm_16k)
 
                     # Barge-in: require BOTH VAD probability AND audio energy (RMS).
-                    # Silero VAD has state residue: after real speech, prob stays 0.99+
-                    # for many frames even on silence. RMS check catches this:
-                    # echo/silence RMS = 0-110, real speech RMS = 2000+.
-                    # RMS floor 300 cleanly separates them.
+                    # Silero VAD has state residue: after real speech, prob stays 0.84+
+                    # for many frames even on silence/echo, often pulling RMS up to
+                    # ~600-800 from in-band noise. Empirical 2026-05-07 data: real
+                    # speech RMS ≥ 7500, false positives 658-725 with prob 0.84-0.86,
+                    # clean 10x gap. Floor 1500 sits in the middle, blocks residue,
+                    # leaves headroom for quiet real speech (~2000+).
                     import struct as _st_bi
                     import math as _math_bi
                     _n_bi = len(pcm_16k) // 2
@@ -3035,7 +3037,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         _frame_rms = _math_bi.sqrt(sum(s * s for s in _samps_bi) / _n_bi)
 
                     _prob = vad.last_probability
-                    if _prob >= 0.40 and _frame_rms >= 300:
+                    if _prob >= 0.40 and _frame_rms >= 1500:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
