@@ -87,8 +87,27 @@ CHAT_SESSION_MAX_ACTIVE = 200
 # Jambonz: store caller phone from control WS for audio WS to read
 _jambonz_last_caller_phone: str = ""
 
-# SIP monitor: connected WebSocket clients for live event streaming
-_sip_monitor_clients: set[WebSocket] = set()
+# SIP monitor: connected clients for live event streaming. Each client
+# wraps a WebSocket with a per-connection write lock — without it, a
+# broadcast firing during another coroutine's send_json (e.g. a fresh
+# client's replay loop) would interleave WebSocket frames on the same
+# socket and silently corrupt the protocol stream. Browsers see the
+# corrupt frames and drop the connection without firing onclose, so the
+# user sees "Monitor connected" plus nothing. Per-client lock serializes
+# all sends to a given socket without serializing different sockets.
+class _MonitorClient:
+    __slots__ = ("ws", "write_lock")
+
+    def __init__(self, ws: WebSocket) -> None:
+        self.ws = ws
+        self.write_lock = asyncio.Lock()
+
+    async def send(self, event: dict[str, Any]) -> None:
+        async with self.write_lock:
+            await self.ws.send_json(event)
+
+
+_sip_monitor_clients: set[_MonitorClient] = set()
 
 # Bounded ring buffer of recent SIP events. Replayed to monitor clients
 # on connect so the chat-widget iframe doesn't miss broadcasts that
@@ -139,16 +158,17 @@ async def broadcast_sip_event(event: dict[str, Any]) -> None:
     view: either the event is in its replay snapshot (pre-join) or it
     arrives via the live broadcast (post-join). The lock is released
     before the actual `send_json` calls so slow clients don't block
-    other broadcasts.
+    other broadcasts; per-client serialization is enforced by each
+    client's own write_lock.
     """
     async with _sip_broadcast_lock:
         _sip_event_history.append(event)
         clients = list(_sip_monitor_clients)
-    for ws in clients:
+    for client in clients:
         try:
-            await ws.send_json(event)
+            await client.send(event)
         except Exception:  # noqa: BLE001
-            _sip_monitor_clients.discard(ws)
+            _sip_monitor_clients.discard(client)
 
 
 async def _speak_tts(
@@ -3286,31 +3306,33 @@ async def sip_monitor_ws(websocket: WebSocket) -> None:
 
     On connect, snapshots the recent event history under
     _sip_broadcast_lock and ATOMICALLY joins the broadcast set, then
-    streams the snapshot. Holding the lock around snapshot+add means
-    every broadcast is either:
-      - already in the snapshot (its history-append happened first), or
-      - delivered live via the post-join client set (its append happened
-        after we joined).
-    No event can fall in a gap. This prevents the live-streaming
-    flakiness reported 2026-05-08 where chat events occasionally
-    appeared only after a page refresh.
+    streams the snapshot through the client's own per-WS write_lock.
+    The atomic snapshot+add closes the "missed event between snapshot
+    and join" gap. The per-WS write_lock ensures the replay loop and
+    concurrent live broadcasts never call send_json on the same socket
+    simultaneously — concurrent sends interleave WebSocket frames and
+    silently break the protocol stream (the 2026-05-08 monitor
+    flakiness symptom: "connected" line followed by nothing until
+    refresh).
     """
     await websocket.accept()
+    client = _MonitorClient(websocket)
     async with _sip_broadcast_lock:
         history_snapshot = list(_sip_event_history)
-        _sip_monitor_clients.add(websocket)
+        _sip_monitor_clients.add(client)
     try:
         for past in history_snapshot:
-            await websocket.send_json(past)
+            await client.send(past)
         while True:
             await websocket.receive_text()  # keepalive
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
-        # Other client-side error during replay or keepalive — tear down.
+        # Replay or keepalive error — tear down. The client's write_lock
+        # guarantees no broadcast write is mid-flight at this moment.
         pass
     finally:
-        _sip_monitor_clients.discard(websocket)
+        _sip_monitor_clients.discard(client)
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
