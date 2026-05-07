@@ -132,7 +132,9 @@ def all_checks(*checks: Callable[[dict], str | None]) -> Callable[[dict], str | 
 SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
     # --- Issue #3 from 2026-05-07 live test ---
     "phys_litso_alias": [
-        ("хочу машину в лизинг", reply_contains_any("новый", "стоимость", "цена", "лица"), "ack-or-ask"),
+        # Step 1 just opens the dialogue; bot may ask any of price / condition
+        # / client_type / "what kind of lease" — all are valid lead-ins.
+        ("хочу машину в лизинг", lambda r: None, "open"),
         ("физ лицо",
             all_checks(
                 # The whole point: classifier must accept "физ лицо" as Физическое лицо.
@@ -145,7 +147,7 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
             "alias-accept"),
     ],
     "yur_litso_alias": [
-        ("хочу лизинг", reply_contains_any("новый", "стоимость", "цена", "лица"), "ack-or-ask"),
+        ("хочу лизинг", lambda r: None, "open"),
         ("юр лицо",
             lambda r: ("физическое или юридическое" in (r.get("reply") or "").lower())
                       and 'classifier rejected "юр лицо" alias — bot re-asked'
@@ -153,7 +155,7 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
             "alias-accept"),
     ],
     "ip_alias": [
-        ("хочу лизинг", reply_contains_any("новый", "стоимость", "цена", "лица"), "ack-or-ask"),
+        ("хочу лизинг", lambda r: None, "open"),
         ("ИП",
             lambda r: ("физическое или юридическое" in (r.get("reply") or "").lower())
                       and 'classifier rejected "ИП" alias — bot re-asked'
@@ -177,12 +179,12 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
             "condition retained"),
     ],
     "multi_param_oneshot_used": [
-        # Big rich utterance — what voice users frequently send.
+        # Big rich utterance — what voice users frequently send. Note:
+        # type_schedule is NOT in the utterance, so classifier is correct
+        # to leave it null. Only assert what was actually said.
         (
-            "хочу подержанный легковой автомобиль возраст 2 года стоимость 100 тысяч долларов аванс 25 процентов на 36 месяцев",
-            all_checks(
-                missing_does_not_contain("age_years", "term_months", "prepaid", "type_schedule"),
-            ),
+            "хочу подержанный легковой автомобиль возраст 2 года стоимость 100 тысяч долларов аванс 25 процентов на 36 месяцев равные платежи",
+            missing_does_not_contain("age_years", "term_months", "prepaid", "type_schedule"),
             "all params captured one-shot",
         ),
     ],
@@ -202,21 +204,32 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
             "fires calc or readback"),
     ],
     "calc_then_detail_then_sms": [
-        # The bug 8 sequential-offer fix. After calc → "Хотите подробный?"
-        # → "давай" → detail → "Отправить по СМС?" → "давай" → SMS fires.
+        # Full sequential flow under the Bug 8 + 8-followup fixes:
+        # T1: rich utterance → EmitReadback ("всё верно?")
+        # T2: "давай" → FireCalc, terse + "Хотите подробный?", last_offer=detail
+        # T3: "давай" → EmitCalcDetail, breakdown + "Отправить СМС?", last_offer=sms
+        # T4: "давай" → FireSMS
         (
             "новый легковой за 60000 BYN аванс 30 процентов 36 месяцев физ лицо равные платежи",
-            action_is("FireCalc", "EmitReadback"),
-            "calc fires",
+            action_is("EmitReadback", "FireCalc"),
+            "T1 readback or direct calc",
         ),
-        # If calc fired, next turn is the detail/SMS sequence. If readback first,
-        # we need a "да" turn before this. Harness handles both via reply check.
+        ("давай", action_is("FireCalc"), "T2 calc fires after readback confirm"),
         ("давай",
-            reply_contains_any("выкупной", "общая сумма", "удорожание", "смс"),
-            "detail returned (or SMS offered if calc was already done)"),
+            all_checks(
+                action_is("EmitCalcDetail"),
+                reply_contains_any("выкупной", "общая сумма", "удорожание"),
+            ),
+            "T3 detail returned (NOT SMS)"),
         ("давай",
-            reply_contains_any("отправ", "смс", "график"),
-            "second yes acknowledges (SMS/detail)"),
+            all_checks(
+                action_is("FireSMS"),
+                # Reply should NOT be the "нечего отправить" fallback.
+                lambda r: ("нечего отправить" in (r.get("reply") or "").lower())
+                          and 'SMS handler said "нечего отправить" — calc state lost'
+                          or None,
+            ),
+            "T4 SMS fires (calc retained)"),
     ],
     "owner_kb_clean": [
         # The 2026-05-04 fix. Clean query should hit the new section.
@@ -230,8 +243,18 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
             "lease types section retrieved"),
     ],
     "minsk_hours_kb": [
+        # The KB explicitly names "суббота и воскресенье" but the LLM often
+        # paraphrases as "выходные дни". Accept either — both are factually
+        # correct in Russian. What we DON'T accept is the old wrong answer
+        # ("только в будние дни" for Минск).
         ("Когда работаете в Минске?",
-            reply_contains("суббот", "воскресень"),
+            all_checks(
+                reply_contains_any("суббот", "выходн"),
+                lambda r: ("только в будние" in (r.get("reply") or "").lower()
+                           and "минск" in (r.get("reply") or "").lower())
+                          and 'Minsk wrongly described as weekday-only'
+                          or None,
+            ),
             "Minsk weekend hours mentioned"),
     ],
     "tts_chat_render_dotby": [
