@@ -11,23 +11,13 @@
     <style>
       html, body { margin: 0; padding: 0; height: 100%; }
       body { background: oklch(0.98 0.005 80); }
-      iframe.mlc-monitor-fullpage {
-        position: fixed;
-        top: 0; left: 0;
-        width: 100%; height: 100%;
-        border: 0;
-        background: #fff;
-      }
     </style>
   </head>
   <body>
-    <!-- SIP monitor as the operator-facing main view (full page) -->
-    <iframe class="mlc-monitor-fullpage" src="/sip_monitor.html" title="SIP Monitor"></iframe>
-
-    <!-- Chat widget as a floating overlay on top — this is exactly how it'll
-         appear when embedded on a real client website. The FAB launcher sits
-         bottom-right; clicking it expands the panel. No data-host attribute
-         on the script means the JS runs in mountEmbed (FAB) mode. -->
-    <script src="chat_widget.js" data-api=""></script>
+    <!-- Chat panel as the main visible element (always open, no FAB) +
+         sip_monitor side-by-side, filtered to the current chat session_id.
+         data-host="#mlc-host" triggers the JS's mountHost branch. -->
+    <div id="mlc-host"></div>
+    <script src="chat_widget.js" data-host="#mlc-host" data-api=""></script>
   </body>
 </html>

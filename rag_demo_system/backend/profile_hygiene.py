@@ -74,7 +74,13 @@ def _normalize_client_type(v: Any) -> str | None:
     if not isinstance(v, str):
         return None
     s = v.strip().lower()
-    if s in {"физлицо", "физик", "физ. лицо", "физическое лицо", "физическое"}:
+    # Issue #3 (2026-05-07 live test): accept the space-separated chat-typed
+    # forms "физ лицо" / "юр лицо" alongside the dotted "физ. лицо" already
+    # present. Real clients type without the dot. Also collapse repeated
+    # whitespace so "физ  лицо" doesn't fall through.
+    s = " ".join(s.split())
+    if s in {"физлицо", "физик", "физ лицо", "физ. лицо",
+             "физическое лицо", "физическое"}:
         return "Физическое лицо"
     # Fix 41a: collapse ИП / самозанятый / микробизнес / etc. into
     # "Юридическое лицо". The Mikro Leasing API only accepts "Физическое
@@ -83,7 +89,8 @@ def _normalize_client_type(v: Any) -> str | None:
     # "ИП" while the API sees "Юр.лицо". Single source of truth.
     if s in {"ип", "ипэшник", "индивидуальный предприниматель", "самозанятый",
              "предприниматель", "микробизнес",
-             "юрлицо", "юридическое лицо", "ооо", "оао", "зао", "организация",
+             "юр лицо", "юр. лицо", "юрлицо", "юридическое лицо",
+             "ооо", "оао", "зао", "организация",
              "компания", "юридическое", "бизнес", "бизнесмен", "малый бизнес"}:
         return "Юридическое лицо"
     return None
@@ -102,7 +109,12 @@ _CLIENT_TYPE_CUE_RE = re.compile(
     # Main alternatives require a leading word boundary.
     r"\b(?:"
     r"физлиц\w*|физик\w*|физическ\w+|"
+    # Issue #3 (2026-05-07): space-separated chat forms — "физ лицо",
+    # "физ. лицо", "юр лицо", "юр. лицо". Real clients type these without
+    # collapsing. Match them via optional dot + whitespace before "лиц".
+    r"физ\.?\s+лиц\w*|"
     r"юрлиц\w*|юридическ\w+|"
+    r"юр\.?\s+лиц\w*|"
     r"ооо|оао|зао|"
     r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|"
     r"ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+|"

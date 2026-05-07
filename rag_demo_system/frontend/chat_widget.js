@@ -94,9 +94,10 @@
 
     var transcript = el('div', { class: 'mlc-transcript' });
     var composerInput = el('textarea', {
-      placeholder: 'Сообщение...',
+      placeholder: 'Сначала примите согласие выше',
       rows: '1',
       'aria-label': 'Сообщение',
+      disabled: 'true',
       onkeydown: function(e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
       },
@@ -105,6 +106,7 @@
       class: 'mlc-send',
       text: '→',
       'aria-label': 'Отправить',
+      disabled: 'true',
       onclick: send,
     });
     var composer = el('div', { class: 'mlc-composer' }, [composerInput, sendBtn]);
@@ -146,12 +148,23 @@
       name = n; phone = p;
       headerMeta.textContent = name || 'Аноним';
       intake.remove();
+      // #2 fix: composer was disabled before consent submit; enable now.
+      composerInput.disabled = false;
+      composerInput.placeholder = 'Сообщение...';
+      sendBtn.disabled = false;
       composerInput.focus();
-      // Bot kickoff after intake — voice has a hardcoded TTS intro played
-      // before any dispatcher turn. Mirror that here as a frontend-only
-      // bubble (does NOT go through /api/text-turn).
+      // #1 fix: seed the conversational record with the user's name so the
+      // classifier + LLM see it on the very first turn. Voice does this
+      // implicitly through the name-capture turn ("Меня зовут <X>" → bot
+      // ack); chat replicates that explicit pair here. The pair is also
+      // appended to the on-screen transcript so the user sees the same
+      // greeting voice callers hear ("Здравствуйте, <name>!").
+      var hello = name
+        ? ('Здравствуйте, ' + name + '! Я Ксения, помощница Микро Лизинг. Чем могу помочь?')
+        : 'Здравствуйте! Я Ксения, помощница Микро Лизинг. Чем могу помочь?';
       setTimeout(function() {
-        append('bot', 'Здравствуйте! Я Ксения, помощница Микро Лизинг. Помогу с вопросами по лизингу и расчётом. Чем могу помочь?');
+        if (name) append('user', 'Меня зовут ' + name + '.');
+        append('bot', hello);
       }, 200);
     });
     transcript.appendChild(intake);
@@ -271,19 +284,15 @@
       text: 'Начать',
       onclick: function() { onSubmit(nameInput.value.trim(), phoneInput.value.trim()); },
     });
-    var skipBtn = el('button', {
-      class: 'mlc-btn-link',
-      text: 'Пропустить',
-      onclick: function() { onSubmit('', ''); },
-    });
+    // #2 fix: Skip button removed — Начать with empty fields is the same outcome.
     return el('div', { class: 'mlc-intake' }, [
       el('h2', { class: 'mlc-display', text: 'Прежде чем начать' }),
       el('p', { text: 'Если оставите телефон, мы отправим расчёт в SMS и сможем перезвонить.' }),
       el('div', { class: 'mlc-fields' }, [nameInput, phoneInput]),
-      el('div', { class: 'mlc-intake-actions' }, [startBtn, skipBtn]),
+      el('div', { class: 'mlc-intake-actions' }, [startBtn]),
       el('p', {
         class: 'mlc-consent',
-        text: 'Нажимая «Начать», вы соглашаетесь на обработку персональных данных.'
+        text: 'Нажимая «Начать», вы соглашаетесь на обработку персональных данных. Поля имени и телефона необязательны.'
       }),
     ]);
   }
@@ -330,8 +339,11 @@
     var root = document.querySelector(rootSelector);
     if (!root) return;
     var built = buildPanel();
+    // #6 fix: pass the chat session_id to the monitor iframe so it can
+    // filter to events for THIS chat session. Operator's main monitor
+    // (sip_monitor.html opened directly) keeps showing everything.
     var monitor = el('div', { class: 'mlc-monitor mlc-root' }, [
-      el('iframe', { src: '/sip_monitor.html?user=chat' }),
+      el('iframe', { src: '/sip_monitor.html?session=' + encodeURIComponent(built.sessionId) }),
     ]);
     var host = el('div', { class: 'mlc-host mlc-root' }, [built.panel, monitor]);
     root.appendChild(host);

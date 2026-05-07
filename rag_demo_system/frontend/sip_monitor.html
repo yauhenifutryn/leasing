@@ -81,9 +81,15 @@
   var ws = null;
   var autoScroll = true;
   var activeCalls = {};
-  // URL filter: sip_monitor.html?user=sergey shows only Sergey's calls
-  var filterUser = new URLSearchParams(location.search).get('user');
-  var callToUser = {};  // call_id -> username mapping
+  // URL filters:
+  //   sip_monitor.html?user=sergey      — only Sergey's voice calls
+  //   sip_monitor.html?session=chat-XXX — only this chat session's events
+  // Operator's main monitor (no params) keeps showing everything for
+  // full visibility across voice + chat.
+  var _qs = new URLSearchParams(location.search);
+  var filterUser = _qs.get('user');
+  var filterSession = _qs.get('session');     // e.g. "chat-iab1234"
+  var callToUser = {};  // call_id -> username mapping (voice path)
 
   var pingInterval = null;
 
@@ -91,6 +97,10 @@
 
   if (filterUser) {
     document.getElementById('filterLabel').textContent = ' — ' + filterUser;
+  } else if (filterSession) {
+    document.getElementById('filterLabel').textContent = ' — chat ' + filterSession.substr(0, 12);
+    // No dropdown switching while session-pinned (different filter axis).
+    if (filterSelect) filterSelect.style.display = 'none';
   }
 
   // Dropdown changes filter without page reload. Clear log so the new
@@ -144,7 +154,8 @@
   }
 
   function handleEvent(msg) {
-    var cid = (msg.call_id || '').substring(0, 8);
+    var fullCid = msg.call_id || '';
+    var cid = fullCid.substring(0, 8);
     var t = msg.type || '';
 
     // Track call_id -> sip_user mapping from call start event
@@ -152,11 +163,19 @@
       callToUser[cid] = msg.sip_user;
     }
 
-    // Filter: if ?user=sergey, only show events from Sergey's calls.
-    // Fail-closed when the call_id -> user mapping is unknown (call
-    // started before this monitor session opened): otherwise events
-    // from concurrent users leak through and logs get mixed.
-    if (filterUser && cid) {
+    // Filter: ?session=chat-XXX — only events whose full call_id matches
+    // this chat session. Chat events tag call_id = session_id verbatim
+    // (see backend/app.py _text_process_utterance), so a literal prefix
+    // match is correct. The chat panel's iframe always passes its own
+    // session_id; the operator's standalone monitor (no ?session=)
+    // falls through to the user filter below.
+    if (filterSession) {
+      if (fullCid !== filterSession) return;
+    } else if (filterUser && cid) {
+      // Filter: if ?user=sergey, only show events from Sergey's calls.
+      // Fail-closed when the call_id -> user mapping is unknown (call
+      // started before this monitor session opened): otherwise events
+      // from concurrent users leak through and logs get mixed.
       var mapped = callToUser[cid];
       if (!mapped || mapped !== filterUser) {
         if (t === 'sip.call.end') delete callToUser[cid];
