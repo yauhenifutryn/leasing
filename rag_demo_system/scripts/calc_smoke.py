@@ -261,10 +261,17 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
             ".by rendered as text not phonetic"),
     ],
     "name_in_context": [
-        # If we set name="Иван", later turn the bot should know the user's name.
+        # The chat widget JS seeds a synthetic pair "Меня зовут <name>" → bot ack
+        # on intake submit so the LLM sees the name in turn 1. The harness
+        # mirrors that here. Without this seed, the bot honestly answers
+        # "I don't know your name" — which IS the correct response when no
+        # name has been said in the conversation.
+        ("Меня зовут Иван.",
+            lambda r: None,
+            "seed name turn (mirrors JS intake)"),
         ("Как меня зовут?",
-            reply_contains_any("иван", "ваше имя"),
-            "bot recalls intake name (or asks if not provided)"),
+            reply_contains("иван"),
+            "bot recalls name from seeded turn"),
     ],
 }
 
