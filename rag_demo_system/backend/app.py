@@ -2695,6 +2695,34 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
     return result
 
 
+@app.get("/api/chat/transcript")
+async def get_chat_transcript(session_id: str) -> dict[str, Any]:
+    """Return the persisted transcript for a chat session, if any.
+
+    Used by the chat widget on page refresh to restore the on-screen
+    bubbles. session_id is validated against the same allowlist used by
+    /api/text-turn so a malicious caller can't path-traverse into
+    arbitrary state files.
+    """
+    if not _VALID_SESSION_ID.match(session_id):
+        return {"ok": False, "error": "invalid session_id"}
+    from .chat_persistence import load_chat_turn
+    record = load_chat_turn(session_id, state_dir=_state_dir_for_persistence())
+    if record is None:
+        return {"ok": True, "found": False, "transcript": []}
+    return {
+        "ok": True,
+        "found": True,
+        "transcript": record.get("transcript", []),
+        "name": record.get("name", ""),
+        "phone": record.get("phone", ""),
+        "started_at": record.get("started_at"),
+        "last_turn_at": record.get("last_turn_at"),
+        "ended_at": record.get("ended_at"),
+        "tool_call_count": record.get("tool_call_count", 0),
+    }
+
+
 @app.websocket("/ws/jambonz")
 async def jambonz_control_ws(websocket: WebSocket) -> None:
     """Jambonz call control WebSocket (subprotocol: ws.jambonz.org)."""

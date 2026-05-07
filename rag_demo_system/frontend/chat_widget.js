@@ -102,6 +102,22 @@
 
   function buildPanel(opts) {
     opts = opts || {};
+    // CRITICAL: detect saved-session BEFORE genSessionId() runs — that
+    // function writes to sessionStorage as a side effect. Gate on
+    // `mlc_name` because it's only set after a successful intake submit;
+    // session_id is created on first page render regardless.
+    var hasSavedSession = false;
+    var savedName = '';
+    var savedPhone = '';
+    try {
+      savedName = sessionStorage.getItem('mlc_name') || '';
+      savedPhone = sessionStorage.getItem('mlc_phone') || '';
+      // mlc_name is the source of truth: it's only written when intake
+      // submitted (consent given). An empty value means the user has NOT
+      // consented yet, so the intake must show.
+      hasSavedSession = !!savedName || (sessionStorage.getItem('mlc_phone') !== null);
+    } catch (e) {}
+
     var sessionId = opts.sessionId || genSessionId();
     var name = '';
     var phone = '';
@@ -178,20 +194,11 @@
     newChatBtn.style.display = 'none';
     var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta, muteBtn, newChatBtn, downloadBtn]);
 
-    // Restore prior intake answers on refresh — the user clicked "Начать"
-     // already, so showing the form again on accidental F5 / Cmd+R is bad
-     // UX. We restore name+phone+session_id from sessionStorage and skip
-     // intake entirely; the explicit "↺ Новый чат" button is the way to
-     // start a fresh conversation.
-    var savedName = '';
-    var savedPhone = '';
-    var hasSavedSession = false;
-    try {
-      savedName = sessionStorage.getItem('mlc_name') || '';
-      savedPhone = sessionStorage.getItem('mlc_phone') || '';
-      hasSavedSession = !!sessionStorage.getItem('mlc_session_id');
-    } catch (e) {}
-
+    // Restore prior intake answers on refresh — variables `savedName`,
+    // `savedPhone`, `hasSavedSession` were detected at the top of buildPanel
+    // BEFORE genSessionId() ran. The duplicate detection block that lived
+    // here previously was masked by the genSessionId side-effect and made
+    // every fresh visit look like a "returning session", bypassing consent.
     function activatePanel(n, p, isFresh) {
       name = n; phone = p;
       if (isFresh) {
@@ -233,17 +240,37 @@
       }, 200);
     });
 
-    // If a previous session exists in sessionStorage, skip intake entirely
-    // and reattach to the existing server-side session. The conversation
-    // history doesn't reload on screen (we don't fetch transcript from the
-    // server) but the bot still has the full state machine + tool calls
-    // + memory_block. User sees a fresh kickoff but the bot remembers them.
+    // If a previous session exists in sessionStorage, skip intake and
+    // reattach to the existing server-side session. We also fetch the
+    // persisted transcript so the on-screen bubbles match what the server
+    // remembers — a refresh now feels like resuming, not starting over.
     if (hasSavedSession) {
       activatePanel(savedName, savedPhone, /*isFresh=*/false);
-      var helloBack = savedName
-        ? ('С возвращением, ' + savedName + '! Чем могу помочь?')
-        : 'С возвращением! Чем могу помочь?';
-      setTimeout(function() { append('bot', helloBack); }, 100);
+      // Fetch saved transcript and render bubbles. Failure is non-fatal:
+      // worst case the user sees an empty transcript with the resume
+      // greeting, same as before this fix.
+      (async function restoreTranscript() {
+        try {
+          var resp = await fetch(
+            (API || '') + '/api/chat/transcript?session_id=' + encodeURIComponent(sessionId)
+          );
+          var data = await resp.json();
+          if (data && data.ok && Array.isArray(data.transcript) && data.transcript.length) {
+            for (var i = 0; i < data.transcript.length; i++) {
+              var t = data.transcript[i];
+              if (t && t.text) {
+                append(t.role === 'user' ? 'user' : 'bot', t.text);
+              }
+            }
+            return;  // saved history rendered; no resume greeting
+          }
+        } catch (e) { /* fall through */ }
+        // No saved history — show a resume greeting.
+        var helloBack = savedName
+          ? ('С возвращением, ' + savedName + '! Чем могу помочь?')
+          : 'С возвращением! Чем могу помочь?';
+        append('bot', helloBack);
+      })();
     } else {
       transcript.appendChild(intake);
     }
@@ -328,6 +355,8 @@
           }),
         });
         var data = await resp.json();
+        // Successful round-trip → green dot, regardless of `ok` flag.
+        _markConnected();
         if (!data.ok) {
           append('bot', '[ошибка: ' + (data.error || 'unknown') + ']');
         } else {
@@ -347,9 +376,19 @@
       } catch (e) {
         append('bot', '[нет связи с сервером]');
         composerInput.value = prior;           // restore for retry
+        // Network failure → flip the status dot to red so the operator
+        // sees the chat is offline. Cleared on the next successful turn.
+        statusDot.classList.add('mlc-disconnected');
+        statusDot.setAttribute('aria-label', 'Нет связи');
       } finally {
         sendBtn.disabled = false;
       }
+    }
+
+    // After every successful POST, ensure the dot is green.
+    function _markConnected() {
+      statusDot.classList.remove('mlc-disconnected');
+      statusDot.setAttribute('aria-label', 'Подключено');
     }
 
     return { panel: panel, sessionId: sessionId };

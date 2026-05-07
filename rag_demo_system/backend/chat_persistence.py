@@ -83,6 +83,23 @@ def save_chat_turn(
     return out_path
 
 
+def load_chat_turn(session_id: str, *, state_dir: Path) -> dict[str, Any] | None:
+    """Read a saved chat record back. Returns None when no record exists.
+
+    Used by the GET /api/chat/transcript endpoint so the chat widget can
+    re-render the conversation history after the user refreshes the page
+    (the session_id stays in sessionStorage; the on-screen bubbles need
+    to be restored from server-side persistence).
+    """
+    out_path = _safe_transcript_path(state_dir, session_id)
+    if not out_path.exists():
+        return None
+    try:
+        return json.loads(out_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def mark_session_ended(session_id: str, *, state_dir: Path) -> None:
     """Stamp `ended_at` on a saved chat record. Triggered by EndCall action."""
     out_path = _safe_transcript_path(state_dir, session_id)

@@ -57,10 +57,13 @@
 }
 .mlc-status-dot {
   width: 8px; height: 8px; border-radius: 50%;
-  background: var(--mlc-accent);
+  /* Green when active — matches the SIP monitor indicator (#27ae60).
+     Red when disconnected. Tinted slightly toward the brand neutrals so
+     it doesn't clash with the warm cream surface. */
+  background: oklch(0.65 0.16 145);
   transition: background var(--mlc-dur) var(--mlc-ease);
 }
-.mlc-status-dot.mlc-disconnected { background: var(--mlc-muted); }
+.mlc-status-dot.mlc-disconnected { background: oklch(0.55 0.20 25); }
 .mlc-header-title { flex: 1; font-size: 15px; font-weight: 600; }
 .mlc-header-meta { color: var(--mlc-muted); font-size: 13px; }
 .mlc-header-meta button {
