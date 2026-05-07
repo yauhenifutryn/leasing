@@ -41,7 +41,7 @@
 </style>
 </head>
 <body>
-<h1><span class="status disconnected" id="statusDot"></span>SIP Monitor<span id="filterLabel"></span></h1>
+<h1><span class="status disconnected" id="statusDot"></span><span id="monitorTitle">SIP Monitor</span><span id="filterLabel"></span></h1>
 <div class="controls">
   <select id="userFilter" style="font-family:monospace; padding:5px 8px; border:1px solid #ccc; border-radius:3px; margin-right:8px; background:#fff;">
     <option value="">All accounts</option>
@@ -65,12 +65,12 @@
   </table>
 </div>
 <div class="calls" id="activeCalls"></div>
-<div class="profile-panel" id="profilePanel">
-  <h4>Profile snapshot <span style="color:#888; font-weight:normal;" id="ppCallId"></span></h4>
-  <div class="pp-state" id="ppState"></div>
-  <div class="pp-grid" id="ppGrid"></div>
-  <div class="pp-missing" id="ppMissing"></div>
-</div>
+<!-- Profile snapshots render one panel per active call_id (chat or
+     voice). The unfiltered operator monitor can show multiple at once
+     when several sessions are live; filtered views (?session= or
+     ?user=) naturally show only what passes the filter. Panels are
+     created on first sip.profile.snapshot and removed on sip.call.end. -->
+<div id="profilePanels"></div>
 <div class="log" id="log"></div>
 <script>
 (function() {
@@ -81,9 +81,15 @@
   var ws = null;
   var autoScroll = true;
   var activeCalls = {};
-  // URL filter: sip_monitor.html?user=sergey shows only Sergey's calls
-  var filterUser = new URLSearchParams(location.search).get('user');
-  var callToUser = {};  // call_id -> username mapping
+  // URL filters:
+  //   sip_monitor.html?user=sergey      — only Sergey's voice calls
+  //   sip_monitor.html?session=chat-XXX — only this chat session's events
+  // Operator's main monitor (no params) keeps showing everything for
+  // full visibility across voice + chat.
+  var _qs = new URLSearchParams(location.search);
+  var filterUser = _qs.get('user');
+  var filterSession = _qs.get('session');     // e.g. "chat-iab1234"
+  var callToUser = {};  // call_id -> username mapping (voice path)
 
   var pingInterval = null;
 
@@ -91,6 +97,17 @@
 
   if (filterUser) {
     document.getElementById('filterLabel').textContent = ' — ' + filterUser;
+  } else if (filterSession) {
+    // Chat-embedded mode: this iframe lives inside chat_widget.html, so
+    // SIP-flavored chrome (the "SIP" word, the Zoiper Setup card) is
+    // noise. Shorten the title and hide the setup card; operator's
+    // standalone monitor (no ?session= param) keeps full chrome.
+    document.getElementById('monitorTitle').textContent = 'Monitor';
+    document.getElementById('filterLabel').textContent = ' — chat ' + filterSession.substr(0, 12);
+    var setupCard = document.getElementById('setupCard');
+    if (setupCard) setupCard.style.display = 'none';
+    // No dropdown switching while session-pinned (different filter axis).
+    if (filterSelect) filterSelect.style.display = 'none';
   }
 
   // Dropdown changes filter without page reload. Clear log so the new
@@ -144,7 +161,8 @@
   }
 
   function handleEvent(msg) {
-    var cid = (msg.call_id || '').substring(0, 8);
+    var fullCid = msg.call_id || '';
+    var cid = fullCid.substring(0, 8);
     var t = msg.type || '';
 
     // Track call_id -> sip_user mapping from call start event
@@ -152,11 +170,19 @@
       callToUser[cid] = msg.sip_user;
     }
 
-    // Filter: if ?user=sergey, only show events from Sergey's calls.
-    // Fail-closed when the call_id -> user mapping is unknown (call
-    // started before this monitor session opened): otherwise events
-    // from concurrent users leak through and logs get mixed.
-    if (filterUser && cid) {
+    // Filter: ?session=chat-XXX — only events whose full call_id matches
+    // this chat session. Chat events tag call_id = session_id verbatim
+    // (see backend/app.py _text_process_utterance), so a literal prefix
+    // match is correct. The chat panel's iframe always passes its own
+    // session_id; the operator's standalone monitor (no ?session=)
+    // falls through to the user filter below.
+    if (filterSession) {
+      if (fullCid !== filterSession) return;
+    } else if (filterUser && cid) {
+      // Filter: if ?user=sergey, only show events from Sergey's calls.
+      // Fail-closed when the call_id -> user mapping is unknown (call
+      // started before this monitor session opened): otherwise events
+      // from concurrent users leak through and logs get mixed.
       var mapped = callToUser[cid];
       if (!mapped || mapped !== filterUser) {
         if (t === 'sip.call.end') delete callToUser[cid];
@@ -174,6 +200,11 @@
       delete activeCalls[cid];
       updateCallBadges();
       addLog('system', cid, 'Call ended (' + dur + ')');
+      // Drop the per-call profile panel so the operator's view stays
+      // tidy when sessions come and go. fullCid is what we keyed it on
+      // so we look it up the same way.
+      var endedPanel = document.getElementById('pp-' + fullCid);
+      if (endedPanel) endedPanel.remove();
     } else if (t === 'sip.vad.speech') {
       if (msg.event === 'start') addLog('system', cid, 'VAD: speech start');
     } else if (t === 'sip.stt.result') {
@@ -197,18 +228,25 @@
       var prefix = msg.interrupted ? '✗ FINAL (interrupted): ' : '✓ FINAL: ';
       addLog('final' + (msg.interrupted ? ' interrupted' : ''), cid, prefix + (msg.text || ''));
     } else if (t === 'sip.profile.snapshot') {
-      renderProfile(cid, msg);
+      renderProfile(cid, fullCid, msg);
     }
   }
 
-  function renderProfile(cid, msg) {
-    var panel = document.getElementById('profilePanel');
-    var grid = document.getElementById('ppGrid');
-    var stateEl = document.getElementById('ppState');
-    var missingEl = document.getElementById('ppMissing');
-    var idEl = document.getElementById('ppCallId');
+  // One profile panel per call_id. Created lazily on first snapshot,
+  // updated in place on subsequent snapshots, removed on sip.call.end.
+  // Keying on fullCid (not the 8-char prefix) avoids collisions when
+  // two sessions happen to share a prefix.
+  function renderProfile(cid, fullCid, msg) {
+    var container = document.getElementById('profilePanels');
+    var panelId = 'pp-' + fullCid;
+    var panel = document.getElementById(panelId);
+    if (!panel) panel = createProfilePanel(panelId, cid, fullCid);
+    if (!panel.parentNode) container.appendChild(panel);
+
+    var grid = panel.querySelector('.pp-grid');
+    var stateEl = panel.querySelector('.pp-state');
+    var missingEl = panel.querySelector('.pp-missing');
     panel.style.display = 'block';
-    idEl.textContent = '[' + cid + ']';
     stateEl.textContent = 'state = ' + (msg.state || '?');
     while (grid.firstChild) grid.removeChild(grid.firstChild);
     var fields = msg.fields || {};
@@ -241,6 +279,50 @@
     }
     var missing = msg.missing || [];
     missingEl.textContent = missing.length ? 'missing: ' + missing.join(', ') : 'all required fields captured';
+  }
+
+  // Build the DOM for one profile panel. The owner label distinguishes
+  // chats ("chat <cid>") from voice accounts ("sergey (+37529...)") so
+  // an operator looking at the unfiltered monitor can see at a glance
+  // which session each profile snapshot belongs to.
+  function createProfilePanel(panelId, cid, fullCid) {
+    var panel = document.createElement('div');
+    panel.id = panelId;
+    panel.className = 'profile-panel';
+
+    var info = activeCalls[cid] || {};
+    var label;
+    if (fullCid && fullCid.indexOf('chat-') === 0) {
+      label = 'chat ' + fullCid.substr(0, 12);
+    } else if (info.user && info.phone) {
+      label = info.user + ' (' + info.phone + ')';
+    } else if (info.user) {
+      label = info.user;
+    } else if (info.phone) {
+      label = info.phone;
+    } else {
+      label = cid;
+    }
+
+    var h4 = document.createElement('h4');
+    h4.appendChild(document.createTextNode('Profile snapshot '));
+    var labelSpan = document.createElement('span');
+    labelSpan.style.cssText = 'color:#888; font-weight:normal;';
+    labelSpan.textContent = '[' + label + ']';
+    h4.appendChild(labelSpan);
+    panel.appendChild(h4);
+
+    var stateDiv = document.createElement('div');
+    stateDiv.className = 'pp-state';
+    panel.appendChild(stateDiv);
+    var gridDiv = document.createElement('div');
+    gridDiv.className = 'pp-grid';
+    panel.appendChild(gridDiv);
+    var missingDiv = document.createElement('div');
+    missingDiv.className = 'pp-missing';
+    panel.appendChild(missingDiv);
+
+    return panel;
   }
 
   function addLog(cls, cid, text) {
@@ -345,8 +427,12 @@
     document.body.removeChild(ta);
   }
 
-  // Load SIP credentials from API
-  fetch('/api/jambonz/credentials')
+  // Load SIP credentials from API. Skip entirely in chat-embedded mode
+  // (filterSession set) — the iframe doesn't need Zoiper credentials,
+  // and the fetch's success callback would re-show the setup card we
+  // just hid above. We still fall through to connect() below so the
+  // monitor WS opens and replays history.
+  if (!filterSession) fetch('/api/jambonz/credentials')
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.ok) {

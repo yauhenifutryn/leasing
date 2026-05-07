@@ -160,18 +160,19 @@ def _kb_path_for_layout(configured: str | Path | None) -> Path:
     """Resolve the KB markdown path, honoring the KB_LAYOUT env var.
 
     KB_LAYOUT (case-insensitive):
-      - "legacy" or unset: use the configured path (current kb_faq_ru_v2.md).
-      - "topical": override to knowledge_base/kb_topics_ru.md (Phase C output).
-      - any other value: warn (silently log) and fall back to legacy.
+      - unset or "topical": use kb_topics_ru.md (current default since 2026-05-04).
+      - "legacy": fall back to the configured path (kb_faq_ru_v2.md, kept for rollback).
+      - any other value: warn (silently log) and fall back to topical default.
 
-    Section 7 Phase C.5 — env-var-gated swap so production can flip
-    layouts without a config edit, and revert in ~5 minutes by unsetting.
+    Section 7 Phase C.5 introduced the env-var swap; default flipped from
+    "legacy" to "topical" on 2026-05-04 after the topical-KB content audit
+    closed the company-identity + lease-types gaps.
     """
-    layout = os.getenv("KB_LAYOUT", "legacy").strip().lower()
-    if layout == "topical":
-        return _resolve_path(_TOPICAL_KB_RELATIVE)
-    # legacy or invalid -> configured path (current behavior)
-    return _resolve_path(configured)
+    layout = os.getenv("KB_LAYOUT", "topical").strip().lower()
+    if layout == "legacy":
+        return _resolve_path(configured)
+    # topical (default) or invalid value -> topical
+    return _resolve_path(_TOPICAL_KB_RELATIVE)
 
 
 def _resolve_path(value: str | Path) -> Path:

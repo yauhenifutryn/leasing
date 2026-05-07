@@ -122,14 +122,15 @@ def _subject_value_grounded(value: str, utterance: str) -> bool:
 
 _CLIENT_TYPE_VALUE_CUES: dict[str, re.Pattern[str]] = {
     "Физическое лицо": re.compile(
-        r"\b(физлиц\w*|физик\w*|физическ\w+)",
+        # Issue #3 (2026-05-07): added "физ лицо" / "физ. лицо" space-form.
+        r"(\b(физлиц\w*|физик\w*|физическ\w+)|физ\.?\s+лиц\w*)",
         re.IGNORECASE,
     ),
     "Юридическое лицо": re.compile(
         r"(\b(ип\b|ипэшник\w*|самозанят\w+|индивидуальн\w+|"
         r"юрлиц\w*|юридическ\w+|ооо|оао|зао|"
         r"организаци\w+|компани\w+|предприяти\w+|фирм\w+|"
-        r"предпринимат\w+)|бизнес\w*)",
+        r"предпринимат\w+)|бизнес\w*|юр\.?\s+лиц\w*)",
         re.IGNORECASE,
     ),
 }

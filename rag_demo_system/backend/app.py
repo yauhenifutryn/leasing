@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,11 @@ from .grounding_validator import replace_ungrounded
 from .text_utils import clean_answer, clean_voice_output, contains_stop_word, iter_final_text, split_for_tts_streaming
 from .memory import build_memory_block
 from .profile_hygiene import filter_patches
+from .classifier_prompt import (
+    assert_prompt_token_budget,
+    build_classifier_system_prompt,
+    count_tokens_approx,
+)
 from .classifier_schema import ClassifierOutput, parse_classifier_output
 from .rag_skip import should_skip_rag
 from .profile_prompts import (
@@ -57,11 +63,70 @@ state = StateStore(Path(__file__).resolve().parents[1] / ".state")
 engine = RAGEngine(settings, Path(__file__).resolve().parents[1] / ".state")
 voice_sessions: dict[str, VoiceSession] = {}
 
+# Per-session locks for /api/text-turn so two overlapping HTTP requests
+# for the same session_id serialize. Without this, an older classifier
+# result can apply after a newer one and corrupt profile state.
+# Codex adversarial review finding (2026-05-03 chat-widget branch).
+chat_session_locks: dict[str, asyncio.Lock] = {}
+
+# Per-session last-activity timestamps for the idle-session reaper.
+# Updated on every chat turn; reaper task evicts entries older than
+# CHAT_SESSION_IDLE_TIMEOUT_SEC.
+chat_session_last_activity: dict[str, float] = {}
+
+# 30 minutes idle → evict. Tab-close in chat is the common case; users
+# also walk away mid-conversation. Long enough that a comfort-break
+# doesn't drop their session, short enough to bound memory.
+CHAT_SESSION_IDLE_TIMEOUT_SEC = 30 * 60
+
+# Hard cap on concurrent chat sessions to bound memory growth from
+# random session_id posts. Master plan §8 targets ~30 concurrent chat
+# sessions; 200 is a 6x safety margin.
+CHAT_SESSION_MAX_ACTIVE = 200
+
 # Jambonz: store caller phone from control WS for audio WS to read
 _jambonz_last_caller_phone: str = ""
 
-# SIP monitor: connected WebSocket clients for live event streaming
-_sip_monitor_clients: set[WebSocket] = set()
+# SIP monitor: connected clients for live event streaming. Each client
+# wraps a WebSocket with a per-connection write lock — without it, a
+# broadcast firing during another coroutine's send_json (e.g. a fresh
+# client's replay loop) would interleave WebSocket frames on the same
+# socket and silently corrupt the protocol stream. Browsers see the
+# corrupt frames and drop the connection without firing onclose, so the
+# user sees "Monitor connected" plus nothing. Per-client lock serializes
+# all sends to a given socket without serializing different sockets.
+class _MonitorClient:
+    __slots__ = ("ws", "write_lock")
+
+    def __init__(self, ws: WebSocket) -> None:
+        self.ws = ws
+        self.write_lock = asyncio.Lock()
+
+    async def send(self, event: dict[str, Any]) -> None:
+        async with self.write_lock:
+            await self.ws.send_json(event)
+
+
+_sip_monitor_clients: set[_MonitorClient] = set()
+
+# Bounded ring buffer of recent SIP events. Replayed to monitor clients
+# on connect so the chat-widget iframe doesn't miss broadcasts that
+# happened during the brief gap between iframe-load and WS-open. Size
+# 500 covers ~10 minutes of a busy chat or a moderately long voice call;
+# older events are dropped silently. Read-only mirror of broadcast_sip_event
+# inputs — never reordered.
+_sip_event_history: deque[dict[str, Any]] = deque(maxlen=500)
+
+# Serializes broadcast_sip_event's history-append + client-set-snapshot
+# with sip_monitor_ws's history-snapshot + client-set-add. Without this
+# lock, a broadcast that fires during a new client's replay window
+# appends to history but iterates a clients-list that doesn't yet
+# include the new client — and the new client's snapshot was taken
+# before the append. Net: live event lost for the new client until
+# refresh triggers another replay. With the lock, the snapshot+add is
+# atomic with respect to broadcasts, so every event is delivered
+# exactly once (via replay if pre-join, via live broadcast if post-join).
+_sip_broadcast_lock = asyncio.Lock()
 
 # Info-seeking question markers — used by RAG-guard to prevent stale
 # calculator retriggers on non-tool questions after profile is CONFIRMED.
@@ -70,14 +135,40 @@ _INFO_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Allowlist for caller-supplied session_id on /api/text-turn.
+# Codex adversarial review (2026-05-03 chat-widget branch): a request
+# with session_id="../sessions" would resolve to .state/sessions.json
+# inside chat_persistence.save_chat_turn and overwrite the StateStore.
+# Tight regex: must start with "chat-" prefix (matches the auto-generated
+# `chat-<uuid12>` shape), then 6-64 chars of [A-Za-z0-9_-]. Min length 6
+# accepts the 12-char uuid suffix; max 64 caps DoS-via-long-id.
+_VALID_SESSION_ID = re.compile(r"^chat-[A-Za-z0-9_-]{6,64}$")
+
 
 async def broadcast_sip_event(event: dict[str, Any]) -> None:
-    """Fire-and-forget broadcast to all connected SIP monitor pages."""
-    for ws in list(_sip_monitor_clients):
+    """Fire-and-forget broadcast to all connected SIP monitor pages.
+
+    Also appends to _sip_event_history so a monitor that connects right
+    after a chat session starts can replay the broadcasts it missed
+    during iframe-load → WS-open. The history is bounded (deque maxlen),
+    so long-running voice calls won't accumulate forever.
+
+    History append + client snapshot are guarded by _sip_broadcast_lock
+    so a fresh sip_monitor_ws connection sees a consistent point-in-time
+    view: either the event is in its replay snapshot (pre-join) or it
+    arrives via the live broadcast (post-join). The lock is released
+    before the actual `send_json` calls so slow clients don't block
+    other broadcasts; per-client serialization is enforced by each
+    client's own write_lock.
+    """
+    async with _sip_broadcast_lock:
+        _sip_event_history.append(event)
+        clients = list(_sip_monitor_clients)
+    for client in clients:
         try:
-            await ws.send_json(event)
+            await client.send(event)
         except Exception:  # noqa: BLE001
-            _sip_monitor_clients.discard(ws)
+            _sip_monitor_clients.discard(client)
 
 
 async def _speak_tts(
@@ -395,6 +486,16 @@ _shared_vad: SileroVAD | None = None
 async def _warmup() -> None:
     """Pre-load models and optionally start Jambonz listener on startup."""
     global _shared_vad
+    # Bug 29 (2026-05-03) guard: classifier prompt must fit in vLLM
+    # max_model_len. Raises AssertionError loudly at startup instead of
+    # producing silent HTTP 400s on every classifier call in production.
+    assert_prompt_token_budget(max_model_len=8192, fraction=0.65)
+    print(
+        f"[startup] classifier_prompt_tokens_approx="
+        f"{count_tokens_approx(build_classifier_system_prompt())} "
+        f"(budget={int(8192 * 0.65)} at max_model_len=8192, fraction=0.65)",
+        flush=True,
+    )
     try:
         engine.retrieve("warmup", fast=True, voice_fast=True)
     except Exception:  # noqa: BLE001
@@ -407,6 +508,47 @@ async def _warmup() -> None:
 
     if settings.jambonz.enabled:
         print("[Jambonz] Enabled. Waiting for calls on /ws/jambonz", flush=True)
+
+
+async def _chat_session_reaper() -> None:
+    """Periodic eviction of idle chat sessions. Tab-close is the common
+    abandonment path (no EndCall ever fires), so we age out by inactivity.
+    Codex adversarial review: without this, voice_sessions grows unboundedly.
+
+    StateStore + on-disk transcript are intentionally NOT touched here —
+    they remain durable for analytics / future account-layer reads. Only
+    the in-memory hot state (voice_sessions, chat_session_locks,
+    chat_session_last_activity) is dropped.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            now = time.monotonic()
+            stale = [
+                sid for sid, last in list(chat_session_last_activity.items())
+                if now - last > CHAT_SESSION_IDLE_TIMEOUT_SEC
+            ]
+            for sid in stale:
+                voice_sessions.pop(sid, None)
+                chat_session_locks.pop(sid, None)
+                chat_session_last_activity.pop(sid, None)
+            if stale:
+                print(
+                    f"[chat-reaper] evicted {len(stale)} idle sessions",
+                    flush=True,
+                )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            print(f"[chat-reaper] iteration error: {exc}", flush=True)
+            # don't die on transient errors; sleep and retry
+            await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def _start_chat_session_reaper() -> None:
+    """Launch the chat-session reaper. Lives for the process lifetime."""
+    asyncio.create_task(_chat_session_reaper())
 
 
 app.add_middleware(
@@ -439,6 +581,23 @@ class VoiceChatRequest(BaseModel):
     session_id: str | None = None
     stream: bool = True
     backend: str | None = None
+
+
+class TextTurnRequest(BaseModel):
+    """Chat-widget turn request. Mirrors the Jambonz audio path but with a
+    text utterance instead of speech. Only `message` is required; the rest
+    are optional and default cleanly when missing or empty."""
+
+    message: str
+    session_id: str | None = None
+    name: str | None = None
+    phone: str | None = None
+
+
+class ChatEndRequest(BaseModel):
+    """New-chat-button teardown payload. session_id required."""
+
+    session_id: str
 
 
 def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> None:
@@ -485,7 +644,17 @@ def _used_knowledge_from_chunks(final_chunks: list[dict[str, Any]]) -> list[dict
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "kb": str(settings.app.kb_markdown_path)}
+    return {
+        "ok": True,
+        "kb": str(settings.app.kb_markdown_path),
+        # Bug 29 (2026-05-03) drift monitor: surface approximate
+        # classifier-prompt token count so a future regression that
+        # silently grows the prompt is visible in /api/health before it
+        # overflows max_model_len.
+        "classifier_prompt_tokens_approx": count_tokens_approx(
+            build_classifier_system_prompt()
+        ),
+    }
 
 
 @app.get("/api/backends")
@@ -1033,37 +1202,6 @@ async def _stream_voice_response(
         )
     print(f"[Classifier] tools={len(tool_schemas)} msg='{message[:50]}' session={session_id[:8]}{' SKIP(non-tool)' if _skip else ''}", flush=True)
     if tool_schemas and not _skip:
-        # Build conversation context: last 3 turn pairs. Empirically, classifier
-        # only needs the last couple of exchanges to detect intent and extract
-        # hints; the full 7 pairs caused 1500-2300ms latency in production.
-        _recent_turns = chat_session.transcript[-6:] if chat_session.transcript else []  # 3 pairs
-        _conv_lines = []
-        for _turn in _recent_turns:
-            _role = "Клиент" if _turn.get("role") == "user" else "Бот"
-            _text = str(_turn.get('text', '') or '')
-            # Truncate long bot responses (KB answers can be 500+ chars) to keep
-            # classifier input short. User turns are typically short, truncation
-            # rarely hits them but keeps inputs bounded.
-            if len(_text) > 200:
-                _text = _text[:200].rsplit(' ', 1)[0] + '…'
-            _conv_lines.append(f"{_role}: {_text}")
-        _conv_context = "\n".join(_conv_lines) if _conv_lines else "начало разговора"
-
-        _tool_history = ""
-        # Whole-conversation view: prefer history (persists across turns) and
-        # also include any tool calls already appended this turn.
-        _all_tool_calls = session.tool_calls_history + session.tool_calls_this_turn
-        if _all_tool_calls:
-            _last_tools = []
-            for tc in _all_tool_calls[-3:]:
-                _tc_params = tc.get("params", {})
-                _tc_brief = f"{tc.get('tool', '')}(ok={tc.get('ok', '?')}"
-                if _tc_params.get("client_type"):
-                    _tc_brief += f", client_type={_tc_params['client_type']}"
-                _tc_brief += ")"
-                _last_tools.append(_tc_brief)
-            _tool_history = f"Инструменты в этом разговоре: {', '.join(_last_tools)}"
-
         _t_classify_start = time.time()
         # SessionAgent uses a dedicated small-model vLLM instance (Qwen3-4B on :8788)
         # to avoid scheduler contention with the main 35B model. Falls back to
@@ -1075,241 +1213,8 @@ async def _stream_voice_response(
                 call_openai_compatible,
                 base_url=_sa_base_url,
                 model=_sa_model,
-                system_prompt=(
-                    "Ты SessionAgent голосового бота лизинговой компании. "
-                    "Анализируешь НОВОЕ сообщение клиента в контексте диалога.\n\n"
-                    "Возвращаешь строго JSON:\n"
-                    '{"intent": "TOOL"|"RAG"|"CONVERSATION"|"END_CALL",\n'
-                    ' "subject": "Легковой автомобиль/Грузовой автомобиль/Спецтехника/Оборудование/Недвижимость/Прочий транспорт или null",\n'
-                    ' "cost": число или null,\n'
-                    ' "currency": "BYN"|"USD"|"EUR"|"RUB" или null,\n'
-                    ' "client_type": "Физическое лицо"|"Юридическое лицо" или null,\n'
-                    ' "condition_new": 1|0 или null,\n'
-                    ' "age_years": число или null,\n'
-                    ' "prepaid_pct": число (0-40) или null,\n'
-                    ' "prepaid_amount": число в валюте стоимости или null,\n'
-                    ' "term_months": число (12-84) или null,\n'
-                    ' "type_schedule": "0"|"1" или null,\n'
-                    ' "name": "имя клиента или null",\n'
-                    ' "name_change": "новое имя при исправлении или null",\n'
-                    ' "is_confirmation": true|false,\n'
-                    ' "is_stop_request": true|false,\n'
-                    ' "wants_readback": true|false,\n'
-                    ' "detail_request": true|false,\n'
-                    ' "change_field": "имя поля или null",\n'
-                    ' "change_value": значение или null,\n'
-                    ' "action": "calculate"|"recalculate"|"change_param"|"sms"|"clarify"|"clarify_client_type"|"confirm"|"invalid_param" или null}\n\n'
-                    "intent=TOOL: клиент хочет посчитать / изменить расчёт / отправить СМС / подтвердить расчёт.\n"
-                    "intent=RAG: информационный вопрос (офис, документы, условия общие).\n"
-                    "intent=CONVERSATION: короткая реакция, подтверждение, остановка, знакомство, шутка.\n"
-                    # Bug 22 (Batch 4) + Bug 29 (live call 3d32af7f
-                    # 2026-05-03): the JSON contract above now includes
-                    # END_CALL. Without it in the enum the model rarely
-                    # emits the value, even when the prose taught it the
-                    # marker words — both farewells on call 3d32af7f
-                    # ("Ладно, всё, спасибо" / "Хорошего, спасибо, до
-                    # свидания") fell to CONVERSATION and the LLM
-                    # generated its own goodbye text without triggering
-                    # the SIP-disconnect path.
-                    "intent=END_CALL: клиент явно прощается / завершает разговор. "
-                    "Сигналы клиента (любой из них в сочетании с тоном завершения): "
-                    "'до свидания' / 'пока' / 'всего доброго' / 'всего хорошего' / "
-                    "'хорошего дня' / 'спасибо, всё' / 'всё, спасибо' / 'на этом всё' / "
-                    "'я понял, спасибо' / 'достаточно, спасибо' / 'больше ничего не нужно' / "
-                    "'ладно, всё' / 'хорошо, всё'.\n"
-                    "  ВАЖНО: это intent=END_CALL ТОЛЬКО если клиент НЕ оставил "
-                    "незавершённое действие (нет change_field, нет вопроса). "
-                    "Если клиент сказал 'до свидания, а ещё один вопрос' — это intent=RAG, НЕ END_CALL.\n"
-                    "  Префиксы 'Ладно,' / 'Хорошо,' / 'Хорошего,' / 'Спасибо,' "
-                    "перед прощанием НЕ отменяют END_CALL — это тот же сигнал.\n"
-                    "  Примеры (POSITIVE — END_CALL):\n"
-                    "    'до свидания' -> intent=END_CALL\n"
-                    "    'хорошо, спасибо большое, на этом всё' -> intent=END_CALL\n"
-                    "    'спасибо, до свидания' -> intent=END_CALL\n"
-                    "    'Ладно, всё, спасибо' -> intent=END_CALL\n"
-                    "    'Хорошо, всё, спасибо' -> intent=END_CALL\n"
-                    "    'Хорошего, спасибо, до свидания' -> intent=END_CALL\n"
-                    "    'Достаточно, спасибо, я понял' -> intent=END_CALL\n"
-                    "    'Я понял, всё, до свидания' -> intent=END_CALL\n"
-                    "    'Всего доброго, хорошего дня' -> intent=END_CALL\n"
-                    "  Примеры (NEGATIVE — НЕ END_CALL):\n"
-                    "    'окей, понятно' -> intent=CONVERSATION (просто подтверждение)\n"
-                    "    'до свидания, а ещё один вопрос' -> intent=RAG (есть вопрос)\n"
-                    "    'хорошо, поменяй срок на 48 и до свидания' -> intent=TOOL "
-                    "(есть change_field; END_CALL применится после change на следующем ходу)\n\n"
-                    "ПРИОРИТЕТ intent — ОЧЕНЬ ВАЖНО:\n"
-                    "Если клиент задаёт ВОПРОС о компании или общую информацию "
-                    "(кто владелец/директор/учредитель/собственник, какой адрес/телефон/"
-                    "график работы, когда вы открыты, чем занимаетесь, какие документы "
-                    "нужны, какие условия в целом, история компании, отзывы, контакты), "
-                    "это ВСЕГДА intent=RAG — даже если в предыдущих сообщениях вы "
-                    "собирали параметры расчёта. Параметры в профиле сохраняются, "
-                    "бот вернётся к сбору после ответа на вопрос.\n"
-                    "Примеры (mid-collection drift):\n"
-                    "  Бот спрашивал параметры. Клиент: 'А кто владелец компании?' -> intent=RAG\n"
-                    "  Бот спрашивал параметры. Клиент: 'А кто у вас директор?' -> intent=RAG\n"
-                    "  Бот спрашивал параметры. Клиент: 'А какой ваш адрес в Бресте?' -> intent=RAG\n"
-                    "  Бот спрашивал параметры. Клиент: 'Когда вы работаете?' -> intent=RAG\n"
-                    # Bug 28 (live call 5746bfec 2026-05-03 + follow-up
-                    # call b5d70d6a 2026-05-03 19:48): definition / "what
-                    # is the difference" questions look like topic-naming
-                    # to a 4B model. The rule is SEMANTIC — the user is
-                    # asking ABOUT a concept, not picking a value. ALL
-                    # parameter slots must be null in this case, even if
-                    # the topic noun matches a known parameter value.
-                    "ПРАВИЛО (definition / comparison questions): если клиент СПРАШИВАЕТ "
-                    "о концепции ('что такое X?', 'в чём разница?', 'чем отличается?', "
-                    "'какой лучше?', 'зачем это нужно?', 'как работает?', 'не понимаю'), "
-                    "это intent=RAG и ВСЕ параметры (subject, type_schedule, prepaid_pct, "
-                    "currency, term_months, condition_new, client_type, cost) равны null. "
-                    "Сам факт упоминания термина в вопросе не означает выбор значения — "
-                    "клиент просит ОБЪЯСНИТЬ, а не НАЗВАТЬ.\n"
-                    "  Клиент: 'что такое аннуитет?' -> intent=RAG, type_schedule=null\n"
-                    "  Клиент: 'в чём их разница?' -> intent=RAG, type_schedule=null\n"
-                    "  Клиент: 'чем отличается аннуитет от линейного?' -> intent=RAG, type_schedule=null\n"
-                    "  Клиент: 'какой график лучше?' -> intent=RAG, type_schedule=null\n"
-                    "  Клиент: 'зачем нужен аванс?' -> intent=RAG, prepaid_pct=null\n"
-                    "  Клиент: 'как работает лизинг?' -> intent=RAG, subject=null\n"
-                    "  Клиент: 'не понимаю, объясни' -> intent=RAG, всё null\n"
-                    "intent=TOOL только когда клиент реально прогрессирует расчёт: "
-                    "называет параметр (стоимость, валюта, срок, аванс, график, тип/возраст), "
-                    "подтверждает, меняет, явно просит посчитать или отправить СМС. "
-                    "Сам факт, что разговор шёл о расчёте, НЕ делает следующий вопрос "
-                    "TOOL'ом.\n\n"
-                    "ПРАВИЛА ИЗВЛЕЧЕНИЯ (только из НОВОГО сообщения, не из истории):\n"
-                    "- subject: ТОЛЬКО если клиент явно назвал вид предмета словами. "
-                    "НЕ угадывай между легковым/грузовым по контексту.\n"
-                    "  'легковой/седан/машин\\w*/авто' + марки (BMW/Toyota/Kia/...) -> 'Легковой автомобиль'.\n"
-                    "  'грузовой/грузовик/фура/тягач/самосвал/микроавтобус' -> 'Грузовой автомобиль'.\n"
-                    "  'спецтехника/погрузчик/экскаватор/бульдозер/кран/трактор' -> 'Спецтехника'.\n"
-                    "  'оборудование/станок/линия/установка' -> 'Оборудование'.\n"
-                    "  'недвижимость/квартира/дом/здание/склад/помещение' -> 'Недвижимость'. "
-                    "Бытовое 'офис' (вопросы про адреса/контакты компании) — это RAG, "
-                    "НЕ subject. Слово 'офис' одно НЕ значит, что клиент хочет взять "
-                    "офис в лизинг — почти всегда это вопрос про адреса компании.\n"
-                    "  'автобус/прицеп/мотоцикл/скутер' -> 'Прочий транспорт'.\n"
-                    "  Если вида нет — null. Не выбирай 'Легковой автомобиль' как default.\n"
-                    "- cost: число. НЕ берёшь из истории. Если клиент не назвал число, null.\n"
-                    "- currency: ВАЖНО:\n"
-                    "    * 'рубли'/'рублях'/'рублей'/'BYN'/'белорусские рубли' -> 'BYN' (в Беларуси по умолчанию)\n"
-                    "    * 'российские рубли'/'российский рубль'/'RUB' -> 'RUB' (приложение отклонит)\n"
-                    "    * 'доллары'/'долларах'/'USD' -> 'USD' (физлицо -> конвертация в BYN 3:1)\n"
-                    "    * 'евро'/'EUR' -> 'EUR' (приложение отклонит)\n"
-                    "    * Без слова currency -> null\n"
-                    "    Бытовое 'в рублях' без уточнения страны ВСЕГДА BYN в беларусском контексте.\n"
-                    "- client_type: ТОЛЬКО если клиент ЯВНО назвал свой тип словами. "
-                    "НЕ угадывай из контекста (например, 'хочу машину' НЕ значит 'Физическое лицо'). "
-                    "Если явного слова нет — ставь null.\n"
-                    "  Явные триггеры: 'физлицо/физическое' -> 'Физическое лицо'; "
-                    "все остальные юридические формы — ИП / индивидуальный предприниматель / "
-                    "самозанятый / юрлицо / юридическое / ООО / ОАО / ЗАО / организация / "
-                    "компания / от компании / на компанию / бизнес / бизнесмен / микробизнес / "
-                    "предприниматель -> 'Юридическое лицо'. "
-                    "Калькулятор принимает только два типа: 'Физическое лицо' и 'Юридическое лицо'.\n"
-                    "- condition_new: 'новый/новая/новое' -> 1; "
-                    "'б/у / бу / бэу / б-у / подержанный / с пробегом / "
-                    "не новый / старый / бывший в употреблении' -> 0.\n"
-                    "- age_years: при 'б/у' + число лет (например, '2018 года' -> сколько лет сейчас).\n"
-                    "- prepaid_pct: если клиент назвал процент (например, '20 процентов', 'двадцать процентов').\n"
-                    "- prepaid_amount: если клиент назвал сумму в валюте стоимости (например, '14 тысяч рублей').\n"
-                    "- Либо prepaid_pct либо prepaid_amount, не оба.\n"
-                    "- term_months: срок в месяцах. ЛЮБОЕ число месяцев — извлекай "
-                    "буквально, не округляй и не привязывайся к 'круглым' значениям. "
-                    "Слова 'давай / давайте / хочу / пусть будет / на' перед числом — "
-                    "это синтаксис ответа на вопрос про срок, а НЕ is_confirmation.\n"
-                    "  Месяцы (буквально как сказал клиент):\n"
-                    "    'на 36 месяцев' / '36 месяцев' -> term_months=36\n"
-                    "    'Давай 37 месяцев' -> term_months=37 (НЕ is_confirmation)\n"
-                    "    '60 месяцев' / 'на 60 месяцев' -> term_months=60\n"
-                    "    'хочу 48 месяцев' -> term_months=48\n"
-                    "    'пусть будет 24 месяца' -> term_months=24\n"
-                    "  Годы (конвертируй в месяцы):\n"
-                    "    'на 5 лет' / 'лет на 5' / '5 лет' / 'пять лет' -> term_months=60\n"
-                    "    'на 7 лет' / 'лет на 7' -> term_months=84\n"
-                    "    'три года' -> term_months=36\n"
-                    "  Никогда НЕ выбирай ближайшее 'круглое' число — если клиент сказал "
-                    "37 месяцев, term_months=37, а не 36 или 60.\n"
-                    "- type_schedule: '0' (аннуитет = равные платежи) или "
-                    "'1' (линейный = уменьшающиеся платежи). "
-                    "Прямые слова: 'аннуитет/аннуитетный' -> '0'; "
-                    "'линейный/убывающий/дифференцированный' -> '1'. "
-                    "Семантические описания (когда клиент описывает поведение платежей "
-                    "вместо названия графика — наш бот сам спрашивает 'график удобнее "
-                    "равными платежами или с уменьшением', поэтому клиент эхом отвечает "
-                    "тем же языком): "
-                    "'равные / одинаковые / фиксированные / стабильные / постоянные платежи' / "
-                    "'чтобы платежи были равными' / 'чтобы платил одинаково каждый месяц' -> '0' (аннуитет). "
-                    "'уменьшающиеся / убывающие / падающие платежи' / "
-                    "'первый платёж больше' / 'платежи по убывающей' / "
-                    "'тело долга гасится быстрее' -> '1' (линейный). "
-                    "Эллиптические (короткие) ответы тоже извлекай — клиент часто говорит "
-                    "одно слово в ответ на вопрос бота:\n"
-                    "    'Давай равными' / 'Равными' / 'Равные' / 'Одинаковые' -> type_schedule='0'\n"
-                    "    'Хочу одинаково каждый месяц' / 'Чтобы платил одинаково' -> type_schedule='0'\n"
-                    "    'Давай с уменьшением' / 'С уменьшением' / 'Уменьшающиеся' -> type_schedule='1'\n"
-                    "    'По убывающей' / 'Убывающими' / 'Падающие' -> type_schedule='1'\n"
-                    "  Это работает при первичном выборе и при смене (change_field='type_schedule').\n"
-                    "- name: имя клиента (когда он представляется: 'меня зовут Сергей' -> 'Сергей').\n"
-                    "- name_change: НОВОЕ имя, когда клиент ИСПРАВЛЯЕТ ранее названное (или мисхёрнутое ботом) имя. "
-                    "Заполняй ТОЛЬКО при явных паттернах коррекции: "
-                    "'я не Сергей, Андрей' -> name_change='Андрей'; "
-                    "'ой, перепутала, я Мария' -> name_change='Мария'; "
-                    "'ошиблась, меня зовут Анна' -> name_change='Анна'. "
-                    "Если клиент впервые называет имя ('меня зовут Сергей'), используй поле name, не name_change. "
-                    "Никогда не заполняй name_change именем бота (Ксения/Ксюша) если клиент к нему обращается, не представляется им.\n\n"
-                    "СЕМАНТИЧЕСКИЕ ФЛАГИ:\n"
-                    "- is_confirmation: клиент подтверждает запрос бота ('да', 'всё верно', 'правильно', 'давай', 'согласен').\n"
-                    "- is_stop_request: true ТОЛЬКО если клиент явно просит ассистента прекратить говорить или молчать. "
-                    "Примеры true: 'стоп', 'замолчи', 'помолчи, я думаю', 'подожди секунду, не говори', 'тихо, я сам скажу'. "
-                    "Примеры false: 'а подожди, ладно, неважно, а можно машину...' (подожди как маркер речи), "
-                    "'ну стоп, давай разберёмся' (стоп как эмоция, не команда), 'нажмите стоп-кран' (о другом), "
-                    "'ну и что?', 'алло', 'не слышала?', 'в нашем разговоре уже'. "
-                    "Если сомневаешься — false.\n"
-                    "- wants_readback: клиент просит повторить параметры ('повтори', 'какие параметры', 'что у нас').\n"
-                    "- detail_request: true ТОЛЬКО когда клиент просит подробный/полный расчёт ПОСЛЕ того, "
-                    "как бот уже озвучил краткий результат калькулятора. Триггеры: 'подробнее', 'полный расчёт', "
-                    "'расскажи подробнее', 'покажи всё', 'сколько удорожание', 'какая общая сумма', 'какой выкупной'. "
-                    "Если клиент только начинает разговор или ещё не было расчёта — false. "
-                    "При обычном подтверждении 'Да' — false (это is_confirmation, не detail_request).\n"
-                    "- change_field/change_value: клиент меняет ОДИН параметр. "
-                    "'поменяй срок на 48' -> change_field='term_months', change_value=48. "
-                    "'давай без аванса' -> change_field='prepaid_pct', change_value=0. "
-                    "'в долларах' -> change_field='currency', change_value='USD'.\n"
-                    "ВАЖНО — несколько параметров за один раз: если клиент меняет "
-                    "ДВА И БОЛЕЕ параметра в одной фразе, заполняй все соответствующие "
-                    "поля верхнего уровня (term_months, prepaid_pct, type_schedule и т.п.) "
-                    "и НЕ используй change_field/change_value (та пара только для одного "
-                    "параметра). Примеры:\n"
-                    "  'поменяй срок на 84 и аванс на 0%' -> term_months=84, prepaid_pct=0, "
-                    "change_field=null, change_value=null.\n"
-                    "  'срок 60 месяцев и линейный график' -> term_months=60, "
-                    "type_schedule='1', change_field=null.\n"
-                    "  'аванс 30 процентов и срок 36 месяцев' -> prepaid_pct=30, "
-                    "term_months=36, change_field=null.\n"
-                    "Никогда НЕ выбирай только один параметр из двух названных — это "
-                    "теряет данные клиента и заставляет его повторять.\n\n"
-                    "СЕМАНТИЧЕСКИЕ ССЫЛКИ: если клиент использует ссылку на твой "
-                    "предыдущий ответ ('тот, что дешевле/лучше', 'первый вариант', "
-                    "'как для бизнеса'), посмотри в Диалог чтобы определить значение "
-                    "и извлеки в change_field/change_value. Если такого сравнения "
-                    "в Диалоге не было — change_value=null.\n\n"
-                    "БИЗНЕС-ПРАВИЛА:\n"
-                    "- Физлица: только легковой автомобиль и прочий транспорт. Грузовые, спецтехника, "
-                    "оборудование, недвижимость только для ИП/юрлиц.\n"
-                    "- Рекомендуемые диапазоны: prepaid_pct 0-40; term_months 12-84.\n"
-                    "- КРИТИЧЕСКИ ВАЖНО: term_months, prepaid_pct, prepaid_amount, cost, age_years "
-                    "всегда извлекай ТОЧНО как назвал клиент в НОВОМ сообщении, даже если значение "
-                    "вне рекомендуемого диапазона. НЕ подменяй, НЕ округляй, НЕ кламповай к границам. "
-                    "Если клиент сказал '5 месяцев' -> term_months=5, НЕ 12 и НЕ 60. "
-                    "Если сказал '110 процентов' -> prepaid_pct=110, НЕ 40. "
-                    "Если сказал '200 месяцев' -> term_months=200, НЕ 84. "
-                    "Если сказал 'минус сто тысяч' -> cost=-100000. "
-                    "Валидация диапазонов и сообщение клиенту — задача кода, не твоя.\n"
-                    "- Если клиент хочет расчёт, но client_type неизвестен из всего диалога, "
-                    "ставь action='clarify'.\n\n"
-                    "Только JSON, никаких пояснений."
-                ),
-                user_prompt=f"{_tool_history}\n\nДиалог:\n{_conv_context}\n\nНОВОЕ сообщение: {message}",
+                system_prompt=build_classifier_system_prompt(),
+                user_prompt=_build_classifier_user_prompt(chat_session, session, message),
                 temperature=0.0,
                 max_tokens=160,
                 timeout_sec=4,
@@ -2324,6 +2229,589 @@ async def _jambonz_process_utterance(
     )
 
 
+# ---------------------------------------------------------------------------
+# Chat widget HTTP endpoint (Scope B)
+#
+# Mirrors the Jambonz audio path: SessionAgent classifier → apply_turn →
+# execute_action with TextTtsSink. The same VoiceSession dataclass is reused
+# (transport="chat") so the dispatcher's profile state machine, calc adapter,
+# and SMS handler all just work. No audio path is exercised — TextTtsSink
+# collects sentences instead of synthesizing PCM.
+# ---------------------------------------------------------------------------
+
+
+def _state_dir_for_persistence() -> Path:
+    """Resolve the .state/ directory used by chat persistence + analysis.
+
+    Tests can override the destination by setting the module-level global
+    ``_TEST_STATE_DIR_OVERRIDE`` (via monkeypatch) so transcripts land in
+    ``tmp_path`` instead of the real .state/ directory. Reading via
+    ``globals().get`` keeps the override optional — production never sets it.
+    """
+    override = globals().get("_TEST_STATE_DIR_OVERRIDE")
+    if override is not None:
+        return override
+    return Path(__file__).resolve().parents[1] / ".state"
+
+
+async def _broadcast_profile_snapshot(voice_session: VoiceSession) -> None:
+    """Mirror the immediate profile snapshot the Jambonz dispatcher path
+    broadcasts so chat sessions appear in the SIP monitor with the same
+    shape as voice calls. Bug K parity."""
+    p = voice_session.client_profile
+    try:
+        await broadcast_sip_event({
+            "type": "sip.profile.snapshot",
+            "call_id": voice_session.session_id,
+            "state": p.state.value,
+            "fields": {
+                "name": p.name,
+                "subject": p.subject,
+                "cost": p.cost,
+                "currency": p.currency,
+                "client_type": p.client_type,
+                "condition_new": p.condition_new,
+                "age_years": getattr(p, "age_years", None),
+                "term_months": p.term_months,
+                "prepaid_pct": p.prepaid_pct,
+                "prepaid_amount": p.prepaid_amount,
+                "type_schedule": p.type_schedule,
+            },
+            "missing": sorted(p.missing_fields()),
+        })
+    except Exception:  # noqa: BLE001
+        # Broadcast failures must never break a chat turn — the monitor
+        # is observability, not on the critical path.
+        pass
+
+
+async def _run_chat_session_analysis(
+    *,
+    session_id: str,
+    transcript: list,
+    phone: str,
+    state_dir: Path,
+) -> None:
+    """Run the same session-quality analysis voice uses, in a background
+    task so the HTTP response isn't held up. Triggered when EndCall fires
+    on a chat turn."""
+    try:
+        from .session_analyzer import analyze_session, save_report
+        from .llm import call_openai_compatible
+        report = await asyncio.to_thread(
+            analyze_session,
+            transcript,
+            call_openai_compatible,
+            settings.llm.base_url,
+            settings.llm.model,
+        )
+        report["session_id"] = session_id
+        report["transport"] = "chat"
+        report["phone"] = phone or "unknown"
+        save_report(report, state_dir)
+        print(
+            f"[ChatTurn:{session_id[:8]}] analysis: "
+            f"score={report.get('overall_score', '?')}",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ChatTurn:{session_id[:8]}] analysis failed: {exc}", flush=True)
+
+
+def _build_classifier_user_prompt(
+    chat_session: Any,
+    voice_session: VoiceSession,
+    message: str,
+) -> str:
+    """Build the SessionAgent classifier user_prompt.
+
+    Shared between the Jambonz voice path and the chat /api/text-turn
+    path so single-word answers like 'да' / 'новая' / 'Минск' carry
+    enough dialog context to route correctly. Mirrors the inline
+    construction that previously lived at the voice classifier call
+    site (~app.py:1075-1115).
+
+    Inputs:
+      chat_session: SessionState with .transcript (list of role/text dicts).
+      voice_session: VoiceSession exposing tool_calls_history and
+        tool_calls_this_turn (both available for voice and chat).
+      message: the new user utterance to classify.
+
+    Output: a string with three sections (tool history, dialogue,
+    new message), the same shape parse_classifier_output expects.
+    """
+    # Last 3 turn pairs only — empirically the classifier needs no more
+    # than that, and full transcripts caused 1500-2300ms latency in
+    # production.
+    recent_turns = chat_session.transcript[-6:] if getattr(chat_session, "transcript", None) else []
+    conv_lines: list[str] = []
+    for turn in recent_turns:
+        role = "Клиент" if turn.get("role") == "user" else "Бот"
+        text = str(turn.get("text", "") or "")
+        # Truncate long bot responses (KB answers can be 500+ chars) to
+        # keep classifier input bounded.
+        if len(text) > 200:
+            text = text[:200].rsplit(" ", 1)[0] + "…"
+        conv_lines.append(f"{role}: {text}")
+    conv_context = "\n".join(conv_lines) if conv_lines else "начало разговора"
+
+    tool_history = ""
+    all_tool_calls = (
+        list(getattr(voice_session, "tool_calls_history", []) or [])
+        + list(getattr(voice_session, "tool_calls_this_turn", []) or [])
+    )
+    if all_tool_calls:
+        last_tools: list[str] = []
+        for tc in all_tool_calls[-3:]:
+            tc_params = tc.get("params", {}) or {}
+            tc_brief = f"{tc.get('tool', '')}(ok={tc.get('ok', '?')}"
+            if tc_params.get("client_type"):
+                tc_brief += f", client_type={tc_params['client_type']}"
+            tc_brief += ")"
+            last_tools.append(tc_brief)
+        tool_history = f"Инструменты в этом разговоре: {', '.join(last_tools)}"
+
+    return f"{tool_history}\n\nДиалог:\n{conv_context}\n\nНОВОЕ сообщение: {message}"
+
+
+async def _text_process_utterance(
+    *,
+    voice_session: VoiceSession,
+    chat_session: Any,
+    message: str,
+) -> dict[str, Any]:
+    """Run a single chat turn through the same dispatcher voice uses.
+
+    Steps mirror `_stream_voice_response` (the voice dispatcher invocation
+    block ~line 1170) minus the audio path:
+
+      1. Stamp turn_id and broadcast `sip.stt.result` so the monitor sees
+         the caller utterance land.
+      2. Classify via the dedicated SessionAgent vLLM (same prompt + model
+         as voice). On classifier failure, fall back to a synthesized
+         CONVERSATION ClassifierOutput so apply_turn still receives a
+         non-None input.
+      3. Start RAG retrieval in parallel — execute_action's
+         FireLLMFallback handler awaits the future only when needed.
+      4. Build the dispatcher adapters (LLM stream, TextTtsSink, calc, RAG
+         future) and run apply_turn → execute_action.
+      5. Append the user/assistant turn to chat_session.transcript and
+         persist the chat turn to disk (per-turn save: HTTP has no
+         disconnect signal, so we must be safe against the user closing
+         the tab between turns).
+      6. On EndCall, stamp ended_at, emit `sip.call.end`, and dispatch the
+         analyzer in a background task so it doesn't block the response.
+    """
+    from .classifier_prompt import build_classifier_system_prompt
+    from .classifier_schema import parse_classifier_output
+    from .execute_adapters import (
+        LLMStreamBackend,
+        TextTtsSink,
+        CalcAdapter,
+        RagFuture,
+    )
+    from .turn_dispatcher import apply_turn, execute_action
+    from .llm import call_openai_compatible
+
+    # C1: Per-turn state reset — same as the voice dispatcher (app.py:905).
+    # Without this, tool_calls_this_turn stays non-empty after the first
+    # calc fires and downstream gates misbehave on subsequent turns
+    # (stuck-in-calculator loop, see voice_session.reset_turn_state docstring).
+    voice_session.reset_turn_state()
+
+    voice_session.latest_finalized_turn_id += 1
+    turn_id = voice_session.latest_finalized_turn_id
+
+    # Word-form number normalization (chat-only). Voice's Whisper STT already
+    # returns digit-form most of the time; chat gets whatever the user typed,
+    # and the 4B classifier is unreliable on Russian word-numbers
+    # ("тридцать процентов" → not parsed as 30). We normalize to digits BEFORE
+    # the classifier sees the message but AFTER broadcasting the raw text to
+    # the monitor + storing it in the transcript. The user never sees the
+    # rewritten form on screen — their own words are preserved verbatim.
+    from .numeric_words_ru import replace_ru_number_words
+    raw_message = message
+    message = replace_ru_number_words(message)
+
+    # Caller utterance -> monitor (parity with the Jambonz path's STT broadcast).
+    # Broadcast the RAW message so the operator sees what the user typed.
+    try:
+        await broadcast_sip_event({
+            "type": "sip.stt.result",
+            "call_id": voice_session.session_id,
+            "text": raw_message,
+        })
+    except Exception:  # noqa: BLE001
+        # Monitor broadcast must never break a chat turn.
+        pass
+
+    # 1. Classify (same SessionAgent vLLM the voice path uses; falls
+    # through to the legacy effective_* defaults when the dedicated
+    # classifier instance is unset).
+    sa_base_url = settings.llm.session_agent_base_url or settings.llm.base_url
+    sa_model = settings.llm.session_agent_model or settings.llm.model
+    try:
+        classify_resp = await asyncio.to_thread(
+            call_openai_compatible,
+            base_url=sa_base_url,
+            model=sa_model,
+            system_prompt=build_classifier_system_prompt(),
+            # I2: parity with the voice classifier — bare `message` loses
+            # dialog context, so single-word answers ('да', 'новая',
+            # 'Минск') route wrong. Shared helper builds the same
+            # tool-history + dialogue + new-message framing voice uses.
+            user_prompt=_build_classifier_user_prompt(
+                chat_session, voice_session, message,
+            ),
+            temperature=0.0,
+            max_tokens=160,
+            timeout_sec=4,
+        )
+        sa_output = parse_classifier_output(
+            (classify_resp.text or "").strip(), message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[ChatTurn:{voice_session.session_id[:8]}] classify failed: {exc}",
+            flush=True,
+        )
+        # apply_turn requires a non-None ClassifierOutput; the parser
+        # synthesizes an empty CONVERSATION fallback when given empty
+        # text, so dispatch still reaches FireLLMFallback or Noop.
+        sa_output = parse_classifier_output("", message)
+
+    # C2: stamp the recent-dialogue memory block on the session so
+    # execute_action's FireLLMFallback handler can prepend it to the
+    # LLM prompt (turn_dispatcher.py:1500-1511). Without this, every
+    # chat LLM call sees only the current utterance and the bot
+    # forgets what was said two turns ago. Mirrors the voice path
+    # (app.py:933 + app.py:1226).
+    voice_session.memory_block = build_memory_block(
+        chat_session.transcript, settings.app.memory_turns,
+    )
+
+    # 2. RAG retrieval in parallel (same shape as voice — voice_fast=False
+    # because there's no audio latency budget to fight here).
+    rag_task = asyncio.create_task(asyncio.to_thread(
+        engine.retrieve, message, False, False, voice_session.session_id,
+    ))
+
+    # 3. Dispatcher adapters.
+    text_sink = TextTtsSink(
+        session_id=voice_session.session_id,
+        broadcast_fn=broadcast_sip_event,
+    )
+    system_prompt = augment_system_prompt_with_working_hours(
+        settings.app.system_prompt_path.read_text(encoding="utf-8")
+    )
+    llm_backend = LLMStreamBackend(
+        base_url=settings.llm.base_url,
+        model=settings.llm.model,
+        temperature=settings.llm.temperature,
+        max_tokens=200,
+        timeout_sec=settings.llm.timeout_sec,
+        system_prompt=system_prompt,
+    )
+    calc = CalcAdapter(
+        session_id=voice_session.session_id,
+        client_phone=voice_session.client_phone,
+    )
+    rag_future_adapter = RagFuture(rag_task)
+
+    # 4. apply_turn -> execute_action.
+    action = apply_turn(
+        voice_session.client_profile,
+        sa_output,
+        message,
+        turn_id=turn_id,
+    )
+    action_name = type(action).__name__
+    print(
+        f"[ChatTurn:{voice_session.session_id[:8]}] turn_id={turn_id} "
+        f"action={action_name}",
+        flush=True,
+    )
+
+    # Pre-execute snapshot so the monitor reflects state-machine work
+    # apply_turn already did before the (potentially slow) LLM stream
+    # runs. Voice does the same at app.py:1245-1267.
+    await _broadcast_profile_snapshot(voice_session)
+
+    chunks: list[str] = []
+    try:
+        async for chunk in execute_action(
+            action,
+            ws=None,
+            session=voice_session,
+            backend=llm_backend,
+            tts=text_sink,
+            calc=calc,
+            rag_future=rag_future_adapter,
+        ):
+            chunks.append(chunk)
+    finally:
+        # If apply_turn picked an action that doesn't consume the RAG
+        # future, the speculative task is still running. Cancel it so
+        # we don't leak threads / event-loop callbacks.
+        if not rag_task.done():
+            rag_task.cancel()
+
+    # Prefer the dispatcher's yielded chunks; fall back to whatever
+    # TextTtsSink collected (handlers like EmitClarify say() text without
+    # yielding it back to the caller).
+    full_reply = " ".join(chunks).strip()
+    if not full_reply:
+        full_reply = " ".join(text_sink.collected).strip()
+
+    # Chat-only post-processing: KB strings are TTS-phonetic ("точка бай",
+    # "инфо собака"). Convert to display form before persisting/broadcasting.
+    if full_reply:
+        from .tts_to_chat_render import tts_to_chat_render
+        full_reply = tts_to_chat_render(full_reply)
+
+    ended = action_name == "EndCall"
+
+    # Update the SessionState transcript (used by per-turn persistence
+    # and downstream memory_block construction in voice paths). Mirrors
+    # _append_turn's role/text shape.
+    if raw_message:
+        # Persist what the user actually typed, not the digit-normalized
+        # form fed to the classifier — the transcript is what gets read
+        # back in monitor / analyzer / saved transcripts.
+        chat_session.transcript.append({"role": "user", "text": raw_message})
+    if full_reply:
+        chat_session.transcript.append({"role": "assistant", "text": full_reply})
+    state.update(chat_session)
+
+    if full_reply:
+        try:
+            await broadcast_sip_event({
+                "type": "sip.llm.final",
+                "call_id": voice_session.session_id,
+                "text": full_reply,
+                "interrupted": False,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Post-execute snapshot — voice path equivalent at app.py:1334-1356.
+    await _broadcast_profile_snapshot(voice_session)
+
+    # 5. Per-turn persistence. HTTP has no disconnect, so we save after
+    # every turn — close-the-tab still leaves a complete record of every
+    # finished exchange.
+    from .chat_persistence import save_chat_turn, mark_session_ended
+    state_dir = _state_dir_for_persistence()
+    tool_calls = (
+        list(getattr(voice_session, "tool_calls_history", []) or [])
+        + list(getattr(voice_session, "tool_calls_this_turn", []) or [])
+    )
+    try:
+        save_chat_turn(
+            session_id=voice_session.session_id,
+            transcript=chat_session.transcript,
+            tool_calls=tool_calls,
+            name=voice_session.client_name or "",
+            phone=voice_session.client_phone or "",
+            state_dir=state_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Never let a disk error sabotage the live response — log + move on.
+        print(
+            f"[ChatTurn:{voice_session.session_id[:8]}] persistence failed: {exc}",
+            flush=True,
+        )
+
+    # 6. EndCall: stamp ended_at, broadcast call.end, fire-and-forget the
+    # quality analysis. Analysis runs in a background task because the
+    # 30-second LLM call would block the HTTP response.
+    if ended:
+        try:
+            mark_session_ended(voice_session.session_id, state_dir=state_dir)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await broadcast_sip_event({
+                "type": "sip.call.end",
+                "call_id": voice_session.session_id,
+                "reason": "end_call_action",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        if len(chat_session.transcript) >= 4:
+            asyncio.create_task(_run_chat_session_analysis(
+                session_id=voice_session.session_id,
+                transcript=list(chat_session.transcript),
+                phone=voice_session.client_phone or "",
+                state_dir=state_dir,
+            ))
+        # I1: Remove the session from voice_sessions so the process
+        # doesn't leak memory across the lifetime of long-running
+        # deployments. Chat HTTP has no disconnect signal — if EndCall
+        # never fires (tab close), the entry would live forever
+        # otherwise. Transcript is already persisted to disk via
+        # save_chat_turn / mark_session_ended above; only the in-memory
+        # hot state is dropped here. Mirrors the voice path's pop on
+        # WebSocket disconnect (app.py:1965, 2984). The StateStore
+        # entry (state[session_id]) is intentionally NOT removed — it
+        # is the durable mirror used by analysis + transcript readers.
+        voice_sessions.pop(voice_session.session_id, None)
+
+    return {
+        "ok": True,
+        "session_id": voice_session.session_id,
+        "reply": full_reply,
+        "action": action_name,
+        "ended": ended,
+        "profile_state": voice_session.client_profile.state.value,
+        "missing": sorted(voice_session.client_profile.missing_fields()),
+    }
+
+
+@app.post("/api/text-turn")
+async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
+    """Chat widget turn endpoint (Scope B).
+
+    Single HTTP POST = one user utterance through the full SessionAgent
+    classifier -> apply_turn -> execute_action pipeline. Returns the
+    assistant's reply plus the post-turn profile state so the widget can
+    render progress (state, missing fields).
+    """
+    message = (req.message or "").strip()
+    if not message:
+        # Match /api/chat convention: HTTP 200 + ok:false + error string.
+        return {"ok": False, "error": "empty message"}
+
+    session_id = req.session_id or f"chat-{uuid.uuid4().hex[:12]}"
+
+    # Codex adversarial review: caller-controlled session_id flows into
+    # chat_persistence's f"{session_id}.json" path; "../sessions" would
+    # overwrite the StateStore. Reject anything that isn't the auto-
+    # generated chat-<uuid12> shape. Defense-in-depth path containment
+    # also lives in chat_persistence._safe_transcript_path.
+    if not _VALID_SESSION_ID.match(session_id):
+        return {"ok": False, "error": "invalid session_id"}
+
+    # Codex adversarial review: random session_id posts could grow
+    # voice_sessions unboundedly. Cap blocks NEW session creation only;
+    # existing sessions always proceed. Reaper drops idle entries to
+    # free slots.
+    if (
+        session_id not in voice_sessions
+        and len(voice_sessions) >= CHAT_SESSION_MAX_ACTIVE
+    ):
+        return {"ok": False, "error": "server busy, retry later"}
+
+    # Codex adversarial review: chat copy of the dispatcher lacks voice's
+    # stale-turn guard, so two overlapping HTTP turns for one session_id
+    # (retry, double-submit, slow classifier) could apply older classifier
+    # result after newer → profile-state / calc / SMS corruption. Acquire
+    # a per-session lock to serialize turns. setdefault is safe here: no
+    # await happens between lookup and acquisition, so another coroutine
+    # can't slip a competing Lock into the dict.
+    lock = chat_session_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        voice_session = voice_sessions.get(session_id)
+        if voice_session is None:
+            # First turn of a new chat session — instantiate the same
+            # VoiceSession dataclass voice uses, with transport="chat" so any
+            # downstream code that switches on transport handles it correctly.
+            voice_session = VoiceSession(session_id=session_id, transport="chat")
+            voice_session.client_name = (req.name or "").strip()
+            voice_session.client_phone = (req.phone or "").strip() or None
+            # Profile state machine reads client_profile.name. Without this, the
+            # classifier later fills the empty slot with whatever non-name input
+            # arrives next ("фиизическое", etc.). Mirror voice's name-capture step.
+            if voice_session.client_name:
+                voice_session.client_profile.name = voice_session.client_name
+            voice_sessions[session_id] = voice_session
+            try:
+                await broadcast_sip_event({
+                    "type": "sip.call.start",
+                    "call_id": session_id,
+                    "phone": voice_session.client_phone or "chat",
+                    "sip_user": "chat",
+                })
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Stamp last-activity for the idle reaper. Inside the lock so the
+        # reaper-vs-handler ordering is well-defined.
+        chat_session_last_activity[session_id] = time.monotonic()
+
+        chat_session = state.get(session_id) or state.create(session_id)
+
+        result = await _text_process_utterance(
+            voice_session=voice_session,
+            chat_session=chat_session,
+            message=message,
+        )
+
+    # On EndCall the session was already popped from voice_sessions inside
+    # _text_process_utterance. Drop the lock + activity stamp from the
+    # registries too so we don't leak entries — session_id won't be reused.
+    if result.get("ended"):
+        chat_session_locks.pop(session_id, None)
+        chat_session_last_activity.pop(session_id, None)
+
+    return result
+
+
+@app.post("/api/chat/end")
+async def chat_end(req: ChatEndRequest) -> dict[str, Any]:
+    """Explicit teardown for the chat widget's new-chat button.
+
+    Pops in-memory state (voice_sessions, locks, last-activity) and
+    broadcasts sip.call.end so the operator monitor clears the call
+    badge + profile panel right away — no waiting for the idle reaper.
+    Persisted transcript on disk is left intact for post-hoc inspection.
+    """
+    sid = req.session_id
+    if not _VALID_SESSION_ID.match(sid):
+        return {"ok": False, "error": "invalid session_id"}
+    existed = sid in voice_sessions
+    voice_sessions.pop(sid, None)
+    chat_session_locks.pop(sid, None)
+    chat_session_last_activity.pop(sid, None)
+    if existed:
+        try:
+            await broadcast_sip_event({
+                "type": "sip.call.end",
+                "call_id": sid,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "ended": existed}
+
+
+@app.get("/api/chat/transcript")
+async def get_chat_transcript(session_id: str) -> dict[str, Any]:
+    """Return the persisted transcript for a chat session, if any.
+
+    Used by the chat widget on page refresh to restore the on-screen
+    bubbles. session_id is validated against the same allowlist used by
+    /api/text-turn so a malicious caller can't path-traverse into
+    arbitrary state files.
+    """
+    if not _VALID_SESSION_ID.match(session_id):
+        return {"ok": False, "error": "invalid session_id"}
+    from .chat_persistence import load_chat_turn
+    record = load_chat_turn(session_id, state_dir=_state_dir_for_persistence())
+    if record is None:
+        return {"ok": True, "found": False, "transcript": []}
+    return {
+        "ok": True,
+        "found": True,
+        "transcript": record.get("transcript", []),
+        "name": record.get("name", ""),
+        "phone": record.get("phone", ""),
+        "started_at": record.get("started_at"),
+        "last_turn_at": record.get("last_turn_at"),
+        "ended_at": record.get("ended_at"),
+        "tool_call_count": record.get("tool_call_count", 0),
+    }
+
+
 @app.websocket("/ws/jambonz")
 async def jambonz_control_ws(websocket: WebSocket) -> None:
     """Jambonz call control WebSocket (subprotocol: ws.jambonz.org)."""
@@ -2623,10 +3111,12 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                     vad.feed(pcm_16k)
 
                     # Barge-in: require BOTH VAD probability AND audio energy (RMS).
-                    # Silero VAD has state residue: after real speech, prob stays 0.99+
-                    # for many frames even on silence. RMS check catches this:
-                    # echo/silence RMS = 0-110, real speech RMS = 2000+.
-                    # RMS floor 300 cleanly separates them.
+                    # Silero VAD has state residue: after real speech, prob stays 0.84+
+                    # for many frames even on silence/echo, often pulling RMS up to
+                    # ~600-800 from in-band noise. Empirical 2026-05-07 data: real
+                    # speech RMS ≥ 7500, false positives 658-725 with prob 0.84-0.86,
+                    # clean 10x gap. Floor 1500 sits in the middle, blocks residue,
+                    # leaves headroom for quiet real speech (~2000+).
                     import struct as _st_bi
                     import math as _math_bi
                     _n_bi = len(pcm_16k) // 2
@@ -2636,7 +3126,7 @@ async def jambonz_audio_ws(websocket: WebSocket) -> None:
                         _frame_rms = _math_bi.sqrt(sum(s * s for s in _samps_bi) / _n_bi)
 
                     _prob = vad.last_probability
-                    if _prob >= 0.40 and _frame_rms >= 300:
+                    if _prob >= 0.40 and _frame_rms >= 1500:
                         if not hasattr(session, '_barge_vad_count'):
                             session._barge_vad_count = 0
                         session._barge_vad_count += 1
@@ -2845,16 +3335,37 @@ async def jambonz_credentials() -> JSONResponse:
 
 @app.websocket("/ws/sip-monitor")
 async def sip_monitor_ws(websocket: WebSocket) -> None:
-    """Read-only WebSocket for SIP call monitoring."""
+    """Read-only WebSocket for SIP call monitoring.
+
+    On connect, snapshots the recent event history under
+    _sip_broadcast_lock and ATOMICALLY joins the broadcast set, then
+    streams the snapshot through the client's own per-WS write_lock.
+    The atomic snapshot+add closes the "missed event between snapshot
+    and join" gap. The per-WS write_lock ensures the replay loop and
+    concurrent live broadcasts never call send_json on the same socket
+    simultaneously — concurrent sends interleave WebSocket frames and
+    silently break the protocol stream (the 2026-05-08 monitor
+    flakiness symptom: "connected" line followed by nothing until
+    refresh).
+    """
     await websocket.accept()
-    _sip_monitor_clients.add(websocket)
+    client = _MonitorClient(websocket)
+    async with _sip_broadcast_lock:
+        history_snapshot = list(_sip_event_history)
+        _sip_monitor_clients.add(client)
     try:
+        for past in history_snapshot:
+            await client.send(past)
         while True:
             await websocket.receive_text()  # keepalive
     except WebSocketDisconnect:
         pass
+    except Exception:  # noqa: BLE001
+        # Replay or keepalive error — tear down. The client's write_lock
+        # guarantees no broadcast write is mid-flight at this moment.
+        pass
     finally:
-        _sip_monitor_clients.discard(websocket)
+        _sip_monitor_clients.discard(client)
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

@@ -420,5 +420,20 @@ else
 fi
 
 info ""
-info "To enable SIP telephony:"
+# ---------------------------------------------------------------------------
+# Print the operator-facing URLs (chat works without Jambonz; SIP does not).
+# ---------------------------------------------------------------------------
+PUBLIC_IP_GUESS=$(grep '^PUBLIC_IP=' .env 2>/dev/null | cut -d= -f2 | tr -d "'\" " || true)
+if [ -z "$PUBLIC_IP_GUESS" ]; then
+  PUBLIC_IP_GUESS=$(curl -s --max-time 3 https://ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "<your-IP>")
+fi
+
+info "Operator URLs:"
+info "  SIP monitor:           http://${PUBLIC_IP_GUESS}:8000/sip_monitor.html"
+info "  Chat widget standalone: http://${PUBLIC_IP_GUESS}:8000/chat_widget.html"
+info "    (full-page sip_monitor with chat as floating FAB overlay — exactly what a real client embed looks like)"
+info "  Voice browser demo:    http://${PUBLIC_IP_GUESS}:8000/demo.html"
+info ""
+info "Chat is HTTP-only and works right now — no Jambonz required."
+info "To enable SIP telephony for voice testing (Zoiper):"
 info "  bash scripts/deploy_jambonz.sh"

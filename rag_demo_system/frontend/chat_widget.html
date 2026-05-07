@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Микро Лизинг · Чат + SIP Monitor</title>
+    <link rel="icon" href="favicon.ico" />
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <link rel="stylesheet" href="chat_widget.css" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body { background: oklch(0.98 0.005 80); }
+    </style>
+  </head>
+  <body>
+    <!-- Chat panel as the main visible element (always open, no FAB) +
+         sip_monitor side-by-side, filtered to the current chat session_id.
+         data-host="#mlc-host" triggers the JS's mountHost branch. -->
+    <div id="mlc-host"></div>
+    <script src="chat_widget.js" data-host="#mlc-host" data-api=""></script>
+  </body>
+</html>

@@ -928,6 +928,24 @@ def _dispatch_once(
     # SMS can never piggyback off a change-confirm "Да." regardless of
     # what last_offer was. Pure post-calc SMS-confirm flow keeps working
     # because pre_turn_state is CONFIRMED there.
+    # Bug 8 follow-up (2026-05-07): "detail" branch of step 5c.
+    # First post-calc turn stamps last_offer="detail" because the terse
+    # render now asks "Хотите услышать подробный расчёт?" (not the old
+    # detail-or-SMS combined offer). A bare "Да" / "давай" must route to
+    # the detail render, NOT to FireSMS — otherwise "давай" sends an SMS
+    # for a calc the user hasn't seen the breakdown for. Mirrors the
+    # post-CONFIRMED guard so a stale "detail" offer can't piggyback off
+    # a change-confirm turn.
+    if (
+        getattr(profile, "last_offer", None) == "detail"
+        and classifier_output.is_confirmation
+        and not classifier_output.change_field
+        and classifier_output.action != "change_param"
+        and pre_turn_state == ProfileState.CONFIRMED
+    ):
+        profile.last_offer = None
+        return EmitCalcDetail()
+
     if (
         getattr(profile, "last_offer", None) == "sms"
         and classifier_output.is_confirmation
@@ -1264,11 +1282,14 @@ async def execute_action(
             _reset_calc_failure(session, calc_sig)
             _append_tool_call(session, action.calc_params, result)
             spoken = render_calc_result(result)
-            # Stamp last_offer="sms" so a bare "Да" on the next turn
-            # routes through apply_turn STEP 5c → FireSMS instead of
-            # re-firing FireCalc (live call cdbcf56b 2026-04-26).
+            # Bug 8 follow-up (2026-05-07): the terse render now asks about
+            # DETAIL only (not detail-or-SMS combined). Stamp last_offer="detail"
+            # so a bare "Да" on the next turn routes through apply_turn STEP
+            # 5c-detail → EmitCalcDetail, NOT FireSMS. After detail is
+            # rendered, last_offer flips to "sms" (see EmitCalcDetail handler
+            # below) so the next "Да" then routes to SMS.
             try:
-                session.client_profile.last_offer = "sms"
+                session.client_profile.last_offer = "detail"
             except Exception:  # noqa: BLE001
                 pass
         else:
@@ -1347,6 +1368,13 @@ async def execute_action(
             )
         else:
             spoken = render_calc_result(_last_calc["result"], detailed=True)
+            # Bug 8 follow-up (2026-05-07): the detailed render now asks
+            # "Отправить график платежей по СМС?". Stamp last_offer="sms"
+            # so the next bare "Да" / "давай" routes to FireSMS via step 5c.
+            try:
+                session.client_profile.last_offer = "sms"
+            except Exception:  # noqa: BLE001
+                pass
         await tts.say(spoken)
         yield spoken
         return
@@ -1378,10 +1406,21 @@ async def execute_action(
             None,
         )
         _phone = getattr(session, "client_phone", None)
-        if not _last_calc or not _phone:
+        # Differentiate the two failure modes — debugging the chat path
+        # was muddled by both branches reading "нечего отправить" in
+        # session_analyzer. (Bug surfaced 2026-05-07 calc_smoke run.)
+        if not _last_calc:
             spoken = (
                 "Извините, мне пока нечего отправить. "
                 "Давайте сначала рассчитаем условия."
+            )
+            await tts.say(spoken)
+            yield spoken
+            return
+        if not _phone:
+            spoken = (
+                "Чтобы отправить график по СМС, мне нужен ваш номер телефона. "
+                "Подскажите, на какой номер прислать?"
             )
             await tts.say(spoken)
             yield spoken
