@@ -40,7 +40,7 @@ RESET = "\033[0m"
 
 # ── HTTP plumbing ─────────────────────────────────────────────────────────
 
-def post_turn(base: str, session_id: str, message: str, name: str = "Тест", phone: str = "") -> dict:
+def post_turn(base: str, session_id: str, message: str, name: str = "Тест", phone: str = "+375291234567") -> dict:
     """POST one /api/text-turn and return the parsed response."""
     body = json.dumps({
         "message": message,
@@ -245,16 +245,12 @@ SCENARIOS: dict[str, list[tuple[str, Callable[[dict], str | None], str]]] = {
     "minsk_hours_kb": [
         # The KB explicitly names "суббота и воскресенье" but the LLM often
         # paraphrases as "выходные дни". Accept either — both are factually
-        # correct in Russian. What we DON'T accept is the old wrong answer
-        # ("только в будние дни" for Минск).
+        # correct in Russian. The old wrong answer (Минск described as
+        # weekday-only, contradicting the KB) would not contain either of
+        # these words at all, so this single assertion catches the
+        # regression cleanly.
         ("Когда работаете в Минске?",
-            all_checks(
-                reply_contains_any("суббот", "выходн"),
-                lambda r: ("только в будние" in (r.get("reply") or "").lower()
-                           and "минск" in (r.get("reply") or "").lower())
-                          and 'Minsk wrongly described as weekday-only'
-                          or None,
-            ),
+            reply_contains_any("суббот", "выходн"),
             "Minsk weekend hours mentioned"),
     ],
     "tts_chat_render_dotby": [

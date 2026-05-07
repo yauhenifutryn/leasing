@@ -1406,10 +1406,21 @@ async def execute_action(
             None,
         )
         _phone = getattr(session, "client_phone", None)
-        if not _last_calc or not _phone:
+        # Differentiate the two failure modes — debugging the chat path
+        # was muddled by both branches reading "нечего отправить" in
+        # session_analyzer. (Bug surfaced 2026-05-07 calc_smoke run.)
+        if not _last_calc:
             spoken = (
                 "Извините, мне пока нечего отправить. "
                 "Давайте сначала рассчитаем условия."
+            )
+            await tts.say(spoken)
+            yield spoken
+            return
+        if not _phone:
+            spoken = (
+                "Чтобы отправить график по СМС, мне нужен ваш номер телефона. "
+                "Подскажите, на какой номер прислать?"
             )
             await tts.say(spoken)
             yield spoken
