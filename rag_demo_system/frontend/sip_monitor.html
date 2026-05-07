@@ -65,12 +65,12 @@
   </table>
 </div>
 <div class="calls" id="activeCalls"></div>
-<div class="profile-panel" id="profilePanel">
-  <h4>Profile snapshot <span style="color:#888; font-weight:normal;" id="ppCallId"></span></h4>
-  <div class="pp-state" id="ppState"></div>
-  <div class="pp-grid" id="ppGrid"></div>
-  <div class="pp-missing" id="ppMissing"></div>
-</div>
+<!-- Profile snapshots render one panel per active call_id (chat or
+     voice). The unfiltered operator monitor can show multiple at once
+     when several sessions are live; filtered views (?session= or
+     ?user=) naturally show only what passes the filter. Panels are
+     created on first sip.profile.snapshot and removed on sip.call.end. -->
+<div id="profilePanels"></div>
 <div class="log" id="log"></div>
 <script>
 (function() {
@@ -200,6 +200,11 @@
       delete activeCalls[cid];
       updateCallBadges();
       addLog('system', cid, 'Call ended (' + dur + ')');
+      // Drop the per-call profile panel so the operator's view stays
+      // tidy when sessions come and go. fullCid is what we keyed it on
+      // so we look it up the same way.
+      var endedPanel = document.getElementById('pp-' + fullCid);
+      if (endedPanel) endedPanel.remove();
     } else if (t === 'sip.vad.speech') {
       if (msg.event === 'start') addLog('system', cid, 'VAD: speech start');
     } else if (t === 'sip.stt.result') {
@@ -223,18 +228,25 @@
       var prefix = msg.interrupted ? '✗ FINAL (interrupted): ' : '✓ FINAL: ';
       addLog('final' + (msg.interrupted ? ' interrupted' : ''), cid, prefix + (msg.text || ''));
     } else if (t === 'sip.profile.snapshot') {
-      renderProfile(cid, msg);
+      renderProfile(cid, fullCid, msg);
     }
   }
 
-  function renderProfile(cid, msg) {
-    var panel = document.getElementById('profilePanel');
-    var grid = document.getElementById('ppGrid');
-    var stateEl = document.getElementById('ppState');
-    var missingEl = document.getElementById('ppMissing');
-    var idEl = document.getElementById('ppCallId');
+  // One profile panel per call_id. Created lazily on first snapshot,
+  // updated in place on subsequent snapshots, removed on sip.call.end.
+  // Keying on fullCid (not the 8-char prefix) avoids collisions when
+  // two sessions happen to share a prefix.
+  function renderProfile(cid, fullCid, msg) {
+    var container = document.getElementById('profilePanels');
+    var panelId = 'pp-' + fullCid;
+    var panel = document.getElementById(panelId);
+    if (!panel) panel = createProfilePanel(panelId, cid, fullCid);
+    if (!panel.parentNode) container.appendChild(panel);
+
+    var grid = panel.querySelector('.pp-grid');
+    var stateEl = panel.querySelector('.pp-state');
+    var missingEl = panel.querySelector('.pp-missing');
     panel.style.display = 'block';
-    idEl.textContent = '[' + cid + ']';
     stateEl.textContent = 'state = ' + (msg.state || '?');
     while (grid.firstChild) grid.removeChild(grid.firstChild);
     var fields = msg.fields || {};
@@ -267,6 +279,50 @@
     }
     var missing = msg.missing || [];
     missingEl.textContent = missing.length ? 'missing: ' + missing.join(', ') : 'all required fields captured';
+  }
+
+  // Build the DOM for one profile panel. The owner label distinguishes
+  // chats ("chat <cid>") from voice accounts ("sergey (+37529...)") so
+  // an operator looking at the unfiltered monitor can see at a glance
+  // which session each profile snapshot belongs to.
+  function createProfilePanel(panelId, cid, fullCid) {
+    var panel = document.createElement('div');
+    panel.id = panelId;
+    panel.className = 'profile-panel';
+
+    var info = activeCalls[cid] || {};
+    var label;
+    if (fullCid && fullCid.indexOf('chat-') === 0) {
+      label = 'chat ' + fullCid.substr(0, 12);
+    } else if (info.user && info.phone) {
+      label = info.user + ' (' + info.phone + ')';
+    } else if (info.user) {
+      label = info.user;
+    } else if (info.phone) {
+      label = info.phone;
+    } else {
+      label = cid;
+    }
+
+    var h4 = document.createElement('h4');
+    h4.appendChild(document.createTextNode('Profile snapshot '));
+    var labelSpan = document.createElement('span');
+    labelSpan.style.cssText = 'color:#888; font-weight:normal;';
+    labelSpan.textContent = '[' + label + ']';
+    h4.appendChild(labelSpan);
+    panel.appendChild(h4);
+
+    var stateDiv = document.createElement('div');
+    stateDiv.className = 'pp-state';
+    panel.appendChild(stateDiv);
+    var gridDiv = document.createElement('div');
+    gridDiv.className = 'pp-grid';
+    panel.appendChild(gridDiv);
+    var missingDiv = document.createElement('div');
+    missingDiv.className = 'pp-missing';
+    panel.appendChild(missingDiv);
+
+    return panel;
   }
 
   function addLog(cls, cid, text) {

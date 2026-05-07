@@ -184,8 +184,21 @@
       text: '↺',
       'aria-label': 'Новый чат',
       title: 'Начать новый чат',
-      onclick: function() {
+      onclick: async function() {
         if (!confirm('Начать новый чат? Текущая беседа будет очищена.')) return;
+        // Tell the server to drop the session right away so it doesn't
+        // linger in voice_sessions until the idle reaper. Best-effort:
+        // if the request fails (offline, server restarted), we still
+        // clear local state and reload — the reaper will catch it
+        // eventually. Sent BEFORE clearing storage so we still know
+        // which session_id to terminate.
+        try {
+          await fetch((API || '') + '/api/chat/end', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+        } catch (e) {}
         try {
           sessionStorage.removeItem('mlc_session_id');
           sessionStorage.removeItem('mlc_name');

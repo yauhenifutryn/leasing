@@ -594,6 +594,12 @@ class TextTurnRequest(BaseModel):
     phone: str | None = None
 
 
+class ChatEndRequest(BaseModel):
+    """New-chat-button teardown payload. session_id required."""
+
+    session_id: str
+
+
 def _append_turn(session: Any, message: str, answer: str, max_turns: int) -> None:
     if max_turns <= 0:
         return
@@ -2749,6 +2755,33 @@ async def text_turn(req: TextTurnRequest) -> dict[str, Any]:
         chat_session_last_activity.pop(session_id, None)
 
     return result
+
+
+@app.post("/api/chat/end")
+async def chat_end(req: ChatEndRequest) -> dict[str, Any]:
+    """Explicit teardown for the chat widget's new-chat button.
+
+    Pops in-memory state (voice_sessions, locks, last-activity) and
+    broadcasts sip.call.end so the operator monitor clears the call
+    badge + profile panel right away — no waiting for the idle reaper.
+    Persisted transcript on disk is left intact for post-hoc inspection.
+    """
+    sid = req.session_id
+    if not _VALID_SESSION_ID.match(sid):
+        return {"ok": False, "error": "invalid session_id"}
+    existed = sid in voice_sessions
+    voice_sessions.pop(sid, None)
+    chat_session_locks.pop(sid, None)
+    chat_session_last_activity.pop(sid, None)
+    if existed:
+        try:
+            await broadcast_sip_event({
+                "type": "sip.call.end",
+                "call_id": sid,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "ended": existed}
 
 
 @app.get("/api/chat/transcript")
