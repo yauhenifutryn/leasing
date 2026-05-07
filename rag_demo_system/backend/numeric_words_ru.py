@@ -114,3 +114,143 @@ def parse_ru_number(text: str) -> Optional[int]:
         result += current
 
     return result if found_any and result > 0 else None
+
+
+# ── Inline word→digit rewriter (chat normalization) ──────────────────────
+#
+# Used by the chat path to normalize messages BEFORE the classifier sees
+# them. Voice gets digit-form numbers from Whisper STT; chat gets whatever
+# the user typed ("тридцать процентов"). The 4B classifier is unreliable
+# on word-form numbers, so we rewrite them to digits in place. Reuses the
+# same lookup tables as parse_ru_number above; conservative — only rewrites
+# maximal sequences of word-numbers, skipping mixed digit-form tokens
+# entirely so "100 тысяч долларов" stays untouched.
+
+_NUMBER_TOKENS = set(_UNITS) | set(_TEENS) | set(_TENS) | set(_HUNDREDS) | set(_SCALES)
+
+
+def _is_number_word(tok: str) -> bool:
+    tl = tok.lower()
+    if tl in _NUMBER_TOKENS:
+        return True
+    if any(tl.startswith(stem) for stem in _SLANG_THOUSAND_STEMS):
+        return True
+    return False
+
+
+def _parse_number_run(words: list[str]) -> int | None:
+    """Parse a run of pure number-words into an int. Returns None if the
+    run cannot be confidently parsed — for example, a standalone scale
+    word ("тысяч долларов") or slang stem ("косарей") with no preceding
+    user-stated quantity. The caller then emits the original tokens
+    unchanged so digit-mixed input ("100 тысяч долларов") survives.
+    """
+    result = 0
+    current = 0
+    saw_user_quantity = False  # at least one units/teens/tens/hundreds word
+    for tok in words:
+        tl = tok.lower()
+        if tl in _UNITS:
+            current += _UNITS[tl]
+            saw_user_quantity = True
+            continue
+        if tl in _TEENS:
+            current += _TEENS[tl]
+            saw_user_quantity = True
+            continue
+        if tl in _TENS:
+            current += _TENS[tl]
+            saw_user_quantity = True
+            continue
+        if tl in _HUNDREDS:
+            current += _HUNDREDS[tl]
+            saw_user_quantity = True
+            continue
+        if tl in _SCALES:
+            # No implicit "1" multiplier when the user didn't say a number.
+            # "тысяч" alone is preserved as-is by the caller.
+            if not saw_user_quantity and current == 0:
+                return None
+            base = current if current else 1
+            result += base * _SCALES[tl]
+            current = 0
+            continue
+        if any(tl.startswith(stem) for stem in _SLANG_THOUSAND_STEMS):
+            if not saw_user_quantity and current == 0:
+                return None
+            base = current if current else 1
+            result += base * 1000
+            current = 0
+            continue
+        # Unknown — caller should not include it in the run.
+    result += current
+    return result if (result > 0 and saw_user_quantity) else None
+
+
+def replace_ru_number_words(text: str) -> str:
+    """Rewrite Russian word-form numbers in `text` to digit form.
+
+    "тридцать процентов"               → "30 процентов"
+    "три года и тридцать процентов"    → "3 года и 30 процентов"
+    "сто тысяч долларов"               → "100000 долларов"
+    "двадцать пять процентов"          → "25 процентов"
+    "100 тысяч"                        → "100 тысяч"  (digit-mixed; untouched)
+    "хочу машину"                      → "хочу машину"
+
+    Idempotent on already-digit text. Preserves separators verbatim by
+    only collapsing whitespace WITHIN a detected number run.
+
+    Implementation: walk the source text token-by-token (Cyrillic words
+    only — digits are not consumed and break runs). Build a list of
+    (kind, content) chunks where kind ∈ {"raw", "num"}. "num" chunks are
+    collapsed to a single digit; "raw" chunks are emitted verbatim.
+    """
+    if not text:
+        return text
+
+    chunks: list[tuple[str, str]] = []   # ("raw" | "num", content)
+    raw_buf: list[str] = []
+    num_words: list[str] = []
+    last_end = 0
+
+    def _flush_num() -> None:
+        if num_words:
+            chunks.append(("num", " ".join(num_words)))
+            num_words.clear()
+
+    def _flush_raw() -> None:
+        if raw_buf:
+            chunks.append(("raw", "".join(raw_buf)))
+            raw_buf.clear()
+
+    for m in _WORD_RE.finditer(text):
+        gap = text[last_end:m.start()]
+        word = m.group(0)
+        last_end = m.end()
+        if _is_number_word(word):
+            # Bridge a single-whitespace gap between number-words; longer
+            # gaps (newlines / punctuation) break the run.
+            if num_words and gap.strip() == "":
+                pass  # absorb the space; already collapsed by " ".join
+            else:
+                if num_words:
+                    _flush_num()
+                _flush_raw()
+                raw_buf.append(gap)
+                _flush_raw()
+            num_words.append(word)
+        else:
+            _flush_num()
+            raw_buf.append(gap + word)
+    raw_buf.append(text[last_end:])
+    _flush_num()
+    _flush_raw()
+
+    out: list[str] = []
+    for kind, content in chunks:
+        if kind == "raw":
+            out.append(content)
+        else:
+            parsed = _parse_number_run(content.split())
+            out.append(str(parsed) if parsed is not None else content)
+    return "".join(out)

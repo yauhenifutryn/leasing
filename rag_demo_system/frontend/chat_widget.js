@@ -85,6 +85,21 @@
     return sid;
   }
 
+  // Force a fresh session_id. Called on every intake submit so each
+  // "Начать" click is a new conversation — the prior session's profile
+  // state stays in the backend (and gets reaped after idle timeout) but
+  // the new chat doesn't inherit it. Fixes the cross-session leak where
+  // a refresh would resurrect the old session_id from sessionStorage and
+  // the bot would say "as you mentioned, you wanted a used car" when the
+  // current user never said anything of the kind.
+  function newSessionId() {
+    var sid = 'chat-' + (crypto.randomUUID
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14));
+    sessionStorage.setItem('mlc_session_id', sid);
+    return sid;
+  }
+
   function buildPanel(opts) {
     opts = opts || {};
     var sessionId = opts.sessionId || genSessionId();
@@ -142,17 +157,67 @@
         if (!nowMuted) { var c = audioCtx(); if (c && c.state === 'suspended') { try { c.resume(); } catch (e) {} } }
       },
     });
-    var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta, muteBtn, downloadBtn]);
+    // Explicit "New chat" — clears stored session + intake fields and reloads
+    // the panel. Initial rendering hides this until intake submits (no point
+    // before the conversation has started).
+    var newChatBtn = el('button', {
+      class: 'mlc-newchat',
+      text: '↺',
+      'aria-label': 'Новый чат',
+      title: 'Начать новый чат',
+      onclick: function() {
+        if (!confirm('Начать новый чат? Текущая беседа будет очищена.')) return;
+        try {
+          sessionStorage.removeItem('mlc_session_id');
+          sessionStorage.removeItem('mlc_name');
+          sessionStorage.removeItem('mlc_phone');
+        } catch (e) {}
+        location.reload();
+      },
+    });
+    newChatBtn.style.display = 'none';
+    var header = el('div', { class: 'mlc-header' }, [statusDot, headerTitle, headerMeta, muteBtn, newChatBtn, downloadBtn]);
 
-    var intake = buildIntake(function(n, p) {
+    // Restore prior intake answers on refresh — the user clicked "Начать"
+     // already, so showing the form again on accidental F5 / Cmd+R is bad
+     // UX. We restore name+phone+session_id from sessionStorage and skip
+     // intake entirely; the explicit "↺ Новый чат" button is the way to
+     // start a fresh conversation.
+    var savedName = '';
+    var savedPhone = '';
+    var hasSavedSession = false;
+    try {
+      savedName = sessionStorage.getItem('mlc_name') || '';
+      savedPhone = sessionStorage.getItem('mlc_phone') || '';
+      hasSavedSession = !!sessionStorage.getItem('mlc_session_id');
+    } catch (e) {}
+
+    function activatePanel(n, p, isFresh) {
       name = n; phone = p;
+      if (isFresh) {
+        // First-time activation: brand-new server-side session.
+        sessionId = newSessionId();
+        try {
+          sessionStorage.setItem('mlc_name', name || '');
+          sessionStorage.setItem('mlc_phone', phone || '');
+        } catch (e) {}
+      } else {
+        // Restore: keep the existing session_id from sessionStorage so the
+        // server-side state machine (profile, transcript, tool history)
+        // survives the refresh.
+        sessionId = genSessionId();
+      }
       headerMeta.textContent = name || 'Аноним';
-      intake.remove();
-      // #2 fix: composer was disabled before consent submit; enable now.
       composerInput.disabled = false;
       composerInput.placeholder = 'Сообщение...';
       sendBtn.disabled = false;
+      newChatBtn.style.display = '';
       composerInput.focus();
+    }
+
+    var intake = buildIntake(function(n, p) {
+      activatePanel(n, p, /*isFresh=*/true);
+      intake.remove();
       // #1 fix: seed the conversational record with the user's name so the
       // classifier + LLM see it on the very first turn. Voice does this
       // implicitly through the name-capture turn ("Меня зовут <X>" → bot
@@ -167,7 +232,21 @@
         append('bot', hello);
       }, 200);
     });
-    transcript.appendChild(intake);
+
+    // If a previous session exists in sessionStorage, skip intake entirely
+    // and reattach to the existing server-side session. The conversation
+    // history doesn't reload on screen (we don't fetch transcript from the
+    // server) but the bot still has the full state machine + tool calls
+    // + memory_block. User sees a fresh kickoff but the bot remembers them.
+    if (hasSavedSession) {
+      activatePanel(savedName, savedPhone, /*isFresh=*/false);
+      var helloBack = savedName
+        ? ('С возвращением, ' + savedName + '! Чем могу помочь?')
+        : 'С возвращением! Чем могу помочь?';
+      setTimeout(function() { append('bot', helloBack); }, 100);
+    } else {
+      transcript.appendChild(intake);
+    }
 
     var panel = el('div', { class: 'mlc-panel mlc-root' }, [header, transcript, composer]);
 

@@ -130,7 +130,8 @@
   cursor: not-allowed;
 }
 
-.mlc-mute {
+.mlc-mute,
+.mlc-newchat {
   background: none; border: 0;
   color: var(--mlc-muted);
   cursor: pointer;
@@ -139,7 +140,8 @@
   border-radius: 8px;
   transition: background var(--mlc-dur) var(--mlc-ease), color var(--mlc-dur) var(--mlc-ease);
 }
-.mlc-mute:hover {
+.mlc-mute:hover,
+.mlc-newchat:hover {
   background: var(--mlc-border);
   color: var(--mlc-ink);
 }

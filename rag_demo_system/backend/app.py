@@ -2360,12 +2360,24 @@ async def _text_process_utterance(
     voice_session.latest_finalized_turn_id += 1
     turn_id = voice_session.latest_finalized_turn_id
 
+    # Word-form number normalization (chat-only). Voice's Whisper STT already
+    # returns digit-form most of the time; chat gets whatever the user typed,
+    # and the 4B classifier is unreliable on Russian word-numbers
+    # ("тридцать процентов" → not parsed as 30). We normalize to digits BEFORE
+    # the classifier sees the message but AFTER broadcasting the raw text to
+    # the monitor + storing it in the transcript. The user never sees the
+    # rewritten form on screen — their own words are preserved verbatim.
+    from .numeric_words_ru import replace_ru_number_words
+    raw_message = message
+    message = replace_ru_number_words(message)
+
     # Caller utterance -> monitor (parity with the Jambonz path's STT broadcast).
+    # Broadcast the RAW message so the operator sees what the user typed.
     try:
         await broadcast_sip_event({
             "type": "sip.stt.result",
             "call_id": voice_session.session_id,
-            "text": message,
+            "text": raw_message,
         })
     except Exception:  # noqa: BLE001
         # Monitor broadcast must never break a chat turn.
@@ -2500,8 +2512,11 @@ async def _text_process_utterance(
     # Update the SessionState transcript (used by per-turn persistence
     # and downstream memory_block construction in voice paths). Mirrors
     # _append_turn's role/text shape.
-    if message:
-        chat_session.transcript.append({"role": "user", "text": message})
+    if raw_message:
+        # Persist what the user actually typed, not the digit-normalized
+        # form fed to the classifier — the transcript is what gets read
+        # back in monitor / analyzer / saved transcripts.
+        chat_session.transcript.append({"role": "user", "text": raw_message})
     if full_reply:
         chat_session.transcript.append({"role": "assistant", "text": full_reply})
     state.update(chat_session)
