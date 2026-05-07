@@ -414,6 +414,15 @@
 
   document.getElementById('btnClear').addEventListener('click', function() {
     while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
+    // Also wipe per-call profile panels and the active-call badges so
+    // an operator can fully reset the view between unrelated test
+    // sessions without reloading the page.
+    var panelsContainer = document.getElementById('profilePanels');
+    if (panelsContainer) {
+      while (panelsContainer.firstChild) panelsContainer.removeChild(panelsContainer.firstChild);
+    }
+    activeCalls = {};
+    updateCallBadges();
   });
 
   function fallbackCopy(text) {

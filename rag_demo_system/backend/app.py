@@ -532,6 +532,17 @@ async def _chat_session_reaper() -> None:
                 voice_sessions.pop(sid, None)
                 chat_session_locks.pop(sid, None)
                 chat_session_last_activity.pop(sid, None)
+                # Tell the operator monitor this session is gone — without
+                # this broadcast the per-call profile panels stick around
+                # forever (visible 2026-05-08: dozens of stale chat-smoke-*
+                # panels in the unfiltered monitor view).
+                try:
+                    await broadcast_sip_event({
+                        "type": "sip.call.end",
+                        "call_id": sid,
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
             if stale:
                 print(
                     f"[chat-reaper] evicted {len(stale)} idle sessions",
@@ -3353,8 +3364,21 @@ async def sip_monitor_ws(websocket: WebSocket) -> None:
     async with _sip_broadcast_lock:
         history_snapshot = list(_sip_event_history)
         _sip_monitor_clients.add(client)
+    # Drop replay events for sessions that have already ended. Without
+    # this filter, every monitor reconnect re-renders the full backlog
+    # of profile snapshots / TTS sentences from old smoke-test sessions
+    # that the reaper has since evicted, even though the panel-cleanup
+    # call.end events ARE in the buffer too. Cleaner UX: replay only
+    # currently-live sessions; anything with a call.end is yesterday's
+    # news.
+    ended_cids = {
+        e.get("call_id") for e in history_snapshot
+        if e.get("type") == "sip.call.end" and e.get("call_id")
+    }
     try:
         for past in history_snapshot:
+            if past.get("call_id") in ended_cids:
+                continue
             await client.send(past)
         while True:
             await websocket.receive_text()  # keepalive
