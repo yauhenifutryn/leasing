@@ -842,24 +842,30 @@ def test_step6_usd_profile_converts_to_byn_and_stashes_original() -> None:
     assert action.calc_params["currency"] == "BYN"
 
 
-def test_step6_eur_for_physical_person_rejected_as_oor() -> None:
-    """Физ лицо + EUR → FireOORMessage. Calculator API currently
-    supports BYN/USD only for individuals."""
+def test_step6_eur_for_physical_person_drifts_to_byn() -> None:
+    """Физ лицо + EUR → drift to BYN at preflight (no OOR).
+    User intent (2026-05-09): keep the calc moving instead of asking the
+    caller to specify in BYN/USD. The original EUR figures stash so the
+    readback's disclosure prefix can narrate the conversion."""
     profile = make_complete_profile(cost=80000.0, currency="EUR")
     profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
-    assert isinstance(action, FireOORMessage)
-    assert "EUR" in action.message or "евро" in action.message.lower() or "валюта" in action.message.lower()
+    assert not isinstance(action, FireOORMessage)
+    assert profile.currency == "BYN"
+    assert profile.original_currency == "EUR"
+    assert profile.original_cost == 80000.0
 
 
-def test_step6_rub_for_physical_person_rejected_as_oor() -> None:
-    """Физ лицо + RUB rejected (Belarusian бытие plus MVP scope)."""
+def test_step6_rub_for_physical_person_drifts_to_byn() -> None:
+    """Физ лицо + RUB → drift to BYN at preflight."""
     profile = make_complete_profile(cost=5000000.0, currency="RUB")
     profile.state = ProfileState.READBACK_PENDING
     classifier = make_classifier(intent="TOOL", is_confirmation=True)
     action = apply_turn(profile, classifier, utterance="Да")
-    assert isinstance(action, FireOORMessage)
+    assert not isinstance(action, FireOORMessage)
+    assert profile.currency == "BYN"
+    assert profile.original_currency == "RUB"
 
 
 def test_step6_commercial_subject_restriction_is_safety_net() -> None:
@@ -1453,12 +1459,14 @@ def test_step5_first_time_respects_locked_fields():
     assert p.cost is None, "locked field was set in step 5"
 
 
-def test_step5a_rub_for_phys_emits_oor_not_readback():
+def test_step5a_rub_for_phys_drifts_to_byn_before_readback():
     # Regression for live call f7e5aa1d (2026-04-24): classifier emitted
     # currency=RUB while profile was COLLECTING; apply_turn step 5a
     # transitioned to READBACK_PENDING and EmitReadback spoke
-    # "стоимость 10000 RUB" as confirmed parameters. Preflight must fire
-    # BEFORE the readback so RUB → FireOORMessage immediately.
+    # "стоимость 10000 RUB" as confirmed parameters. After the 2026-05-09
+    # drift change, RUB no longer reaches the readback as RUB — preflight
+    # converts to BYN first so the readback narrates BYN figures (with
+    # the original RUB stash available for the disclosure prefix).
     from backend.session import ClientProfile, ProfileState
     from backend.turn_dispatcher import apply_turn
     from backend.turn_action import FireOORMessage
@@ -1482,8 +1490,11 @@ def test_step5a_rub_for_phys_emits_oor_not_readback():
 
     action = apply_turn(p, co, "аннуитетный", turn_id=1)
 
-    assert isinstance(action, FireOORMessage)
-    assert p.state != ProfileState.READBACK_PENDING, "RUB reached readback"
+    assert not isinstance(action, FireOORMessage)
+    # Drift happened: profile is now BYN, original RUB is stashed.
+    assert p.currency == "BYN"
+    assert p.original_currency == "RUB"
+    assert p.original_cost == 10000.0
 
 
 def test_preflight_commercial_subject_for_phys_emits_oor():

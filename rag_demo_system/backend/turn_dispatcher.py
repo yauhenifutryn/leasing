@@ -250,10 +250,11 @@ _CALC_INTENT_ACTIONS = frozenset({
 })
 
 
-# MVP currency + subject policy for Физ лицо. Lifted verbatim from the
-# legacy DirectTool preprocessing (app.py:2336-2395) so the apply_turn
-# path produces the same OOR messages and the same USD→BYN behaviour.
-_PHYS_REJECT_CURRENCIES = frozenset({"EUR", "RUB", "RUR", "CNY"})
+# Subject policy for Физ лицо. The currency reject list (EUR/RUB/CNY)
+# was removed 2026-05-09 in favour of FX drift to BYN — see
+# `_preflight_calc_policy` step (3). Subject restriction kept: only
+# "Легковой автомобиль" / "Прочий транспорт" are lease-eligible for
+# individuals (Spec §6 E8).
 _PHYS_ALLOWED_SUBJECTS = frozenset({"легковой автомобиль", "прочий транспорт"})
 
 
@@ -344,7 +345,7 @@ def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
     `build_calc_params(profile)` ships BYN cost to the calculator and
     `render_calc_result` picks up the USD disclosure prefix.
     """
-    from .profile_prompts import _get_usd_byn_rate  # lazy — reuses cache
+    from .profile_prompts import _get_nbrb_rate  # lazy — reuses cache
 
     # NOTE: unlike legacy app.py:2345-2346 we do NOT clear `original_*`
     # here. Legacy recomputed per turn from `_direct_params` and left
@@ -352,19 +353,11 @@ def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
     # apply_turn mutates profile.currency to BYN in the conversion
     # branch below, so on the second confirmation turn (re-calc with
     # same params) the profile already holds the BYN cost AND the
-    # original USD stash — clearing here would drop the USD disclosure
-    # prefix from the re-calc readback. Instead, the USD→BYN switch
+    # original FX stash — clearing here would drop the disclosure
+    # prefix from the re-calc readback. Instead, the FX switch
     # triggered by a user-initiated change (step 1 apply-patches) is
     # responsible for clearing `original_*` — see ClientProfile.
     is_phys = profile.client_type == "Физическое лицо"
-
-    # (1) Reject unsupported currencies for Физ лицо.
-    if is_phys and profile.currency in _PHYS_REJECT_CURRENCIES:
-        return FireOORMessage(message=(
-            f"Для физических лиц сейчас поддерживаются расчёты в белорусских "
-            f"рублях и в долларах. Валюта {profile.currency} временно не "
-            f"поддерживается. Уточните, пожалуйста, стоимость в BYN или USD."
-        ))
 
     # (2) Reject non-individual subjects for Физ лицо. Spec §6 E8 — only
     #     "Легковой автомобиль" / "Прочий транспорт" are lease-eligible
@@ -382,15 +375,27 @@ def _preflight_calc_policy(profile: ClientProfile) -> Optional[TurnAction]:
             f"на юридическое лицо?"
         ))
 
-    # (3) USD → BYN conversion for Физ лицо.
-    if is_phys and profile.currency == "USD" and profile.cost is not None:
-        rate = _get_usd_byn_rate()
+    # (3) FX → BYN drift for Физ лицо. Any non-BYN currency converts to
+    # BYN at the per-currency NBRB rate, including USD (legacy path),
+    # EUR, RUB, and any other code NBRB publishes (CNY, GBP, PLN…).
+    # User intent (2026-05-09): keep the conversation moving rather
+    # than rejecting EUR/RUB with a "specify in BYN or USD" loop —
+    # individuals always get BYN figures, the original currency is
+    # stashed for the disclosure prefix in render_calc_result.
+    if (
+        is_phys
+        and profile.currency
+        and profile.currency != "BYN"
+        and profile.cost is not None
+    ):
+        rate = _get_nbrb_rate(profile.currency)
         old_cost = float(profile.cost)
         new_cost = round(old_cost * rate, 2)
+        old_currency = profile.currency
         profile.cost = new_cost
         profile.currency = "BYN"
         profile.original_cost = old_cost
-        profile.original_currency = "USD"
+        profile.original_currency = old_currency
 
     # (4) Bug 27 (live call 5746bfec 2026-05-03 18:42:14): user asked
     #     for prepaid 60%; calc API returned FAIL. The KB section
@@ -917,12 +922,15 @@ def _dispatch_once(
     # Post-calc narration is rendered by execute_action's FireCalc
     # handler via render_calc_result(result) — LLM is never involved.
     #
-    # Legacy DirectTool preprocessing (app.py:2336-2395) runs inline here:
-    # 1. Unsupported-currency reject (EUR/RUB for Физ лицо) → FireOORMessage.
-    # 2. Subject-restriction reject (non-individual subject for Физ лицо).
-    # 3. USD→BYN conversion for Физ лицо (profile.cost becomes BYN,
-    #    profile.original_cost / original_currency stash the USD figures
-    #    so render_calc_result emits the disclosure prefix).
+    # Legacy DirectTool preprocessing (app.py:2336-2395) runs inline here.
+    # After the 2026-05-09 currency drift change:
+    # 1. Subject-restriction reject (non-individual subject for Физ лицо)
+    #    → FireOORMessage. The unsupported-currency reject was removed.
+    # 2. FX → BYN drift for Физ лицо: any non-BYN currency (USD, EUR,
+    #    RUB, CNY, …) converts to BYN at the per-currency NBRB rate;
+    #    profile.cost becomes BYN, profile.original_cost +
+    #    original_currency stash the source figures so render_calc_result
+    #    can emit the disclosure prefix.
     # Without this preprocessing, calc is invoked with raw USD cost and
     # returns ok=False (no matching rates), producing "?" placeholder
     # output. Live regression observed on session ac0e35d6 (2026-04-24).

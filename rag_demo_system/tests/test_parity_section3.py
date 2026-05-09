@@ -279,10 +279,10 @@ def _almost_complete_rub_phys_profile():
     )
 
 
-# ---- Scenario 1: RUB rejected before readback (Task 5 fix) ----
+# ---- Scenario 1: RUB drifts to BYN before readback (2026-05-09 drift) ----
 
-RUB_REJECT_FOR_PHYS = Scenario(
-    name="rub_reject_for_phys",
+RUB_DRIFT_FOR_PHYS = Scenario(
+    name="rub_drift_for_phys",
     turns=[
         ScriptedTurn(
             utterance="Аннуитетный",
@@ -291,35 +291,31 @@ RUB_REJECT_FOR_PHYS = Scenario(
                 "type_schedule": "0",
                 "action": "calculate",
             },
-            # Task 5 fix: preflight runs BEFORE EmitReadback, so RUB
-            # never reaches the caller as "confirmed" parameters.
-            expect_tts_contains=["RUB", "не поддерживается"],
-            expect_tts_absent=["10000 RUB", "стоимость 10000"],
+            # 2026-05-09 drift: preflight converts RUB to BYN before the
+            # readback so the user never hears "стоимость 10000 RUB" as
+            # confirmed parameters. The readback narrates BYN figures
+            # (with the disclosure prefix carrying the original RUB).
+            expect_tts_absent=["10000 RUB", "не поддерживается"],
         ),
     ],
 )
 
 
 @pytest.mark.asyncio
-async def test_parity_rub_reject_for_phys():
+async def test_parity_rub_drifts_to_byn_for_phys():
     profile = _almost_complete_rub_phys_profile()
     out = await _run_scenario(
-        RUB_REJECT_FOR_PHYS,
+        RUB_DRIFT_FOR_PHYS,
         apply_turn_enabled=True,
         initial_profile=profile,
     )
     last_tts = " ".join(out["tts"][-1])
-    # Task 5 fix: OOR message fires (preflight catches RUB) instead of
-    # speaking "стоимость 10000 RUB" in a readback.
-    assert "RUB" in last_tts, f"expected RUB in OOR message; got: {last_tts!r}"
-    assert "не поддерживается" in last_tts, (
-        f"expected unsupported-currency phrasing; got: {last_tts!r}"
+    # No OOR message — the bot proceeds with the calc in BYN.
+    assert "не поддерживается" not in last_tts, (
+        f"unexpected OOR phrasing post-drift; got: {last_tts!r}"
     )
-    # The bug: a readback that confirms RUB as a valid param.
+    # The original bug guard: RUB must not appear as a confirmed param.
     assert "10000 RUB" not in last_tts
-    assert "Параметры расчёта" not in last_tts, (
-        f"readback fired for an unsupported currency: {last_tts!r}"
-    )
 
 
 # ---- Scenario 2: Numeric-word cost change grounds (Task 7 fix) ----

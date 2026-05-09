@@ -28,8 +28,12 @@ sys.path.insert(0, str(ROOT))
 
 import backend.profile_prompts as pp  # noqa: E402
 
-# Capture the real NBRB fetch BEFORE conftest's autouse fixture stubs it.
+# Capture the real NBRB fetchers BEFORE conftest's autouse fixture
+# stubs them. After the per-currency refactor the legacy
+# `_fetch_nbrb_usd_byn_rate` is a thin wrapper around `_fetch_nbrb_rate`,
+# so we need to restore both for the USD-cache path to actually fetch.
 _REAL_FETCH = pp._fetch_nbrb_usd_byn_rate
+_REAL_FETCH_BY_CCY = pp._fetch_nbrb_rate
 
 
 @pytest.fixture(autouse=True)
@@ -37,12 +41,14 @@ def _restore_real_fetch(monkeypatch):
     """Override conftest's stub so this file exercises the real fetch
     (with urllib mocked at the network layer in each test)."""
     monkeypatch.setattr(pp, "_fetch_nbrb_usd_byn_rate", _REAL_FETCH)
+    monkeypatch.setattr(pp, "_fetch_nbrb_rate", _REAL_FETCH_BY_CCY)
     yield
 
 
 def _reset_cache():
     pp._USD_BYN_RATE_CACHE = None
     pp._USD_BYN_RATE_CACHE_TS = None
+    pp._NBRB_RATE_CACHE.clear()
 
 
 class _FakeResp:

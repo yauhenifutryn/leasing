@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 from tests.test_parity_section3 import (  # noqa: E402  (post-sys.path)
     MIXED_CLIENT_TYPE_SUBJECT_CLARIFY,
     NUMERIC_WORDS_COST_CHANGE,
-    RUB_REJECT_FOR_PHYS,
+    RUB_DRIFT_FOR_PHYS,
     _almost_complete_rub_phys_profile,
     _confirmed_phys_profile,
     _run_scenario,
@@ -31,30 +31,28 @@ from tests.test_parity_section3 import (  # noqa: E402  (post-sys.path)
 
 
 @pytest.mark.asyncio
-async def test_e2e_f7e5aa1d_rub_rejected_before_readback():
+async def test_e2e_f7e5aa1d_rub_drifts_to_byn_before_readback():
     """Live regression f7e5aa1d turn ~9: profile complete + currency=RUB
-    + Физ лицо produced "Параметры расчёта: ... стоимость 10000 RUB ..."
-    in a readback that asked the caller to confirm. Task 5 moved the
-    preflight policy check ahead of EmitReadback so unsupported
-    currencies route to FireOORMessage instead.
+    + Физ лицо used to produce "Параметры расчёта: ... стоимость 10000
+    RUB ..." in the readback. Task 5 first moved the preflight policy
+    check ahead of EmitReadback so RUB became an OOR. After 2026-05-09
+    the OOR was replaced with a drift to BYN — preflight converts the
+    RUB cost to BYN before the readback so the user never hears
+    "стоимость 10000 RUB" as a confirmed param. The original guard
+    against RUB-as-confirmed still holds; the new guard is that the
+    bot proceeds (no OOR phrasing).
     """
     profile = _almost_complete_rub_phys_profile()
     out = await _run_scenario(
-        RUB_REJECT_FOR_PHYS,
+        RUB_DRIFT_FOR_PHYS,
         apply_turn_enabled=True,
         initial_profile=profile,
     )
     last_tts = " ".join(out["tts"][-1])
-    # OOR message fires.
-    assert "RUB" in last_tts
-    assert "не поддерживается" in last_tts
-    # The bug: a readback that quoted the unsupported currency.
+    # No OOR message — bot proceeds with the calc post-drift.
+    assert "не поддерживается" not in last_tts
+    # The original bug guard: RUB must not appear as a confirmed param.
     assert "10000 RUB" not in last_tts
-    assert "Параметры расчёта" not in last_tts
-    # Calc must NOT have run on an unsupported-currency profile.
-    assert out["tool_events"][-1] == [], (
-        f"calc fired on RUB+phys; got events: {out['tool_events']!r}"
-    )
 
 
 @pytest.mark.asyncio

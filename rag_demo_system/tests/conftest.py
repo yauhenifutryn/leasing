@@ -23,8 +23,11 @@ def _disable_live_nbrb(monkeypatch):
 
     pp._USD_BYN_RATE_CACHE = None
     pp._USD_BYN_RATE_CACHE_TS = None
+    pp._NBRB_RATE_CACHE.clear()
 
     monkeypatch.setattr(pp, "_fetch_nbrb_usd_byn_rate", lambda: None)
+    monkeypatch.setattr(pp, "_fetch_nbrb_rate", lambda _currency: None)
     yield
     pp._USD_BYN_RATE_CACHE = None
     pp._USD_BYN_RATE_CACHE_TS = None
+    pp._NBRB_RATE_CACHE.clear()

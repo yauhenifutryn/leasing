@@ -76,32 +76,44 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     return "Уточните параметры расчёта, пожалуйста."
 
 
-# USD->BYN rate sourcing — live from National Bank of Belarus public API
-# with TTL cache + graceful fallback to the static config value. The
-# previous static 3.0 stub looked unprofessional in client demos
-# ("по курсу 3 к 1"). NBRB publishes the official daily rate at:
-#   https://api.nbrb.by/exrates/rates/USD?parammode=2
+# Foreign-currency → BYN rate sourcing — live from National Bank of
+# Belarus public API with TTL cache + graceful fallback to a static
+# value. NBRB publishes the official daily rate at:
+#   https://api.nbrb.by/exrates/rates/{CURRENCY}?parammode=2
+# Supported codes here: USD, EUR, RUB. BYN is identity (1.0). Other
+# codes are accepted by NBRB (CNY, GBP, PLN, etc.) but the dispatcher
+# layer drifts those to BYN before they reach calc, so per-currency
+# lookups stay scoped to the four-currency calculator surface.
 # Hard 1.5s timeout keeps cold-path classifier latency safe; subsequent
 # turns within the hour-long TTL hit the cache and pay nothing.
 _USD_BYN_RATE_FALLBACK = 3.0
+_USD_BYN_RATE_TTL_SECONDS = 3600.0  # 1 hour
+_NBRB_TIMEOUT = 1.5
+_NBRB_BASE_URL = "https://api.nbrb.by/exrates/rates"
+
+# Per-currency cache: code → (rate, monotonic_ts). EUR's fetch must not
+# poison the USD cache and vice versa, so we key by currency code.
+_NBRB_RATE_CACHE: dict[str, tuple[float, float]] = {}
+
+# Legacy single-float cache, retained for backward-compat with tests
+# that reset state directly on `pp._USD_BYN_RATE_CACHE`. Kept as a
+# mirror of `_NBRB_RATE_CACHE["USD"]` so old call sites keep working.
 _USD_BYN_RATE_CACHE: float | None = None
 _USD_BYN_RATE_CACHE_TS: float | None = None
-_USD_BYN_RATE_TTL_SECONDS = 3600.0  # 1 hour
-_NBRB_USD_URL = "https://api.nbrb.by/exrates/rates/USD?parammode=2"
-_NBRB_TIMEOUT = 1.5
 
 
-def _fetch_nbrb_usd_byn_rate() -> float | None:
-    """Pull the live USD/BYN rate from NBRB. Return None on any failure
-    (network, parse, missing field) so the caller can fall back. The
-    1.5s timeout caps cold-start cost; in practice NBRB responds in
+def _fetch_nbrb_rate(currency: str) -> float | None:
+    """Pull the live `{currency}/BYN` rate from NBRB. Return None on any
+    failure (network, parse, missing field) so the caller can fall back.
+    The 1.5s timeout caps cold-start cost; in practice NBRB responds in
     50-200ms.
     """
     try:
         import json as _json
         import urllib.request as _urlreq
+        url = f"{_NBRB_BASE_URL}/{currency}?parammode=2"
         req = _urlreq.Request(
-            _NBRB_USD_URL,
+            url,
             headers={"User-Agent": "leasing-voice-bot/1.0"},
         )
         with _urlreq.urlopen(req, timeout=_NBRB_TIMEOUT) as resp:
@@ -115,47 +127,73 @@ def _fetch_nbrb_usd_byn_rate() -> float | None:
         return None
 
 
-def _get_usd_byn_rate() -> float:
-    """Return the current USD/BYN rate.
+def _fetch_nbrb_usd_byn_rate() -> float | None:
+    """Backward-compat wrapper. New code should call `_fetch_nbrb_rate`."""
+    return _fetch_nbrb_rate("USD")
+
+
+def _get_nbrb_rate(currency: str = "USD") -> float:
+    """Return the current `{currency}/BYN` rate.
 
     Order of preference:
-      1. Live NBRB rate (cached for _USD_BYN_RATE_TTL_SECONDS).
-      2. Last successfully cached value, even if stale.
-      3. Static settings.tools.usd_byn_rate (config / env).
-      4. _USD_BYN_RATE_FALLBACK constant.
+      1. BYN → 1.0 (identity, no API call).
+      2. Live NBRB rate (cached for _USD_BYN_RATE_TTL_SECONDS).
+      3. Last successfully cached value, even if stale.
+      4. For USD: static settings.tools.usd_byn_rate (config / env).
+      5. _USD_BYN_RATE_FALLBACK constant.
 
-    The same helper drives BOTH the calc-time USD→BYN conversion in
+    The same helper drives BOTH the calc-time conversion in
     turn_dispatcher and the spoken "по курсу X к 1" disclosure in
-    render_calc_result, keeping them in lockstep — the bot can never
-    quote a rate that disagrees with the calculator's input.
+    render_calc_result, keeping them in lockstep.
     """
     global _USD_BYN_RATE_CACHE, _USD_BYN_RATE_CACHE_TS
     import time as _time
+
+    if currency == "BYN":
+        return 1.0
+
     now = _time.monotonic()
-
-    if (_USD_BYN_RATE_CACHE is not None
-            and _USD_BYN_RATE_CACHE_TS is not None
-            and (now - _USD_BYN_RATE_CACHE_TS) < _USD_BYN_RATE_TTL_SECONDS):
+    # Legacy backdoor: tests (and a few production paths) monkeypatch
+    # `_USD_BYN_RATE_CACHE` directly to inject a USD rate. Honor that
+    # override before consulting the per-currency dict cache.
+    if currency == "USD" and _USD_BYN_RATE_CACHE is not None:
         return _USD_BYN_RATE_CACHE
+    cached = _NBRB_RATE_CACHE.get(currency)
+    if cached is not None and (now - cached[1]) < _USD_BYN_RATE_TTL_SECONDS:
+        return cached[0]
 
-    fresh = _fetch_nbrb_usd_byn_rate()
+    fresh = _fetch_nbrb_rate(currency)
     if fresh is not None:
-        _USD_BYN_RATE_CACHE = fresh
-        _USD_BYN_RATE_CACHE_TS = now
-        return _USD_BYN_RATE_CACHE
+        _NBRB_RATE_CACHE[currency] = (fresh, now)
+        if currency == "USD":
+            _USD_BYN_RATE_CACHE = fresh
+            _USD_BYN_RATE_CACHE_TS = now
+        return fresh
 
     # NBRB failed. Prefer the previous (stale) cached value over the
     # static fallback — last-known-good is closer to truth than 3.0.
-    if _USD_BYN_RATE_CACHE is not None:
-        return _USD_BYN_RATE_CACHE
+    if cached is not None:
+        return cached[0]
 
-    try:
-        from .settings import load_settings  # lazy
-        _USD_BYN_RATE_CACHE = float(load_settings().tools.usd_byn_rate)
-    except Exception:  # noqa: BLE001 — settings may be absent in tests
-        _USD_BYN_RATE_CACHE = _USD_BYN_RATE_FALLBACK
-    _USD_BYN_RATE_CACHE_TS = now
-    return _USD_BYN_RATE_CACHE
+    if currency == "USD":
+        try:
+            from .settings import load_settings  # lazy
+            fallback = float(load_settings().tools.usd_byn_rate)
+        except Exception:  # noqa: BLE001 — settings may be absent in tests
+            fallback = _USD_BYN_RATE_FALLBACK
+        _NBRB_RATE_CACHE["USD"] = (fallback, now)
+        _USD_BYN_RATE_CACHE = fallback
+        _USD_BYN_RATE_CACHE_TS = now
+        return fallback
+
+    # No settings fallback for non-USD; use the static constant.
+    _NBRB_RATE_CACHE[currency] = (_USD_BYN_RATE_FALLBACK, now)
+    return _USD_BYN_RATE_FALLBACK
+
+
+def _get_usd_byn_rate() -> float:
+    """Backward-compat wrapper. New code should call `_get_nbrb_rate`."""
+    return _get_nbrb_rate("USD")
 
 
 def _format_cost_phrase(profile: Any) -> str:
