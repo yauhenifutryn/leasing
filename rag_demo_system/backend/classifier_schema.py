@@ -671,17 +671,92 @@ class ClassifierOutput(BaseModel):
         # confirmation flags also survive — they are turn-shape
         # semantics, not slot fills.
         if self.intent == "RAG":
-            for _field in (
-                "subject", "client_type", "currency", "type_schedule",
-                "condition_new", "cost", "term_months", "prepaid_pct",
-                "prepaid_amount", "age_years",
-                "change_field", "change_value",
-            ):
+            # 2026-05-09 refinement: only drop slots that ALSO fail
+            # verbatim cue grounding, AND only when the classifier
+            # emitted 3+ slots (multi-slot setup signal). Solo or pair
+            # slot mentions on a RAG turn keep the original blanket
+            # drop (e.g. "что такое аннуитет?" → type_schedule="0" —
+            # the cue regex matches "аннуитет" but the user is
+            # asking ABOUT it, not selecting it).
+            #
+            # Original poison case (call d5174335 "адреса офисов") is
+            # double-protected: cue regex no longer matches "офис",
+            # AND the slot count <3 keeps the blanket drop on.
+            #
+            # change_field / change_value are still always dropped on
+            # intent=RAG — those are the strongest anti-poison channel
+            # (a RAG turn should never stage a parameter change).
+            _slot_count = sum(
+                1 for _f in (
+                    "subject", "client_type", "currency", "condition_new",
+                    "type_schedule", "cost", "term_months", "prepaid_pct",
+                    "prepaid_amount", "age_years",
+                )
+                if getattr(self, _f, None) is not None
+            )
+            # Meta-question markers veto the multi-slot-setup signal.
+            # "Что такое аннуитет?" with 3+ phantom slots is still a
+            # meta-question, not a calc setup.
+            _META_QUESTION_RE = re.compile(
+                r"\b(что\s+так(?:ое|ие)|какой\s+(?:лучше|выгоднее|"
+                r"подойдёт|подойдет)|какая\s+разниц\w+|"
+                r"в\s+чём\s+разниц\w+|расскажите|объясн\w+|"
+                r"почему\s+|зачем\s+)",
+                re.IGNORECASE,
+            )
+            _is_meta_question = bool(
+                utterance and _META_QUESTION_RE.search(utterance)
+            )
+            # Multi-slot setup heuristic: 4+ slots AND no meta-question
+            # marker. Setup utterances ("Юрлицо, недвижимость, 250к
+            # долларов, подержанная") emit 5+; meta-questions about
+            # calc concepts emit at most 2-3 phantom slots.
+            _is_multi_slot_setup = _slot_count >= 4 and not _is_meta_question
+            _CUE_GROUNDED = {
+                "subject": lambda v, u: _subject_value_grounded(v, u),
+                "client_type": lambda v, u: _client_type_value_grounded(
+                    _normalize_client_type(v) or v, u
+                ),
+                "currency": lambda v, u: _currency_cue_match(v, u),
+                "condition_new": lambda v, u: has_field_signal(
+                    "condition_new", int(v), u
+                ),
+                "type_schedule": lambda v, u: bool(
+                    _TYPE_SCHEDULE_VALUE_CUES.get(str(v))
+                    and _TYPE_SCHEDULE_VALUE_CUES[str(v)].search(u)
+                ),
+                "cost": lambda v, u: has_field_signal("cost", v, u),
+                "term_months": lambda v, u: has_field_signal("term_months", v, u),
+                "prepaid_pct": lambda v, u: has_field_signal("prepaid_pct", v, u),
+                "prepaid_amount": lambda v, u: has_field_signal(
+                    "prepaid_amount", v, u
+                ),
+                "age_years": lambda v, u: has_field_signal("age_years", v, u),
+            }
+            for _field, _check in _CUE_GROUNDED.items():
+                _val = getattr(self, _field, None)
+                if _val is None:
+                    continue
+                # Solo / pair slot mentions on RAG turns: blanket drop
+                # (revert to pre-2026-05-09 behavior). Only multi-slot
+                # setup utterances get the per-field grounding rescue.
+                if not _is_multi_slot_setup:
+                    drops.append(f"{_field}={_val!r} (intent=RAG)")
+                    setattr(self, _field, None)
+                    continue
+                try:
+                    _ok = bool(utterance) and bool(_check(_val, utterance))
+                except Exception:  # noqa: BLE001
+                    _ok = False
+                if not _ok:
+                    drops.append(f"{_field}={_val!r} (intent=RAG)")
+                    setattr(self, _field, None)
+            for _field in ("change_field", "change_value"):
                 _val = getattr(self, _field, None)
                 if _val is not None:
                     drops.append(f"{_field}={_val!r} (intent=RAG)")
                     setattr(self, _field, None)
-            # Skip the rest of grounding — already nulled the slots.
+            # Skip the rest of grounding — already done per-field above.
             if drops:
                 object.__setattr__(self, "_grounding_drops", drops)
             return self

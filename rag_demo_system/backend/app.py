@@ -2498,6 +2498,22 @@ async def _text_process_utterance(
         sa_output = parse_classifier_output(
             (classify_resp.text or "").strip(), message,
         )
+        # Mirror voice-path classifier debug log so chat regression failures
+        # are diagnosable from .state/backend.log without re-running.
+        try:
+            import json as _json
+            _sa_dump = {
+                k: v for k, v in sa_output.model_dump(exclude_none=True).items()
+                if v not in (None, "", [], {})
+            }
+            print(
+                f"[SessionAgent] raw="
+                f"{_json.dumps(_sa_dump, ensure_ascii=False)[:300]} "
+                f"session={voice_session.session_id[:12]}",
+                flush=True,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         print(
             f"[ChatTurn:{voice_session.session_id[:8]}] classify failed: {exc}",
