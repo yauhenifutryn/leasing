@@ -1858,8 +1858,28 @@ async def _stream_llm_to_tts(
         await tts.say(cleaned)
         return cleaned
 
+    # Latency instrumentation — restore the per-stage marker that
+    # commit a1e53f4 dropped when apply_turn became sole orchestrator.
+    # Without these, scripts/analyze_latency.sh has nothing to read and
+    # we can't tell whether a perceived 3-4s turn lives in LLM, TTS, or
+    # something else. Two timestamps gate the worst stage in this
+    # function — first token from vLLM and first TTS audio shipped.
+    import time as _time
+    _t_start = _time.monotonic()
+    _t_first_token: float | None = None
+    _t_first_tts: float | None = None
+    _sid_short = ""
+    try:
+        _sid = getattr(session, "session_id", None) or getattr(session, "id", None)
+        if _sid:
+            _sid_short = str(_sid)[:8]
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         async for token in backend.stream(messages=messages):
+            if _t_first_token is None:
+                _t_first_token = _time.monotonic()
             if _session_interrupted(session):
                 return
             if not token:
@@ -1869,6 +1889,8 @@ async def _stream_llm_to_tts(
                     return
                 out = await _emit(sentence)
                 if out:
+                    if _t_first_tts is None:
+                        _t_first_tts = _time.monotonic()
                     yield out
     except Exception as exc:  # noqa: BLE001 — graceful degradation per spec
         print(
@@ -1895,4 +1917,30 @@ async def _stream_llm_to_tts(
     if remaining:
         out = await _emit(remaining)
         if out:
+            if _t_first_tts is None:
+                _t_first_tts = _time.monotonic()
             yield out
+
+    # Emit the per-stage marker that scripts/analyze_latency.sh reads.
+    # Done AFTER the yield-loop so we don't add any per-token overhead.
+    try:
+        _t_end = _time.monotonic()
+        _llm_first_ms = (
+            int((_t_first_token - _t_start) * 1000)
+            if _t_first_token is not None else -1
+        )
+        _llm_total_ms = int((_t_end - _t_start) * 1000)
+        _tts_first_ms = (
+            int((_t_first_tts - _t_first_token) * 1000)
+            if _t_first_token is not None and _t_first_tts is not None else -1
+        )
+        print(
+            f"[LATENCY:{_sid_short}] "
+            f"llm_first_ms={_llm_first_ms} "
+            f"llm_total_ms={_llm_total_ms} "
+            f"tts_first_ms={_tts_first_ms} "
+            f"path=fallback_llm",
+            flush=True,
+        )
+    except Exception as _lat_exc:  # noqa: BLE001
+        print(f"[LATENCY:{_sid_short}] log failed: {_lat_exc}", flush=True)

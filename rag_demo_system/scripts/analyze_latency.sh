@@ -18,8 +18,50 @@ grep -oE "total_e2e_ms=[0-9]+" "$LOG" | awk -F= '{print $2}' | sort -n | awk '
 '
 
 echo
-echo "=== Classifier latency distribution ==="
-grep -oE "classifier_ms=[0-9]+" "$LOG" | awk -F= '{print $2}' | awk '$1 >= 0' | sort -n | awk '
+echo "=== Classifier latency (existing markers) ==="
+grep -oE "\[Classifier\] result: \([0-9]+ms\)" "$LOG" | grep -oE "[0-9]+" | sort -n | awk '
+  BEGIN { c=0 }
+  { a[c++]=$1; sum+=$1 }
+  END {
+    if (c==0) { print "no samples"; exit }
+    n=c
+    printf "count=%d mean=%.0f min=%d max=%d\n", n, sum/n, a[0], a[n-1]
+    printf "p50=%d p90=%d p95=%d p99=%d\n",
+      a[int(n*0.50)], a[int(n*0.90)], a[int(n*0.95)], a[int(n*0.99)]
+  }
+'
+
+echo
+echo "=== STT latency (existing markers) ==="
+grep -oE "STT\([0-9]+ms\)" "$LOG" | grep -oE "[0-9]+" | sort -n | awk '
+  BEGIN { c=0 }
+  { a[c++]=$1; sum+=$1 }
+  END {
+    if (c==0) { print "no samples"; exit }
+    n=c
+    printf "count=%d mean=%.0f min=%d max=%d\n", n, sum/n, a[0], a[n-1]
+    printf "p50=%d p90=%d p95=%d p99=%d\n",
+      a[int(n*0.50)], a[int(n*0.90)], a[int(n*0.95)], a[int(n*0.99)]
+  }
+'
+
+echo
+echo "=== LLM brain first-token (FireLLMFallback only) ==="
+grep -oE "llm_first_ms=[0-9]+" "$LOG" | awk -F= '{print $2}' | awk '$1 >= 0' | sort -n | awk '
+  BEGIN { c=0 }
+  { a[c++]=$1; sum+=$1 }
+  END {
+    if (c==0) { print "no samples (deploy instrumentation, run turns)"; exit }
+    n=c
+    printf "count=%d mean=%.0f min=%d max=%d\n", n, sum/n, a[0], a[n-1]
+    printf "p50=%d p90=%d p95=%d p99=%d\n",
+      a[int(n*0.50)], a[int(n*0.90)], a[int(n*0.95)], a[int(n*0.99)]
+  }
+'
+
+echo
+echo "=== LLM brain total stream (FireLLMFallback only) ==="
+grep -oE "llm_total_ms=[0-9]+" "$LOG" | awk -F= '{print $2}' | sort -n | awk '
   BEGIN { c=0 }
   { a[c++]=$1; sum+=$1 }
   END {
