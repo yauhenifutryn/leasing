@@ -75,17 +75,19 @@ scenarios:
 
   # ---------------------------------------------------------------- 2. CHANGE-PARAM (P2 + B2 + B3)
   - name: change_currency_only_uses_accusative_grammar
-    # B3: "Меняю валюту..." (accusative). HANDOVER P2 case: currency-only
-    # change must route deterministically (not LLM fallback).
+    # B3: "Меняю валюту..." (accusative). Use Юр лицо so currency stays
+    # native (Phys auto-drifts to BYN, making "поменяй на BYN" a no-op).
+    # USD→EUR change is a real delta the dispatcher must route to
+    # EmitChangeConfirm.
     seed_phone: "+375296838707"
     turns:
-      - say: "Физлицо, легковая новая, 20 тысяч долларов, аванс 10%, срок 48 месяцев, аннуитет."
+      - say: "Юрлицо, грузовой новый, 100 тысяч долларов, аванс 20%, срок 36 месяцев, аннуитет."
         expect: ["верно"]
       - say: "Да."
         expect: ["платёж"]
-      - say: "Поменяй валюту на белорусские рубли."
-        # B3: accusative form.
-        expect: ["валюту"]
+      - say: "Поменяй валюту на евро."
+        # B3: accusative form. Real delta USD→EUR for Юр.
+        expect: ["валюту", "EUR"]
         forbid: ["Меняю валюта", "Меняю валюту на ,"]
       - say: "Да."
         expect: ["платёж"]
