@@ -756,6 +756,25 @@ class ClassifierOutput(BaseModel):
                 if _val is not None:
                     drops.append(f"{_field}={_val!r} (intent=RAG)")
                     setattr(self, _field, None)
+            # If the multi-slot rescue saved 4+ slots, the classifier
+            # mis-labeled a calc setup as RAG. Override intent to TOOL
+            # so apply_turn's step 5b clarify gate (`not _is_rag_turn`)
+            # fires and emits the deterministic missing-fields prompt
+            # instead of falling to LLM-fallback. Live regression
+            # b5_age_for_realestate (2026-05-09): "Юрлицо, недвижимость
+            # в Минске за 250 тысяч долларов, подержанная" was a 5-slot
+            # setup that needed an age clarify, not LLM hallucination.
+            _surviving_slots = sum(
+                1 for _f in (
+                    "subject", "client_type", "currency", "condition_new",
+                    "type_schedule", "cost", "term_months", "prepaid_pct",
+                    "prepaid_amount", "age_years",
+                )
+                if getattr(self, _f, None) is not None
+            )
+            if _is_multi_slot_setup and _surviving_slots >= 4:
+                drops.append("intent=RAG → TOOL (multi-slot setup rescue)")
+                self.intent = "TOOL"
             # Skip the rest of grounding — already done per-field above.
             if drops:
                 object.__setattr__(self, "_grounding_drops", drops)

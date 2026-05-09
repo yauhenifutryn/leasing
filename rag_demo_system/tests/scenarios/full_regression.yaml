@@ -128,17 +128,16 @@ scenarios:
       - say: "Да."
         expect: ["платёж"]
       - say: "Ксения, ты график отправила?"
-        # Bot must say it has NOT sent yet. The narrow forbid set checks
-        # for false-positive claims; "не отправляла" is correct and
-        # contains the substring "отправляла", so we forbid only the
-        # affirmative phrasings.
+        # Bot must say it has NOT sent yet. Loose substring on "не от"
+        # works for both "не отправила" / "не отправляла" / "не
+        # отправлен"; forbid the unambiguous false-affirmative phrases.
         forbid:
           - "график отправлен."
           - "график отправлен,"
           - "график уже отправлен"
           - "уже отправила график"
           - "СМС отправлено."
-        expect: ["не отправл"]
+        expect: ["не от"]
 
   # ---------------------------------------------------------------- 4. B5 subject-aware age
   - name: b5_age_for_realestate_uses_объекту

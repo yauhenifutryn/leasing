@@ -36,7 +36,10 @@ from backend.classifier_schema import parse_classifier_output  # noqa: E402
 def test_realestate_setup_misclassified_rag_keeps_grounded_slots():
     """The F2 live regression: classifier emits intent=RAG for a
     clearly-calc setup utterance. Slots that ARE in the utterance must
-    survive — the dispatcher needs them to route to age clarify."""
+    survive — the dispatcher needs them to route to age clarify.
+
+    Plus intent must be rescued to TOOL so apply_turn's step 5b clarify
+    gate (not _is_rag_turn) fires instead of LLM-fallback."""
     raw = json.dumps({
         "intent": "RAG",
         "subject": "Недвижимость",
@@ -52,6 +55,10 @@ def test_realestate_setup_misclassified_rag_keeps_grounded_slots():
     assert out.currency == "USD", "currency leaked away"
     assert out.condition_new == 0, "condition_new leaked away"
     assert out.cost == 250000.0, "cost leaked away"
+    assert out.intent == "TOOL", (
+        "intent must be rescued to TOOL so dispatcher routes to clarify, "
+        f"got: {out.intent!r}"
+    )
 
 
 def test_office_address_rag_poison_still_blocked():
