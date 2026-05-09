@@ -139,6 +139,25 @@ def _check_rubric(reply: str, expect: list[str], forbid: list[str]) -> tuple[lis
     return matched, missed, violations
 
 
+def _post_chat_end(base_url: str, session_id: str) -> None:
+    """Tell the backend to clear in-memory state + broadcast sip.call.end
+    so the operator monitor doesn't replay this harness session forever
+    on each reload (events linger in _sip_event_history until call.end
+    arrives — see app.py:3404)."""
+    payload = json.dumps({"session_id": session_id}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/chat/end",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as _resp:
+            _resp.read()
+    except Exception:  # noqa: BLE001 — best-effort cleanup
+        pass
+
+
 def run_chat_scenario(base_url: str, scenario: dict) -> ScenarioResult:
     name = scenario.get("name", "unnamed")
     phone = scenario.get("seed_phone") or "+375290000000"
@@ -166,6 +185,8 @@ def run_chat_scenario(base_url: str, scenario: dict) -> ScenarioResult:
             expect_fail=missed,
             forbid_violations=violations,
         ))
+    # Tear down: clear server-side state + monitor history.
+    _post_chat_end(base_url, sid)
     return result
 
 
