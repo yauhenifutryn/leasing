@@ -122,12 +122,55 @@ _USD_BYN_RATE_CACHE: float | None = None
 _USD_BYN_RATE_CACHE_TS: float | None = None
 
 
+# Public FX fallback when NBRB is unreachable (Belarus banking API blocks
+# foreign IPs — confirmed unreachable from sesterce VM 2026-05-09). Rates
+# are USD-base; X→BYN computed as rates[BYN] / rates[X].
+_FX_FALLBACK_URL = "https://open.er-api.com/v6/latest/USD"
+_FX_FALLBACK_CACHE: dict[str, float] | None = None
+_FX_FALLBACK_CACHE_TS: float | None = None
+
+
+def _fetch_fx_fallback_rates() -> dict[str, float] | None:
+    """Pull USD-base rates from open.er-api.com. Returns the rates dict
+    ({BYN: 2.82, EUR: 0.85, ...}) or None on failure. Cached for 1 hour
+    via _FX_FALLBACK_CACHE so we hit the API at most once per TTL even
+    when fetching multiple currencies."""
+    global _FX_FALLBACK_CACHE, _FX_FALLBACK_CACHE_TS
+    import time as _time
+    now = _time.monotonic()
+    if (
+        _FX_FALLBACK_CACHE is not None
+        and _FX_FALLBACK_CACHE_TS is not None
+        and (now - _FX_FALLBACK_CACHE_TS) < _USD_BYN_RATE_TTL_SECONDS
+    ):
+        return _FX_FALLBACK_CACHE
+    try:
+        import json as _json
+        import urllib.request as _urlreq
+        req = _urlreq.Request(
+            _FX_FALLBACK_URL,
+            headers={"User-Agent": "leasing-voice-bot/1.0"},
+        )
+        with _urlreq.urlopen(req, timeout=_NBRB_TIMEOUT * 2) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        rates = data.get("rates")
+        if isinstance(rates, dict) and "BYN" in rates:
+            _FX_FALLBACK_CACHE = {k: float(v) for k, v in rates.items()}
+            _FX_FALLBACK_CACHE_TS = now
+            return _FX_FALLBACK_CACHE
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _fetch_nbrb_rate(currency: str) -> float | None:
-    """Pull the live `{currency}/BYN` rate from NBRB. Return None on any
-    failure (network, parse, missing field) so the caller can fall back.
-    The 1.5s timeout caps cold-start cost; in practice NBRB responds in
-    50-200ms.
+    """Pull the live `{currency}/BYN` rate. Tries NBRB first (official
+    Belarus rate), falls back to open.er-api.com when NBRB is unreachable
+    (the 2026-05-09 sesterce VM symptom: NBRB IP-blocks foreign hosts).
+    Return None on total failure so the caller falls back to the static
+    constant. The 1.5s timeout caps cold-start cost.
     """
+    # Try NBRB first.
     try:
         import json as _json
         import urllib.request as _urlreq
@@ -140,11 +183,24 @@ def _fetch_nbrb_rate(currency: str) -> float | None:
             data = _json.loads(resp.read().decode("utf-8"))
         rate = data.get("Cur_OfficialRate")
         scale = data.get("Cur_Scale", 1) or 1
-        if rate is None:
-            return None
-        return float(rate) / float(scale)
-    except Exception:  # noqa: BLE001 — any failure → fallback
+        if rate is not None:
+            return float(rate) / float(scale)
+    except Exception:  # noqa: BLE001
+        pass
+    # NBRB unreachable / parse failure → use public FX fallback.
+    rates = _fetch_fx_fallback_rates()
+    if rates is None:
         return None
+    byn_per_usd = rates.get("BYN")
+    if byn_per_usd is None or byn_per_usd <= 0:
+        return None
+    if currency == "USD":
+        return byn_per_usd
+    target_per_usd = rates.get(currency)
+    if target_per_usd is None or target_per_usd <= 0:
+        return None
+    # rates[X] = X per USD, so X→BYN = (BYN per USD) / (X per USD).
+    return byn_per_usd / target_per_usd
 
 
 def _fetch_nbrb_usd_byn_rate() -> float | None:
