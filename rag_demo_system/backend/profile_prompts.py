@@ -76,32 +76,85 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     return "Уточните параметры расчёта, пожалуйста."
 
 
-# Fallback USD->BYN rate if settings can't be loaded (unit tests, isolated
-# imports). Production reads the real rate from settings.tools.usd_byn_rate
-# via _get_usd_byn_rate() so readback matches whatever rate the DirectTool
-# USD->BYN conversion actually applies (Codex review flagged the drift
-# risk of hardcoding in this module: readback and calc could disagree
-# if the setting ever changes).
+# USD->BYN rate sourcing — live from National Bank of Belarus public API
+# with TTL cache + graceful fallback to the static config value. The
+# previous static 3.0 stub looked unprofessional in client demos
+# ("по курсу 3 к 1"). NBRB publishes the official daily rate at:
+#   https://api.nbrb.by/exrates/rates/USD?parammode=2
+# Hard 1.5s timeout keeps cold-path classifier latency safe; subsequent
+# turns within the hour-long TTL hit the cache and pay nothing.
 _USD_BYN_RATE_FALLBACK = 3.0
 _USD_BYN_RATE_CACHE: float | None = None
+_USD_BYN_RATE_CACHE_TS: float | None = None
+_USD_BYN_RATE_TTL_SECONDS = 3600.0  # 1 hour
+_NBRB_USD_URL = "https://api.nbrb.by/exrates/rates/USD?parammode=2"
+_NBRB_TIMEOUT = 1.5
+
+
+def _fetch_nbrb_usd_byn_rate() -> float | None:
+    """Pull the live USD/BYN rate from NBRB. Return None on any failure
+    (network, parse, missing field) so the caller can fall back. The
+    1.5s timeout caps cold-start cost; in practice NBRB responds in
+    50-200ms.
+    """
+    try:
+        import json as _json
+        import urllib.request as _urlreq
+        req = _urlreq.Request(
+            _NBRB_USD_URL,
+            headers={"User-Agent": "leasing-voice-bot/1.0"},
+        )
+        with _urlreq.urlopen(req, timeout=_NBRB_TIMEOUT) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        rate = data.get("Cur_OfficialRate")
+        scale = data.get("Cur_Scale", 1) or 1
+        if rate is None:
+            return None
+        return float(rate) / float(scale)
+    except Exception:  # noqa: BLE001 — any failure → fallback
+        return None
 
 
 def _get_usd_byn_rate() -> float:
-    """Return the live USD->BYN rate from settings, cached after first call.
+    """Return the current USD/BYN rate.
 
-    Lazy import so this module stays importable in unit tests without a
-    loaded settings file. First call hits settings; subsequent calls are
-    effectively free. The rate does not change during a process lifetime
-    — it is read from env / config at startup.
+    Order of preference:
+      1. Live NBRB rate (cached for _USD_BYN_RATE_TTL_SECONDS).
+      2. Last successfully cached value, even if stale.
+      3. Static settings.tools.usd_byn_rate (config / env).
+      4. _USD_BYN_RATE_FALLBACK constant.
+
+    The same helper drives BOTH the calc-time USD→BYN conversion in
+    turn_dispatcher and the spoken "по курсу X к 1" disclosure in
+    render_calc_result, keeping them in lockstep — the bot can never
+    quote a rate that disagrees with the calculator's input.
     """
-    global _USD_BYN_RATE_CACHE
+    global _USD_BYN_RATE_CACHE, _USD_BYN_RATE_CACHE_TS
+    import time as _time
+    now = _time.monotonic()
+
+    if (_USD_BYN_RATE_CACHE is not None
+            and _USD_BYN_RATE_CACHE_TS is not None
+            and (now - _USD_BYN_RATE_CACHE_TS) < _USD_BYN_RATE_TTL_SECONDS):
+        return _USD_BYN_RATE_CACHE
+
+    fresh = _fetch_nbrb_usd_byn_rate()
+    if fresh is not None:
+        _USD_BYN_RATE_CACHE = fresh
+        _USD_BYN_RATE_CACHE_TS = now
+        return _USD_BYN_RATE_CACHE
+
+    # NBRB failed. Prefer the previous (stale) cached value over the
+    # static fallback — last-known-good is closer to truth than 3.0.
     if _USD_BYN_RATE_CACHE is not None:
         return _USD_BYN_RATE_CACHE
+
     try:
         from .settings import load_settings  # lazy
         _USD_BYN_RATE_CACHE = float(load_settings().tools.usd_byn_rate)
     except Exception:  # noqa: BLE001 — settings may be absent in tests
         _USD_BYN_RATE_CACHE = _USD_BYN_RATE_FALLBACK
+    _USD_BYN_RATE_CACHE_TS = now
     return _USD_BYN_RATE_CACHE
 
 
@@ -296,7 +349,29 @@ def render_calc_result(result: dict[str, Any], detailed: bool = False) -> str:
     cost_str = _fmt_money(params.get("cost"))
     term_str = f"{result.get('num_payments', '?')}"
     prepaid_pct_str = _fmt_pct(params.get("prepaid", 30))
-    monthly_str = _fmt_money(result.get("payment_min"))
+
+    # Live transcript 2026-05-08 client feedback: убывающий schedule
+    # rendered as "Ежемесячный платёж — X" (a single number) is misleading
+    # — payments decrease month-over-month. For linear schedules we
+    # narrate the AVERAGE payment + an explicit shape hint, mirroring
+    # Just AI's pattern. payment_min == payment_max is the precise
+    # annuity signal (calculator returns equal values for аннуитет).
+    pmt_min = result.get("payment_min")
+    pmt_max = result.get("payment_max", pmt_min)
+    is_linear = (
+        pmt_min is not None
+        and pmt_max is not None
+        and pmt_min != pmt_max
+    )
+    if is_linear:
+        avg_str = _fmt_money((float(pmt_max) + float(pmt_min)) / 2.0)
+        payment_phrase = (
+            f"Средний платёж — {avg_str} {currency}. "
+            f"В начале платежи больше, к концу срока — меньше."
+        )
+    else:
+        monthly_str = _fmt_money(pmt_min)
+        payment_phrase = f"Ежемесячный платёж — {monthly_str} {currency}."
 
     # Terse 4-value headline (Bug 25). When `conv_prefix` already
     # narrated the cost in USD, omit it here to avoid a stutter
@@ -304,14 +379,14 @@ def render_calc_result(result: dict[str, Any], detailed: bool = False) -> str:
     if conv_prefix:
         head = (
             f"Срок {term_str} месяцев, аванс {prepaid_pct_str} процентов. "
-            f"Ежемесячный платёж — {monthly_str} {currency}."
+            f"{payment_phrase}"
         )
     else:
         head = (
             f"Стоимость {cost_str} {currency}, "
             f"срок {term_str} месяцев, "
             f"аванс {prepaid_pct_str} процентов. "
-            f"Ежемесячный платёж — {monthly_str} {currency}."
+            f"{payment_phrase}"
         )
 
     detail_block = ""

@@ -84,6 +84,57 @@ def test_readback_speaks_schedule_in_lay_phrasing_linear():
     assert "линейн" not in text.lower()
 
 
+def test_render_calc_linear_schedule_narrates_average_not_single_payment():
+    # Live transcript 2026-05-08 client feedback: убывающий график was
+    # spoken as "Ежемесячный платёж — X" (single number, copied from
+    # annuity render). Misleading because payments decrease over time.
+    # Expected: name the AVERAGE payment + tell the caller payments
+    # start higher and end lower. Mirrors Just AI's narration.
+    result = {
+        "params": {
+            "cost": 250000, "currency": "USD", "prepaid": 20, "term": 60,
+            "type_schedule": "1",
+        },
+        "num_payments": 60,
+        "payment_min": 3000,   # last payment (smallest)
+        "payment_max": 5000,   # first payment (largest)
+        "buyout_sum": 2500,
+        "total": 361127,
+        "increase_percent": 9,
+    }
+    text = render_calc_result(result, detailed=False)
+    # Average is the right anchor for убывающий — exact for a linear schedule.
+    assert "средний" in text.lower(), text
+    assert "4000" in text, text  # (5000 + 3000) / 2
+    # Must explicitly tell the caller payments are not flat.
+    assert ("в начале" in text.lower()
+            or "первые платежи" in text.lower()
+            or "к концу срока" in text.lower()), text
+    # Must NOT use the annuity phrasing for a non-flat schedule.
+    assert "Ежемесячный платёж — 3000" not in text
+    assert "Ежемесячный платёж — 5000" not in text
+
+
+def test_render_calc_annuity_keeps_single_payment_phrasing():
+    # Annuity: payment_min == payment_max. Current "Ежемесячный платёж — X"
+    # phrasing is correct; do NOT regress it.
+    result = {
+        "params": {
+            "cost": 100000, "currency": "BYN", "prepaid": 30, "term": 36,
+            "type_schedule": "0",
+        },
+        "num_payments": 36,
+        "payment_min": 1990,
+        "payment_max": 1990,
+        "buyout_sum": 100,
+        "total": 71640,
+        "increase_percent": 5,
+    }
+    text = render_calc_result(result, detailed=False)
+    assert "Ежемесячный платёж — 1990 BYN" in text
+    assert "средний" not in text.lower()
+
+
 def test_render_calc_defaults_note_uses_lay_schedule():
     result = {
         "params": {"cost": 50000, "currency": "BYN", "prepaid": 30, "term": 36},
