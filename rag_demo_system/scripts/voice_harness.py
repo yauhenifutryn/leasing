@@ -349,11 +349,15 @@ async def run_audio_scenario(
             # the 20s window. Send DTMF early to minimise wall-clock waste.
             await asyncio.sleep(0.3)  # let metadata + consent task spin up
             await audio_ws.send(json.dumps({"type": "dtmf", "dtmf": "1"}))
-            # Drain consent + intro TTS until we see ~1s of silence (intro
-            # finished). Bot intro is ~6s of audio.
+            # Drain consent + intro TTS until we see SUSTAINED silence
+            # (intro finished). Bot intro is ~6s of audio with ~1s gaps
+            # between phrases — silence_timeout=1.0 was racing those gaps
+            # and returning mid-intro, which let the first user utterance
+            # arrive while the bot was still speaking → bot ignored it,
+            # subsequent t1 reported "no audio received".
             await _drain_bot_audio(
                 audio_ws,
-                silence_timeout=1.0,
+                silence_timeout=2.5,
                 overall_timeout=25.0,
                 deadline_first_frame=10.0,
             )
