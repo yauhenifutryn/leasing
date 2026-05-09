@@ -30,6 +30,12 @@ PROJECT_LOG.md
 UI_TRINITY.md
 docs/plans/2026-01-20-project-log-design.md
 
+# External-facing handover docs (local artifacts, send via email/Slack — never commit).
+ARCHITECTURE_OVERVIEW_RU.md
+ANALYSIS.md
+ONBOARDING.md
+HANDOVER.md
+
 # Generated audio + transcripts + outputs
 audio/
 scratch_audio/
