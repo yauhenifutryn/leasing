@@ -1,0 +1,64 @@
+# Smoke scenarios for voice_harness.py.
+# Each scenario is a sequence of user turns; each turn lists substrings
+# that MUST appear in the bot reply (`expect`) and substrings that must
+# NOT appear (`forbid`).
+#
+# Keep matches loose — the bot phrasing varies. Match canonical numbers,
+# currencies, key words. Avoid full-sentence matches.
+
+scenarios:
+  - name: name_capture
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Меня зовут Сергей."
+        expect: ["Сергей"]
+        forbid: ["до свидания"]
+
+  - name: compound_amount_currency_byn
+    # Today's commit 0050d28 added few-shots so '100 тысяч рублей'
+    # captures BOTH cost and currency. Lock in via this scenario.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Меня зовут Сергей."
+        expect: ["Сергей"]
+      - say: "Хочу взять машину за сто тысяч рублей."
+        # Bot should not re-ask currency separately if it captured it.
+        forbid: ["валюта"]
+
+  - name: decline_detail_pivots_to_sms
+    # Today's commit 0050d28 added the SMS-pivot. After detail offer
+    # the user says "нет спасибо" → bot must ask about SMS, not hang up.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Сергей."
+        expect: ["Сергей"]
+      - say: "Физлицо, машина за 100 тысяч рублей, новая, аванс 30%, срок 36 месяцев, линейный."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["платёж"]
+      - say: "Нет, спасибо."
+        # Should pivot to SMS offer, NOT end the call.
+        expect: ["СМС", "график"]
+        forbid: ["хорошего дня"]
+
+  - name: end_call_no_false_fire_on_decline
+    # 'Нет спасибо' alone is a decline, NOT a goodbye. Lock in via
+    # the new classifier negative example added in 0050d28.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Сергей."
+        expect: ["Сергей"]
+      - say: "Нет, спасибо, я просто посмотрю условия."
+        # Bot should engage, not hang up.
+        forbid: ["хорошего дня"]
+
+  - name: linear_schedule_narration
+    # Today's commit b39c093: убывающий график must say 'средний платёж'
+    # not 'ежемесячный платёж — X'.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Сергей. Юрлицо, недвижимость в Минске за 250 тысяч долларов, подержанный 5 лет, аванс 20 процентов, срок 60 месяцев, убывающий график."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["средний", "к концу срока"]
+        forbid: ["ежемесячный платёж"]
