@@ -217,10 +217,31 @@ _RUSSIAN_RUBLE_RE = re.compile(r"\bросси\w*\s*рубл\w*|\brub\b", re.IGNO
 _BELARUS_RUBLE_RE = re.compile(r"\bрубл\w*|\bруб\b|\bbyn\b|\bblr\b|\bбелорусск\w+\s*рубл\w*", re.IGNORECASE)
 
 
+# Foreign-currency cues: regex per ISO-3 code that maps to dispatch-time
+# drift to BYN. Each pattern matches the spoken Russian noun + the ISO
+# code itself so "юань"/"yuan"/"CNY" all ground.
+_FOREIGN_CURRENCY_CUES: dict[str, re.Pattern[str]] = {
+    "CNY": re.compile(r"\bюан\w*|\bcny\b|\byuan\b", re.IGNORECASE),
+    "PLN": re.compile(r"\bзлот\w*|\bpln\b|\bzloty\b", re.IGNORECASE),
+    "GBP": re.compile(r"\bфунт\w*|\bgbp\b|\bpound\w*", re.IGNORECASE),
+    "JPY": re.compile(r"\bйен\w*|\biena\w*|\bjpy\b|\byen\b", re.IGNORECASE),
+    "CHF": re.compile(r"\bшвейцарск\w+\s+франк\w*|\bchf\b|\bfranc\w*", re.IGNORECASE),
+    "AED": re.compile(r"\bдирхам\w*|\baed\b|\bdirham\w*", re.IGNORECASE),
+    "KZT": re.compile(r"\bтенге\b|\bkzt\b|\btenge\b", re.IGNORECASE),
+    "UAH": re.compile(r"\bгривн\w*|\buah\b|\bhryvn\w*", re.IGNORECASE),
+    "CAD": re.compile(r"\bканадск\w+\s+доллар\w*|\bcad\b", re.IGNORECASE),
+    "AUD": re.compile(r"\bавстралийск\w+\s+доллар\w*|\baud\b", re.IGNORECASE),
+}
+
+
 def _currency_cue_match(value: str, utterance: str) -> bool:
     """Currency is value-aware because 'рубли' in Belarus context means BYN,
     and Russian rubles only ground if 'российск' modifier appears. Order
     matters: check RUB modifier before BYN match.
+
+    Foreign currencies (CNY/PLN/CHF/etc.) ground via _FOREIGN_CURRENCY_CUES
+    so the dispatcher's drift policy can convert them to BYN at the
+    NBRB rate (Phase 1 currency drift, 2026-05-09).
     """
     if value == "USD":
         return bool(re.search(r"\bдоллар\w*|\busd\b", utterance, re.IGNORECASE))
@@ -233,6 +254,14 @@ def _currency_cue_match(value: str, utterance: str) -> bool:
         if _RUSSIAN_RUBLE_RE.search(utterance):
             return False
         return bool(_BELARUS_RUBLE_RE.search(utterance))
+    foreign_re = _FOREIGN_CURRENCY_CUES.get(value)
+    if foreign_re is not None:
+        return bool(foreign_re.search(utterance))
+    # Unknown ISO-3 code with no cue regex — null it at grounding. We
+    # must NOT blindly trust the classifier here, otherwise a phantom
+    # "XYZ" emission would survive when the utterance was "в долларах".
+    # Real exotic currencies the classifier wants to use must be added
+    # to _FOREIGN_CURRENCY_CUES with a Russian-noun regex.
     return False
 
 
@@ -425,7 +454,18 @@ _SUBJECT_VALUES = Literal[
 #  by the schema and the downstream normalizer never saw them.)
 _CLIENT_TYPE_VALUES = Literal["Физическое лицо", "Юридическое лицо"]
 
-_CURRENCY_VALUES = Literal["BYN", "USD", "EUR", "RUB"]
+# Calculator API only accepts BYN/USD/EUR/RUB. CALC_CURRENCIES is the
+# strict downstream contract. The schema field below uses a more
+# permissive validator so foreign currencies (CNY/PLN/CHF/etc.) emitted
+# by the classifier survive to reach _preflight_calc_policy, which
+# drifts them to BYN at the NBRB rate before calc fires (Phase 1
+# 2026-05-09 currency drift). The Literal stays for use in tests / test
+# fixtures that want strict-mode validation.
+_CALC_CURRENCIES = Literal["BYN", "USD", "EUR", "RUB"]
+# Legacy alias — many callers + tests use this name. Keep equal to
+# _CALC_CURRENCIES so behavior is unchanged for currencies in the strict
+# set; foreign currencies are accepted via _coerce_currency below.
+_CURRENCY_VALUES = _CALC_CURRENCIES
 _SCHEDULE_VALUES = Literal["0", "1"]
 
 
@@ -469,7 +509,15 @@ class ClassifierOutput(BaseModel):
     # accepts NaN/Infinity literals, and Pydantic passes them through by
     # default. Non-finite numerics then crash readback at int() conversion.
     cost: Optional[float] = Field(None, allow_inf_nan=False)
-    currency: Optional[_CURRENCY_VALUES] = None
+    # Permissive: any 3-letter ISO code uppercased by _coerce_currency.
+    # The strict calc-currency check happens at _preflight_calc_policy
+    # (drifts foreign currencies to BYN for Физ лицо, leaves them for
+    # Юр лицо to OOR-reject at calc time). Without this relaxation the
+    # Literal silently dropped CNY/PLN/etc. and the bot fell to LLM
+    # fallback on every foreign-currency turn (live call b31925a8
+    # 2026-05-09: "за 500 тысяч юаней" → bot hallucinated "юани не
+    # принимаем" instead of drifting to BYN).
+    currency: Optional[str] = None
     client_type: Optional[_CLIENT_TYPE_VALUES] = None
     condition_new: Optional[Literal[0, 1]] = None
     age_years: Optional[int] = Field(None, ge=0, le=50)
@@ -563,15 +611,31 @@ class ClassifierOutput(BaseModel):
     @field_validator("currency", mode="before")
     @classmethod
     def _coerce_currency(cls, v):
-        """Uppercase + strip currency strings before Literal validation.
-        Qwen sometimes emits lowercase ("usd" / "byn") which the old
-        _normalize_currency path handled downstream; the Literal is stricter,
-        so normalize here at the boundary. (Codex basic review 2026-04-20 P2.)
+        """Uppercase + 3-letter ISO format check on currency strings.
+
+        The field is now permissive (Optional[str]) so foreign currencies
+        survive to the dispatcher's _preflight_calc_policy, which drifts
+        them to BYN at NBRB rate for Физ лицо. The strict calc-currency
+        set (BYN/USD/EUR/RUB) is enforced ONLY downstream when the calc
+        actually fires, not at the schema boundary.
+
+        Validation:
+          - strip + uppercase
+          - drop empty strings to None
+          - require 3 letters (ISO-3 shape) — anything else (e.g. "руб",
+            "$", "100") is dropped to avoid polluting profile.currency.
         """
         if isinstance(v, str):
             u = v.strip().upper()
-            if u in ("BYN", "USD", "EUR", "RUB"):
+            if not u:
+                return None
+            # ISO-3 shape: 3 ASCII letters. Foreign codes (CNY/PLN/CHF/
+            # GBP/JPY/KZT/UAH/AED/CAD/AUD/...) all qualify; the drift
+            # policy + NBRB lookup handle them. Non-conformant strings
+            # are dropped so "300 USD" or junk doesn't end up here.
+            if len(u) == 3 and u.isascii() and u.isalpha():
                 return u
+            return None
         return v
 
     @model_validator(mode="after")

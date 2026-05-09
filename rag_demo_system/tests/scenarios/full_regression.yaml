@@ -1,0 +1,190 @@
+# Full chat regression — covers every bug + currency drift + flexibility.
+# Run with:
+#   python scripts/voice_harness.py --mode chat \
+#     --base-url http://localhost:8000 \
+#     --scenarios tests/scenarios/full_regression.yaml
+#
+# Each scenario opens a fresh session. forbid is loose substring match
+# (case-insensitive) — keep entries narrow to avoid false-positives.
+
+scenarios:
+  # ---------------------------------------------------------------- 1. CURRENCY DRIFT (Phys)
+  - name: phys_byn_native_pass
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Сергей. Физлицо, легковая, новая, 80 тысяч белорусских рублей, аванс 20%, срок 36 месяцев, аннуитет."
+        expect: ["80000", "BYN", "верно"]
+        forbid: ["юани не принимаем", "только в рублях или долларах"]
+      - say: "Да."
+        expect: ["платёж"]
+        forbid: ["error", "ошибка"]
+
+  - name: phys_usd_drift_to_byn
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 80 тысяч долларов, аванс 20%, срок 36, аннуитет."
+        # USD readback shows USD; the BYN equivalent is disclosed.
+        expect: ["USD", "верно"]
+        forbid: ["юани не принимаем", "не поддерживается"]
+      - say: "Да."
+        expect: ["платёж"]
+        # Disclosure prefix mentions BYN equivalent.
+
+  - name: phys_eur_drifts_to_byn
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 80 тысяч евро, аванс 20%, срок 36, аннуитет."
+        # Drifts to BYN. Readback may show BYN with original EUR disclosure.
+        expect: ["верно"]
+        forbid: ["евро не принимаем", "только в рублях или долларах", "не поддерживается"]
+      - say: "Да."
+        expect: ["платёж"]
+
+  - name: phys_rub_drifts_to_byn
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 5 миллионов российских рублей, аванс 20%, срок 36, аннуитет."
+        expect: ["верно"]
+        forbid: ["российские рубли не принимаем", "не поддерживается"]
+      - say: "Да."
+        expect: ["платёж"]
+
+  - name: phys_cny_drifts_to_byn
+    # Live regression call b31925a8: CNY hallucination regression.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 500 тысяч юаней, аванс 20%, срок 36, аннуитет."
+        expect: ["верно"]
+        forbid:
+          - "юани не принимаем"
+          - "только в рублях или долларах"
+          - "только в белорусских"
+          - "не поддерживается"
+      - say: "Да."
+        expect: ["платёж"]
+
+  - name: yur_eur_calc_directly
+    # For юр лицо, EUR is accepted by calc directly — no drift.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Юрлицо, грузовой автомобиль, новый, 100 тысяч евро, аванс 20%, срок 36, аннуитет."
+        expect: ["EUR", "верно"]
+        forbid: ["белорусские рубли", "только BYN"]
+      - say: "Да."
+        expect: ["платёж", "EUR"]
+
+  # ---------------------------------------------------------------- 2. CHANGE-PARAM (P2 + B2 + B3)
+  - name: change_currency_only_uses_accusative_grammar
+    # B3: "Меняю валюту..." (accusative). HANDOVER P2 case: currency-only
+    # change must route deterministically (not LLM fallback).
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 20 тысяч долларов, аванс 10%, срок 48 месяцев, аннуитет."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["платёж"]
+      - say: "Поменяй валюту на белорусские рубли."
+        # B3: accusative form.
+        expect: ["валюту"]
+        forbid: ["Меняю валюта", "Меняю валюту на ,"]
+      - say: "Да."
+        expect: ["платёж"]
+
+  - name: change_param_subject_flip_no_empty_age_b2
+    # B2: subject flip nulls age_years; readback must not say "и возраст на ,".
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Юрлицо, недвижимость, подержанная 5 лет, 250 тысяч долларов, аванс 20%, срок 60, убывающий график."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["платёж"]
+      - say: "Поменяй на легковой автомобиль."
+        forbid:
+          - "возраст на ,"
+          - "и возраст на ."
+          - "Меняю , остальное"
+
+  - name: change_prepaid_amount_uses_accusative
+    # B3: "Меняю сумму аванса" (accusative for prepaid_amount).
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 80 тысяч BYN, аванс 20 процентов, срок 36, аннуитет."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["платёж"]
+      - say: "Давай аванс 30 процентов."
+        # Re-issues the readback or change-confirm with new prepaid.
+        forbid: ["Меняю валюта"]
+
+  # ---------------------------------------------------------------- 3. B1 phantom SMS
+  - name: ask_about_sms_before_send_must_not_lie
+    # B1: bot must not claim SMS sent if no send_sms tool fired.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 80 тысяч BYN, аванс 20%, срок 36, аннуитет."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["платёж"]
+      - say: "Ксения, ты график отправила?"
+        forbid:
+          - "график отправлен"
+          - "уже отправила"
+          - "я отправила"
+          - "СМС отправлено"
+
+  # ---------------------------------------------------------------- 4. B5 subject-aware age
+  - name: b5_age_for_realestate_uses_объекту
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Юрлицо, недвижимость в Минске за 250 тысяч долларов, подержанная."
+        # Bot must ask about age in real-estate noun (объекту), not транспорту.
+        expect: ["объекту"]
+        forbid: ["вашему транспорту", "вашей технике"]
+
+  - name: b5_age_for_oborudovanie_uses_оборудованию
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Юрлицо, оборудование, подержанное, 80 тысяч BYN."
+        expect: ["оборудованию"]
+        forbid: ["вашему транспорту"]
+
+  - name: b5_age_for_spectehnika_uses_технике
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Юрлицо, спецтехника, подержанная, 200 тысяч BYN."
+        expect: ["технике"]
+        forbid: ["вашему транспорту", "вашему объекту"]
+
+  # ---------------------------------------------------------------- 5. FLEXIBILITY
+  - name: rag_question_mid_calc_falls_to_fallback
+    # User mid-calc asks a free-form RAG question. Must NOT skip state.
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Хочу машину за 80 тысяч долларов, физлицо, новая."
+        # Bot collects more or asks readback.
+      - say: "А что такое аннуитет?"
+        # Bot answers from KB. Must not claim it's a state machine action.
+        expect: ["аннуит"]
+
+  # ---------------------------------------------------------------- 6. CHANGE-CONFIRM EDGE CASES
+  - name: change_to_unsupported_phys_subject_with_currency_drift
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Физлицо, легковая новая, 80 тысяч BYN, аванс 20%, срок 36, аннуитет."
+        expect: ["верно"]
+      - say: "Да."
+        expect: ["платёж"]
+      - say: "Поменяй на евро."
+        forbid:
+          - "евро не принимаем"
+          - "только в рублях или долларах"
+          - "Меняю валюта"
+
+  # ---------------------------------------------------------------- 7. END-CALL
+  - name: goodbye_mid_collection_ends_clean
+    seed_phone: "+375296838707"
+    turns:
+      - say: "Хочу машину."
+      - say: "Хорошо, до свидания."
+        expect: ["хорошего дня"]
+        forbid: ["до свидания, я отправила"]
