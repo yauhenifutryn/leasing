@@ -130,6 +130,23 @@ class EmitCalcDetail:
 
 
 @dataclass(frozen=True)
+class EmitSMSOffer:
+    """Speak the deterministic SMS-offer line and stamp last_offer="sms".
+
+    Fired when the user declines the just-asked detail offer
+    ("Хотите услышать подробный расчёт?" → "нет спасибо"). Without this
+    pivot the dispatcher would fall to EndCall and the caller never gets
+    the chance to take the SMS — losing the SMS conversion at the very
+    last step of the funnel. Live transcript 2026-05-08.
+
+    Handler speaks "Хорошо, отправить график платежей по СМС?" via TTS
+    and sets `session.client_profile.last_offer = "sms"` so the next
+    bare "Да" routes through STEP 5c-sms → FireSMS, and a follow-up
+    decline routes through the normal EndCall path.
+    """
+
+
+@dataclass(frozen=True)
 class FireSMS:
     """Send the last successful calculator result as SMS to the caller.
 

@@ -23,7 +23,12 @@ sys.path.insert(0, str(ROOT))
 
 from backend.classifier_schema import ClassifierOutput  # noqa: E402
 from backend.session import ClientProfile, ProfileState  # noqa: E402
-from backend.turn_action import EndCall, EmitReadback, EmitChangeConfirm  # noqa: E402
+from backend.turn_action import (  # noqa: E402
+    EndCall,
+    EmitReadback,
+    EmitChangeConfirm,
+    EmitSMSOffer,
+)
 from backend.turn_dispatcher import (  # noqa: E402
     apply_turn,
     _is_goodbye_utterance,
@@ -165,3 +170,60 @@ def test_non_goodbye_does_not_yield_endcall() -> None:
     co = _co(intent="CONVERSATION")
     action = apply_turn(profile, co, utterance="расскажите про условия лизинга")
     assert not isinstance(action, EndCall)
+
+
+# ── SMS-offer-pivot: decline-after-detail-offer must not end the call ─
+
+def _confirmed_calc_ready_profile(last_offer: str | None = None) -> ClientProfile:
+    p = _make_profile(
+        state=ProfileState.CONFIRMED,
+        client_type="Физическое лицо",
+        subject="Легковой автомобиль",
+        cost=100000.0,
+        currency="BYN",
+        condition_new=1,
+        prepaid_pct=30.0,
+        term_months=36,
+        type_schedule="1",
+    )
+    p.last_offer = last_offer
+    return p
+
+
+def test_decline_after_detail_offer_pivots_to_sms_offer() -> None:
+    # Live transcript 2026-05-08: bot asked "Хотите услышать подробный
+    # расчёт?", user said "нет спасибо" → bot ended the call. Expected:
+    # pivot to "Хорошо, отправить график по СМС?" before ending.
+    profile = _confirmed_calc_ready_profile(last_offer="detail")
+    co = _co(intent="END_CALL")
+    action = apply_turn(profile, co, utterance="нет спасибо")
+    assert isinstance(action, EmitSMSOffer), f"got {type(action).__name__}"
+    assert profile.last_offer == "sms"
+
+
+def test_decline_after_sms_offer_ends_call() -> None:
+    # last_offer="sms" already means detail was either rendered or
+    # declined. A goodbye here is a real end-of-call.
+    profile = _confirmed_calc_ready_profile(last_offer="sms")
+    co = _co(intent="END_CALL")
+    action = apply_turn(profile, co, utterance="нет спасибо")
+    assert isinstance(action, EndCall)
+
+
+def test_decline_with_no_pending_offer_ends_call() -> None:
+    # No offer pending — preserves prior behavior.
+    profile = _confirmed_calc_ready_profile(last_offer=None)
+    co = _co(intent="END_CALL")
+    action = apply_turn(profile, co, utterance="до свидания")
+    assert isinstance(action, EndCall)
+
+
+def test_detail_offer_pivot_only_in_confirmed_state() -> None:
+    # If somehow last_offer="detail" leaks into a non-CONFIRMED state,
+    # don't pivot — fall through to whatever STEP handles it. The pivot
+    # is specifically a post-calc UX wrap-up, not a mid-collection trick.
+    profile = _make_profile(state=ProfileState.COLLECTING)
+    profile.last_offer = "detail"
+    co = _co(intent="END_CALL")
+    action = apply_turn(profile, co, utterance="нет спасибо")
+    assert not isinstance(action, EmitSMSOffer)

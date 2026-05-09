@@ -29,6 +29,7 @@ from .turn_action import (
     EmitClarify,
     EmitChangeConfirm,
     EmitCalcDetail,
+    EmitSMSOffer,
     EndCall,
     FireCalc,
     FireLLMFallback,
@@ -519,6 +520,20 @@ def _dispatch_once(
     )
     _change_in_flight = bool(classifier_output.change_field)
     if _is_goodbye_intent and not _pending_state and not _change_in_flight:
+        # Live transcript 2026-05-08: after the terse calc render the bot
+        # asked "Хотите услышать подробный расчёт?" (last_offer="detail").
+        # User replied "нет спасибо" — classifier emitted intent=END_CALL
+        # and the bot hung up without ever offering SMS. The detail
+        # decline is NOT a goodbye, it's a "skip the breakdown, what's
+        # next?". Pivot to the SMS offer so the funnel completes; the
+        # next turn's decline (now last_offer="sms") becomes the real
+        # EndCall.
+        if (
+            getattr(profile, "last_offer", None) == "detail"
+            and pre_turn_state == ProfileState.CONFIRMED
+        ):
+            profile.last_offer = "sms"
+            return EmitSMSOffer()
         # Short, feminine-grammar farewell. No AI-disclosure repeat.
         farewell = "Хорошего дня! Обращайтесь, если возникнут вопросы."
         return EndCall(farewell=farewell, reason="user_goodbye")
@@ -1383,6 +1398,16 @@ async def execute_action(
         # Deterministic OOR text — no renderer needed, payload IS the text.
         await tts.say(action.message)
         yield action.message
+        return
+
+    if isinstance(action, EmitSMSOffer):
+        # Pivot from declined detail to SMS offer (live transcript
+        # 2026-05-08). last_offer is already set to "sms" by apply_turn,
+        # so a follow-up "Да" routes through STEP 5c-sms → FireSMS, and
+        # a follow-up decline goes through the normal EndCall path.
+        spoken = "Хорошо, отправить график платежей по СМС?"
+        await tts.say(spoken)
+        yield spoken
         return
 
     if isinstance(action, FireSMS):
