@@ -31,21 +31,26 @@ def _ask_age(subject: str | None) -> str:
 
 
 def test_age_for_legkovoy_uses_транспорту():
-    assert "транспорту" in _ask_age("Легковой автомобиль")
+    out = _ask_age("Легковой автомобиль")
+    assert "вашему транспорту" in out
 
 
 def test_age_for_gruzovoy_uses_транспорту():
-    assert "транспорту" in _ask_age("Грузовой автомобиль")
+    out = _ask_age("Грузовой автомобиль")
+    assert "вашему транспорту" in out
 
 
 def test_age_for_prochiy_transport_uses_транспорту():
-    assert "транспорту" in _ask_age("Прочий транспорт")
+    out = _ask_age("Прочий транспорт")
+    assert "вашему транспорту" in out
 
 
-def test_age_for_spetstekhnika_uses_технике():
+def test_age_for_spetstekhnika_uses_feminine_possessive():
+    """техника is feminine — possessive must be 'вашей' not 'вашему'.
+    Live finding 2026-05-09: bot said 'вашему технике' — wrong gender."""
     out = _ask_age("Спецтехника")
-    assert "технике" in out, f"expected 'технике', got: {out!r}"
-    # Wrong noun must not leak.
+    assert "вашей технике" in out, f"feminine grammar broken: {out!r}"
+    assert "вашему технике" not in out
     assert "транспорту" not in out
 
 

@@ -52,21 +52,27 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     # Fix 1.5 (2026-04-19) — the age_years branch originally lived below
     # term/prepaid; this priority bump supersedes 1.5's placement.
     if "age_years" in fields:
-        # B5 fix: pick the dative-case noun that matches the subject category.
-        # Without this, real-estate / equipment leases got asked
-        # "Сколько лет вашему транспорту?" — wrong noun for the lease.
-        _subject_dative = {
-            "Легковой автомобиль": "транспорту",
-            "Грузовой автомобиль": "транспорту",
-            "Прочий транспорт": "транспорту",
-            "Спецтехника": "технике",
-            "Оборудование": "оборудованию",
-            "Недвижимость": "объекту",
+        # B5 fix: pick the dative-case noun + matching possessive that
+        # agree with the subject category's gender. Without this:
+        #   - real-estate / equipment leases got "вашему транспорту"
+        #     (wrong noun)
+        #   - спецтехника got "вашему технике" (wrong possessive — техника
+        #     is feminine, needs "вашей")
+        # Tuple = (possessive, dative_noun).
+        _subject_age_phrase = {
+            "Легковой автомобиль":  ("вашему", "транспорту"),
+            "Грузовой автомобиль":  ("вашему", "транспорту"),
+            "Прочий транспорт":     ("вашему", "транспорту"),
+            "Спецтехника":          ("вашей",  "технике"),
+            "Оборудование":         ("вашему", "оборудованию"),
+            "Недвижимость":         ("вашему", "объекту"),
         }
         _subject = getattr(profile, "subject", None)
-        _noun = _subject_dative.get(_subject or "", "транспорту")
+        _poss, _noun = _subject_age_phrase.get(
+            _subject or "", ("вашему", "транспорту")
+        )
         return (
-            f"Сколько лет вашему {_noun}? "
+            f"Сколько лет {_poss} {_noun}? "
             f"Для подержанной техники это обязательный параметр."
         )
 
