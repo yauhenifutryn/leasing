@@ -130,7 +130,9 @@ def _check_rubric(reply: str, expect: list[str], forbid: list[str]) -> tuple[lis
 def run_chat_scenario(base_url: str, scenario: dict) -> ScenarioResult:
     name = scenario.get("name", "unnamed")
     phone = scenario.get("seed_phone") or "+375290000000"
-    sid = f"harness-{uuid.uuid4().hex[:8]}"
+    # session_id must match _VALID_SESSION_ID = ^chat-[A-Za-z0-9_-]{6,64}$
+    # (defense against path traversal in chat_persistence — see app.py:138).
+    sid = f"chat-h{uuid.uuid4().hex[:10]}"
     result = ScenarioResult(name=name)
 
     for idx, turn in enumerate(scenario.get("turns", []), start=1):
