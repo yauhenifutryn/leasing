@@ -52,8 +52,22 @@ def build_clarification_prompt(fields: set[str], profile: Any) -> str:
     # Fix 1.5 (2026-04-19) — the age_years branch originally lived below
     # term/prepaid; this priority bump supersedes 1.5's placement.
     if "age_years" in fields:
+        # B5 fix: pick the dative-case noun that matches the subject category.
+        # Without this, real-estate / equipment leases got asked
+        # "Сколько лет вашему транспорту?" — wrong noun for the lease.
+        _subject_dative = {
+            "Легковой автомобиль": "транспорту",
+            "Грузовой автомобиль": "транспорту",
+            "Прочий транспорт": "транспорту",
+            "Спецтехника": "технике",
+            "Оборудование": "оборудованию",
+            "Недвижимость": "объекту",
+        }
+        _subject = getattr(profile, "subject", None)
+        _noun = _subject_dative.get(_subject or "", "транспорту")
         return (
-            "Сколько лет вашему транспорту? Для подержанной техники это обязательный параметр."
+            f"Сколько лет вашему {_noun}? "
+            f"Для подержанной техники это обязательный параметр."
         )
 
     if fields & {"term_months", "prepaid", "type_schedule"}:
@@ -522,6 +536,16 @@ _FIELD_RU = {
 }
 
 
+# B3 fix: accusative case (винительный падеж) for "Меняю ___ на …".
+# Only feminine nominatives ending in -а need a switch to -у; masculine
+# inanimate (срок/аванс/тип/предмет/возраст) and feminine -ь
+# (стоимость) already coincide with nominative.
+_FIELD_RU_ACCUSATIVE = {
+    "currency": "валюту",
+    "prepaid_amount": "сумму аванса",
+}
+
+
 # Human-readable translations for enum values in change-confirm prompts.
 # Calculator API uses internal codes ("0"/"1" for type_schedule, etc.); we
 # never say those codes to the caller.
@@ -592,10 +616,24 @@ def build_change_confirm_text(pending_change: dict[str, Any] | None) -> str:
     if isinstance(_changes, dict) and _changes:
         parts: list[str] = []
         for field_name, vals in _changes.items():
-            field_ru = _FIELD_RU.get(field_name, field_name)
             new_value = vals.get("new") if isinstance(vals, dict) else vals
+            # B2 fix: skip nulled fields (e.g. age_years cleared as a
+            # side-effect of subject flip). Otherwise the renderer
+            # produces "и возраст на ," — empty after "на".
+            if new_value in (None, ""):
+                continue
+            # B3: prefer accusative form for fields after "Меняю".
+            field_ru = _FIELD_RU_ACCUSATIVE.get(
+                field_name, _FIELD_RU.get(field_name, field_name)
+            )
             new_value_ru = _value_ru(field_name, new_value)
+            if not new_value_ru:
+                continue
             parts.append(f"{field_ru} на {new_value_ru}")
+        if not parts:
+            # Every staged change had a null new value — degenerate.
+            # Don't emit "Меняю , остальное оставляю"; ask for clarity.
+            return "Уточните, пожалуйста, что именно нужно изменить."
         if len(parts) == 1:
             return f"Меняю {parts[0]}, остальное оставляю. Всё верно?"
         # Join with "," except for the last which gets " и "
@@ -604,7 +642,9 @@ def build_change_confirm_text(pending_change: dict[str, Any] | None) -> str:
         return f"Меняю {body}, остальное оставляю. Всё верно?"
     # Legacy single-field.
     field_name = pending_change.get("field", "")
-    field_ru = _FIELD_RU.get(field_name, field_name)
+    field_ru = _FIELD_RU_ACCUSATIVE.get(
+        field_name, _FIELD_RU.get(field_name, field_name)
+    )
     new_value = pending_change.get("new_value")
     new_value_ru = _value_ru(field_name, new_value)
     return f"Меняю {field_ru} на {new_value_ru}, остальное оставляю. Всё верно?"

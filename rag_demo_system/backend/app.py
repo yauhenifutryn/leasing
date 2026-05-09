@@ -1338,11 +1338,28 @@ async def _stream_voice_response(
     # construction.
     session.memory_block = memory_block
 
+    import time as _time_dispatch
+    _t_dispatch_start = _time_dispatch.monotonic()
     _action = apply_turn(
         session.client_profile, _sa_output, message or "",
         turn_id=turn_id,
     )
-    print(f"[apply_turn] turn_id={turn_id} action={type(_action).__name__}", flush=True)
+    _dispatch_ms = int((_time_dispatch.monotonic() - _t_dispatch_start) * 1000)
+    _action_kind = type(_action).__name__
+    print(f"[apply_turn] turn_id={turn_id} action={_action_kind}", flush=True)
+    # Per-turn LATENCY marker (P2 instrumentation, 2026-05-09).
+    # Emitted for EVERY action so analyze_latency.sh can compute the
+    # FireLLMFallback / FireCalc / EmitChangeConfirm distribution and
+    # prove (or disprove) over-routing claims with real production data.
+    # The fallback-stream marker (turn_dispatcher._stream_llm_to_tts) keeps
+    # firing on top of this for FireLLMFallback turns — they record llm_*.
+    print(
+        f"[LATENCY:{session_id[:8]}] "
+        f"action_kind={_action_kind} "
+        f"dispatch_ms={_dispatch_ms} "
+        f"path=apply_turn",
+        flush=True,
+    )
 
     # Bug K (live call 69941ab4 2026-04-26) — broadcast snapshot IMMEDIATELY
     # after apply_turn returns, before execute_action plays TTS audio.
@@ -2530,16 +2547,29 @@ async def _text_process_utterance(
     rag_future_adapter = RagFuture(rag_task)
 
     # 4. apply_turn -> execute_action.
+    import time as _time_chat_dispatch
+    _t_chat_dispatch_start = _time_chat_dispatch.monotonic()
     action = apply_turn(
         voice_session.client_profile,
         sa_output,
         message,
         turn_id=turn_id,
     )
+    _chat_dispatch_ms = int(
+        (_time_chat_dispatch.monotonic() - _t_chat_dispatch_start) * 1000
+    )
     action_name = type(action).__name__
     print(
         f"[ChatTurn:{voice_session.session_id[:8]}] turn_id={turn_id} "
         f"action={action_name}",
+        flush=True,
+    )
+    # Per-turn LATENCY marker (P2 instrumentation, parallels voice path).
+    print(
+        f"[LATENCY:{voice_session.session_id[:8]}] "
+        f"action_kind={action_name} "
+        f"dispatch_ms={_chat_dispatch_ms} "
+        f"path=apply_turn",
         flush=True,
     )
 

@@ -1745,6 +1745,7 @@ def _build_fallback_messages(
     rag_context: Optional[str],
     snapshot: Optional[ProfileSnapshot],
     memory_block: Optional[str] = None,
+    tool_calls_history: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Assemble the chat messages for the FireLLMFallback stream.
 
@@ -1754,6 +1755,12 @@ def _build_fallback_messages(
       - `snapshot` as anti-hallucination anchor (E7). LLM sees captured
         fields and is instructed not to re-ask them.
       - `rag_context` as KB grounding block.
+      - `tool_calls_history` (B1 fix, 2026-05-09): SMS-status anchor.
+        Without this, the LLM can fabricate "СМС отправлено" on a turn
+        where the user asked about prior actions ("ты графика
+        отправила?") because nothing else in the prompt grounds the
+        truth. Conservative default: when None or empty, emit the
+        "no SMS yet" guard so legacy call-sites are safe-by-default.
     The production orchestrator prepends its own system prompt via the
     `backend.stream(system_prompt=...)` kwarg; this function deliberately
     avoids hardcoding the system prompt path so tests run without it.
@@ -1769,6 +1776,31 @@ def _build_fallback_messages(
                 "Уже уточнено у клиента (НЕ переспрашивай эти поля):\n"
                 + "\n".join(lines) + "\n\n"
             )
+
+    # B1 fix: SMS-status anchor. Counts only successful (ok=True) entries
+    # — failed dispatches must NOT flip the guard, otherwise a Twilio 5xx
+    # silently turns the LLM into a confident liar.
+    sms_sent = False
+    for _entry in (tool_calls_history or []):
+        if (
+            isinstance(_entry, dict)
+            and _entry.get("tool") == "send_sms"
+            and _entry.get("ok") is True
+        ):
+            sms_sent = True
+            break
+    if sms_sent:
+        sms_anchor = (
+            "СМС уже отправлено в этом звонке. Если клиент спрашивает "
+            "про СМС — подтверди отправку. Не предлагай отправить ещё раз "
+            "без явной просьбы.\n\n"
+        )
+    else:
+        sms_anchor = (
+            "СМС ещё не отправлено в этом звонке. Если клиент спрашивает "
+            "«ты график/расчёт прислала?» или похожее — НЕ говори, что "
+            "отправила. Можно предложить отправить сейчас.\n\n"
+        )
     # Anti-hallucination role guard (live call 8cb0bfaf 2026-04-28):
     # the LLM fallback hallucinated "Меняем стоимость на 110k и график
     # на аннуитетный. Подтвердите?" when the classifier dropped the
@@ -1800,7 +1832,7 @@ def _build_fallback_messages(
             + str(rag_context) + "\n\n"
         )
     user_content = (
-        f"{memory_prefix}{anchor_block}{role_guard}{kb_block}"
+        f"{memory_prefix}{anchor_block}{sms_anchor}{role_guard}{kb_block}"
         f"Сообщение клиента: {utterance}"
     )
     return [{"role": "user", "content": user_content}]
@@ -1837,8 +1869,14 @@ async def _stream_llm_to_tts(
     from .sentence_detector import SentenceDetector
     from .text_utils import clean_answer, validate_addresses
 
+    # B1: pass session tool history so the prompt builder can inject the
+    # SMS-status anchor (anti-hallucination guard for "ты график прислала?"
+    # turns where the LLM previously fabricated "Да, отправила").
+    _tool_history = list(getattr(session, "tool_calls_history", []) or [])
     messages = _build_fallback_messages(
-        utterance, rag_context, snapshot, memory_block=memory_block,
+        utterance, rag_context, snapshot,
+        memory_block=memory_block,
+        tool_calls_history=_tool_history,
     )
     detector = SentenceDetector()
     _fallback = (

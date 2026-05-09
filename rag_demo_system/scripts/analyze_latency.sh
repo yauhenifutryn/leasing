@@ -74,6 +74,36 @@ grep -oE "llm_total_ms=[0-9]+" "$LOG" | awk -F= '{print $2}' | sort -n | awk '
 '
 
 echo
+echo "=== Action distribution (P2 over-routing check) ==="
+echo "Counts every apply_turn dispatch by action kind. The 'over-routing'"
+echo "claim is: FireLLMFallback share is much higher than necessary."
+grep -oE "\[LATENCY:[^]]+\] action_kind=[A-Za-z]+" "$LOG" | awk '{print $NF}' | awk -F= '{print $2}' | sort | uniq -c | sort -rn
+
+echo
+echo "=== Action share (% of total dispatches) ==="
+grep -oE "action_kind=[A-Za-z]+" "$LOG" | awk -F= '{print $2}' | awk '
+  { total++; counts[$1]++ }
+  END {
+    if (total==0) { print "no samples (per-turn LATENCY marker not yet deployed)"; exit }
+    for (k in counts) printf "%-22s %5d  %5.1f%%\n", k, counts[k], 100.0*counts[k]/total
+  }
+' | sort -k2 -rn
+
+echo
+echo "=== Dispatch overhead (apply_turn body time, ms) ==="
+grep -oE "dispatch_ms=[0-9]+" "$LOG" | awk -F= '{print $2}' | sort -n | awk '
+  BEGIN { c=0 }
+  { a[c++]=$1; sum+=$1 }
+  END {
+    if (c==0) { print "no samples"; exit }
+    n=c
+    printf "count=%d mean=%.0f min=%d max=%d\n", n, sum/n, a[0], a[n-1]
+    printf "p50=%d p90=%d p95=%d p99=%d\n",
+      a[int(n*0.50)], a[int(n*0.90)], a[int(n*0.95)], a[int(n*0.99)]
+  }
+'
+
+echo
 echo "=== Top 10 slowest total_e2e turns (to hunt outliers) ==="
 grep "\[LATENCY:" "$LOG" | awk -F'total_e2e_ms=' 'NF>1 {
   n=$2; split(n, p, " "); print p[1] "\t" $0
