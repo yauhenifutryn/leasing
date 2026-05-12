@@ -36,6 +36,10 @@ ANALYSIS.md
 ONBOARDING.md
 HANDOVER.md
 
+# Internal planning (master plans, phase docs, design specs). Local-only.
+.planning/
+**/.planning/
+
 # Generated audio + transcripts + outputs
 audio/
 scratch_audio/
