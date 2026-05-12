@@ -1,25 +1,55 @@
 # Leasing AI Pipeline
 
-End-to-end audio intelligence and voice assistant system for a leasing company. Starts with raw call recordings, extracts structured insights, builds a knowledge base, and serves it through a production voice assistant over WebSocket.
+End-to-end audio intelligence and voice assistant system for a leasing company. Starts with raw call recordings, extracts structured insights, builds a knowledge base, and serves it through a production voice assistant over SIP telephony and a text chat widget.
 
-> **Branch cleanup planned.** Once all active work is complete, the core branches will be merged into `main` and experiments archived as tags. See the [restructure plan](docs/superpowers/plans/2026-04-08-repo-restructure.md).
+> **You are looking at `main`. This branch is the original 2026-01 call-analysis pipeline only. Active development moved to `feature/voice-pipeline` and stayed there.** If you cloned this repo to continue voice + chat work, switch branches: `git checkout feature/voice-pipeline`.
 
-## Branches
+## Repo handover state (2026-05-12)
 
-This repository contains several long-lived branches. Each represents a distinct stage or direction of the project. They share a common foundation but have diverged significantly.
+After the 2026-05-12 cleanup, the repo has three live branches:
 
-| Branch | Status | Commits ahead of main | Description |
-|--------|--------|----------------------|-------------|
-| `main` | Baseline | -- | Original call analysis pipeline: transcription, NLU, knowledge base generation |
-| `feature/voice-pipeline` | Production | 223 | Full voice assistant: STT, TTS, VAD, RAG, barge-in, session management |
-| `feature/tool-use` | Active development | 235 | Tool use layer on top of voice-pipeline: calculator API, SMS, streaming tool loop |
-| `claude/qwen-voice-next` | Experimental | 204 | Qwen3-Omni benchmarking, multi-model voice testing |
-| `codex/split-voice-providers` | Spike | 3 | Quick experiment: split-brain voice provider options |
-| `codex/yandex-realtime-voice-integration` | Spike | 5 | Yandex SpeechKit realtime voice demo |
+| Branch | Status | Description |
+|--------|--------|-------------|
+| `main` | Historical baseline (this branch) | Original call analysis pipeline: WhisperX transcription, per-call NLU, knowledge base build. Last code change: 2026-04. Not where current work belongs. |
+| `feature/voice-pipeline` | **Active development**, 864 commits ahead of main | Production voice assistant + chat widget: SIP telephony, RAG, classifier, dispatcher state machine, calculator + SMS tools. |
+| `feature/kb-viz` | Sandbox demo, frozen | 3D knowledge-base visualizer (offline HTML, separate from runtime). |
 
-### main: Call Analysis Pipeline
+### Archived (deleted) branches
 
-The original product. Processes raw audio recordings from a leasing call center into a structured knowledge base.
+These were merged into `feature/voice-pipeline` (history preserved in its commit graph) or were one-off spikes superseded by the current stack. Deleted on 2026-05-12 to keep the repo navigable.
+
+| Branch | Reason |
+|---|---|
+| `feature/chat-widget` | Merged into voice-pipeline at tag `pre-master-plan-with-chat-2026-05-08` |
+| `feature/kb-refinement` | Merged (topical KB swap) |
+| `feature/section-3-apply-turn` | Merged (apply-turn refactor) |
+| `feature/tool-use` | Merged (calculator + SMS tools) |
+| `codex/split-voice-providers` | Spike, superseded |
+| `codex/yandex-realtime-voice-integration` | Yandex SpeechKit demo, not productized |
+| `temp-kb-upload` | Temporary KB upload branch |
+| `claude/qwen-voice-next` | Qwen3-Omni multimodal benchmark experiment. **Tip preserved at tag `archive/qwen-voice-next-2026-04-05`** if anyone wants to revisit. |
+
+### Notable tags
+
+| Tag | Why it's kept |
+|---|---|
+| `pre-master-plan-with-chat-2026-05-08` | **Last fully production-validated baseline.** Safe revert point. |
+| `voice-pipeline-baseline-2026-05-09-evening` | Current `feature/voice-pipeline` HEAD. Includes a master-plan sweep that is shipped but not all production-verified. |
+| `mvp-2026-04-18` | First complete MVP. |
+| `client-approved-baseline-2026-04-29` | Client-signed reference point. |
+| `archive/qwen-voice-next-2026-04-05` | Archived Qwen3-Omni experiment tip. |
+
+## Resuming Development (new team)
+
+1. **Active branch is `feature/voice-pipeline`** (not `main`). `git checkout feature/voice-pipeline` after cloning.
+2. **Last fully production-validated tag**: `pre-master-plan-with-chat-2026-05-08`. Safe revert point.
+3. **Current HEAD on `feature/voice-pipeline`**: `voice-pipeline-baseline-2026-05-09-evening`. Includes a master-plan sweep with several items shipped but not yet production-tested (latency on live calls, automatic audio testing harness, NBRB FX API fallback, B4/B6 audio bugs).
+4. **Server bootstrap**: see `rag_demo_system/scripts/provision_server.sh` on `feature/voice-pipeline`.
+5. **Original developer's planning + handover docs are local-only** — they are NOT in this repo, transferred separately.
+
+## main: Call Analysis Pipeline (this branch)
+
+The original product (2026-01). Processes raw audio recordings from a leasing call center into a structured knowledge base. Not actively maintained; kept as historical baseline because the knowledge base used by the voice assistant on `feature/voice-pipeline` was generated by this pipeline.
 
 **Pipeline stages:**
 
@@ -31,14 +61,14 @@ The original product. Processes raw audio recordings from a leasing call center 
 6. **Embedding deduplication**: SentenceTransformers clustering of similar questions
 7. **Knowledge base build**: Final FAQ entries in JSON, YAML, and Markdown
 
-**Key components:**
+**Layout:**
 
 ```
 scripts/                  # Pipeline stages (00_setup through 50_build_kb)
 prompts/                  # LLM prompts for analysis (Russian)
-demo_ui/                  # Local web UI for running pipeline steps
+demo_ui/                  # Local Streamlit review UI
 requirements.txt          # Python deps (PyTorch cu118, WhisperX, pyannote)
-Makefile                  # All pipeline targets (make transcribe, make kb, etc.)
+Makefile                  # make transcribe / make analyze-calls / make kb / etc.
 ```
 
 **Makefile targets:**
@@ -56,104 +86,12 @@ Makefile                  # All pipeline targets (make transcribe, make kb, etc.
 | `make kb` | Build final KB (JSON + YAML) |
 | `make kb-markdown` | Export KB to Markdown |
 
-Also includes a Streamlit review UI (`scripts/review_app.py`) for human validation of KB entries.
-
-### feature/voice-pipeline: Production Voice Assistant
-
-Browser-based Russian-language voice assistant built on top of the knowledge base. This is the production system, tested with the client.
-
-**Stack:** Whisper STT, Silero TTS (v4_ru), Qwen3.5-35B-A3B-FP8 via vLLM, Qdrant vector search, BM25 + reranker hybrid retrieval.
-
-**Capabilities:**
-
-- WebSocket streaming audio (push-to-talk and continuous modes)
-- Silero VAD for voice activity detection in continuous conversation
-- Sentence-boundary detection for streaming TTS (speak as tokens arrive)
-- Barge-in support (interrupt the bot mid-response)
-- Conversation memory across turns
-- Intent routing (greeting, off-topic, meta-questions)
-- Stress dictionary for proper name pronunciation
-- Latin-to-Cyrillic transliteration for brand names
-
-```
-rag_demo_system/
-├── backend/
-│   ├── app.py                  # FastAPI, WebSocket voice handler
-│   ├── engine.py               # RAG: embedding + BM25 + reranking
-│   ├── llm.py                  # vLLM streaming (OpenAI-compatible)
-│   ├── voice_adapters.py       # Whisper STT + Silero TTS
-│   ├── voice_session.py        # Session state, barge-in tracking
-│   ├── sentence_detector.py    # Streaming sentence boundaries
-│   ├── vad.py                  # Silero VAD wrapper
-│   ├── audio_input.py          # Transport adapter (WebSocket, future SIP)
-│   ├── router.py               # Intent classification
-│   ├── memory.py               # Turn history
-│   ├── text_utils.py           # Answer cleaning, address validation
-│   ├── state.py                # Session store, event logging
-│   └── settings.py             # Config loading (app.yaml + .env)
-├── config/
-│   ├── app.yaml                # All config: LLM, RAG, embedding, reranker
-│   ├── system_prompt_ru_v2.txt # System prompt (Russian)
-│   ├── stress_dictionary.yaml  # TTS stress marks for proper names
-│   └── transliteration.yaml    # Brand name transliteration
-├── frontend/
-│   └── demo.html               # Browser UI
-├── services/
-│   ├── whisper_server.py       # STT microservice
-│   └── silero_tts_server.py    # TTS microservice
-├── scripts/
-│   ├── provision_server.sh     # One-command GPU server setup
-│   ├── restart_all.sh          # Restart all services
-│   └── doctor.sh               # Health check
-└── tests/                      # Unit and integration tests
-```
-
-**Deployment:** Single GPU server (H100 or equivalent). One-command provisioning via `provision_server.sh`. See [deployment playbook](docs/server_deployment_playbook.md).
-
-### feature/tool-use: Tool Use Layer
-
-Extends the voice assistant with mid-conversation tool calling. The LLM can invoke external APIs during a conversation using native OpenAI function calling (`tools=[]`).
-
-**How it works:**
-
-1. LLM detects user intent requires a tool (e.g., "calculate payments for a BMW X5")
-2. Orchestrator sends a filler phrase to TTS ("One moment, calculating...")
-3. Tool executes (HTTP call to external API)
-4. Result injected back into LLM context
-5. LLM continues streaming the spoken response with the results
-6. After calculator results, the bot always offers to send the schedule via SMS
-
-**Tools:**
-
-| Tool | Status | Purpose |
-|------|--------|---------|
-| `calculator` | Ready | Leasing payment schedule via 1C calculator API |
-| `send_sms` | Ready | Send schedule link via SMS (sms-assistent.by) |
-| `escalate_to_human` | Planned | Session summary + lead creation in AMO CRM |
-
-```
-rag_demo_system/backend/tools/
-├── __init__.py          # Registry: get_tool_schemas(), get_tool(), init_tools()
-├── base.py              # ToolDefinition ABC
-├── calculator.py        # 1C calculator API integration
-├── sms_sender.py        # SMS delivery
-└── filler.py            # Filler phrases per tool
-```
-
-### claude/qwen-voice-next: Experimental
-
-Experimental branch exploring Qwen3-Omni as an alternative to the split STT/LLM/TTS pipeline. Includes a benchmarking framework for comparing voice model configurations. Not intended for production.
-
-### codex/split-voice-providers and codex/yandex-realtime-voice-integration
-
-Short-lived spikes. Split-brain voice provider experiment and Yandex SpeechKit realtime demo respectively. Will be archived as tags during cleanup.
-
 ## Quick Start
 
-**For the call analysis pipeline (main):**
+### Call analysis pipeline (this branch — `main`)
 
 ```bash
-git clone git@github.com:yauhenifutryn/leasing.git
+git clone -b main https://github.com/yauhenifutryn/leasing.git
 cd leasing
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -162,31 +100,24 @@ mkdir -p audio/        # drop .wav/.mp3 files here
 make transcribe && make analyze-calls && make kb
 ```
 
-**For the voice assistant (feature/tool-use, latest):**
+### Voice assistant + chat widget — switch to `feature/voice-pipeline`
+
+The active product is on a different branch. The README on that branch has full bootstrap instructions including server provisioning, token requirements, smoke tests, and Jambonz SIP deployment.
 
 ```bash
-git clone --branch feature/tool-use git@github.com:yauhenifutryn/leasing.git
-cd leasing/rag_demo_system
-cp .env.example .env   # fill in all credentials
-HF_TOKEN=hf_... bash scripts/provision_server.sh
+git checkout feature/voice-pipeline
+cat README.md   # detailed setup
+cat rag_demo_system/README.md   # backend / scripts inventory
 ```
 
-After provisioning, add tool credentials to `.env`:
-```
-CALCULATOR_API_TOKEN=...
-SMS_API_LOGIN=...
-SMS_API_PASSWORD=...
-```
+## GPU Server Notes (applies to `feature/voice-pipeline`)
 
-The server IP must be whitelisted by the client before external API calls will work.
-
-## GPU Server Notes
-
-- Recommended: **A100 40 GB** (~$0.6/hr on vast.ai) or **H100**
-- Alternative: **4090** (cheaper, less stable under sustained load)
-- Avoid **5090/Blackwell**: requires bleeding-edge drivers, often breaks
-- On the server, use only `conda` environment (`lease`); do not mix with `.venv`
-- Use tmux for long-running processes to survive SSH disconnects
+- Recommended: **H100 80GB** (Sesterce / ShadeCloud, tested)
+- Alternative: **A100 80GB** (Jarvis Labs, tested)
+- Avoid **5090 / Blackwell**: bleeding-edge drivers, often breaks
+- Use `tmux` for long-running processes to survive SSH disconnects
+- After reboot: `bash scripts/restart_all.sh` (in `rag_demo_system/`)
+- NVIDIA driver 570+ required for GPU Whisper; 550 falls back to CPU (acceptable)
 
 ## License
 
