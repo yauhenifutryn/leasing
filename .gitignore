@@ -76,6 +76,11 @@ models/
 *.log
 .state/
 
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+
 .worktrees/
 
 # Internal developer-only docs (local workspace, never commit).

@@ -1,6 +1,8 @@
 # RAG Demo System (Micro Leasing)
 
-Voice assistant for Micro Leasing. One browser UI, one FastAPI backend, Russian voice I/O, knowledge-grounded answers.
+Voice assistant + chat widget for Micro Leasing. One FastAPI backend, Russian voice I/O via SIP, browser chat fallback, knowledge-grounded answers.
+
+> **Handover state (2026-05-12).** Active branch is `feature/voice-pipeline`. Last fully-validated tag: `pre-master-plan-with-chat-2026-05-08`. Current HEAD `voice-pipeline-baseline-2026-05-09-evening` contains a master-plan sweep (bug fixes + chat widget + classifier improvements) that is largely shipped but not all production-tested. See the local handover package for the full Russian briefing.
 
 ## Current Stack
 
@@ -20,7 +22,7 @@ The SessionAgent runs on its own vLLM instance so classifier calls do not
 queue behind the 35B main model. On GPUs below ~75 GB it is automatically
 disabled and the main LLM handles classification.
 
-## Architecture (post `refactor-v1`, 2026-04-26)
+## Architecture
 
 The orchestrator (`rag_demo_system/backend/app.py::_stream_voice_response`)
 delegates every turn to a small structural pipeline instead of the legacy
@@ -184,25 +186,32 @@ rag_demo_system/
 | `fix_cuda_and_verify.sh` | CUDA diagnostic for KVM/VM instances |
 | `system_snapshot.sh` | Capture system info before/after install |
 | `stack.sh` | Stack control (up/down/status/smoke) |
+| `voice_harness.py` | Automated regression runner. `--mode chat` exercises the full dispatcher with no audio. `--mode audio` drives `/ws/jambonz` end-to-end through Silero + Whisper. Scenarios YAML at `tests/scenarios/`. |
+| `analyze_latency.sh` | Parses `[LATENCY:]` markers from backend.log; produces per-stage distributions, action-kind shares, and dispatch overhead. |
+| `dump_latency.py` | Per-metric latency distribution from `.state/logs.jsonl`. |
+| `simulate_dialogue.py` | Offline classifier + dispatcher exerciser (no audio, no LLM). |
 | `kb_gap_report.py` | Weekly aggregate: KB gaps + operational metrics (readback/change-confirm/stop-respect/USD-conversion/linear-success rates) |
 
 ## API Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/demo.html` | GET | Browser voice assistant UI |
-| `/sip_monitor.html` | GET | SIP call monitor (add `?user=X` to filter) |
+| `/chat_widget.html` | GET | Text chat widget (production website embed surface) |
+| `/sip_monitor.html` | GET | Operator monitor with per-session profile panels (chat + voice in one stream) |
+| `/demo.html` | GET | Pre-SIP browser voice demo (mic → Whisper → LLM → TTS). Wired but not part of any smoke test; production voice = SIP/Jambonz. |
 | `/api/health` | GET | Backend health check |
 | `/api/backends` | GET | Available RAG backends |
 | `/api/voice/status` | GET | Voice services status |
 | `/api/index` | POST | Index knowledge base |
 | `/api/retrieve` | POST | RAG retrieval (debug) |
-| `/api/chat` | POST | Text chat |
+| `/api/chat` | POST | Legacy text chat endpoint |
+| `/api/text-turn` | POST | Chat-widget turn endpoint: runs SessionAgent classifier → apply_turn → execute_action with TextTtsSink. Same dispatcher as voice. |
+| `/api/chat/end` | POST | Explicit chat session teardown (releases monitor state). |
 | `/api/jambonz/credentials` | GET | SIP account credentials |
 | `/ws/voice` | WS | Browser voice WebSocket |
 | `/ws/jambonz` | WS | Jambonz control WebSocket |
 | `/ws/jambonz-audio` | WS | Jambonz audio WebSocket |
-| `/ws/sip-monitor` | WS | SIP monitor event stream |
+| `/ws/sip-monitor` | WS | Operator monitor event stream (chat + voice sessions) |
 
 ## Environment Variables
 
