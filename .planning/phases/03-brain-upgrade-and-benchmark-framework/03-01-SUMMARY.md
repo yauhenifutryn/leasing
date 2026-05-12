@@ -134,3 +134,12 @@ None — no external service configuration required beyond what was already need
 ---
 *Phase: 03-brain-upgrade-and-benchmark-framework*
 *Completed: 2026-03-26*
+
+## Self-Check: PASSED
+
+- FOUND: rag_demo_system/backend/app.py
+- FOUND: rag_demo_system/tests/test_brain_routing.py
+- FOUND: .planning/phases/03-brain-upgrade-and-benchmark-framework/03-01-SUMMARY.md
+- Commit f318cbc: FOUND (feat(03-01): add brain_model to ChatRequest)
+- Commit 6e8edd7: FOUND (feat(03-01): add streaming voice chat helper)
+- Commit 77d8826: FOUND (docs(03-01): complete brain model routing plan)

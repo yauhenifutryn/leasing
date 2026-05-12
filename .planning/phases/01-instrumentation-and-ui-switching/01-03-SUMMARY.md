@@ -115,3 +115,11 @@ None - no external service configuration required.
 ---
 *Phase: 01-instrumentation-and-ui-switching*
 *Completed: 2026-03-25*
+
+## Self-Check: PASSED
+
+- FOUND: rag_demo_system/frontend/index.html
+- FOUND: rag_demo_system/frontend/app.js
+- FOUND: .planning/phases/01-instrumentation-and-ui-switching/01-03-SUMMARY.md
+- FOUND commit: 347fd6f (Task 1)
+- FOUND commit: 88d63f4 (Task 2)

@@ -117,6 +117,10 @@ None — no external service configuration required. The env profiles are templa
 - The omni_hybrid profile is a marked placeholder; Phase 4 adapter work will uncomment and fill in the OMNI vars
 - No blockers for Plan 03 execution
 
+## Self-Check: PASSED
+
+All 9 created files confirmed present on disk. Both task commits (5955a6a, 9f4341b) confirmed in git log. All 12 fixture validation tests pass.
+
 ---
 *Phase: 03-brain-upgrade-and-benchmark-framework*
 *Completed: 2026-03-26*
